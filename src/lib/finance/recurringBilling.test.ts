@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { zonedParts } from '../recurringUtils';
 import {
   startOfBillingWeek,
   projectBillingPeriodKey,
@@ -14,18 +15,26 @@ import {
 } from './recurringBilling';
 
 describe('startOfBillingWeek', () => {
+  // The anchor is Monday 00:00 in the BUSINESS zone, so the assertions read that
+  // calendar rather than comparing raw instants against a locally-built Date —
+  // the latter is only equal on a machine that happens to run Europe/Tirane.
+  const asDay = (d: Date) => {
+    const p = zonedParts(d);
+    return `${p.year}-${String(p.month + 1).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
+  };
+
   it('anchors on Monday for every day of the week', () => {
     // 2026-08-03 is a Monday.
-    const monday = new Date(2026, 7, 3);
     for (let i = 0; i < 7; i++) {
       const d = new Date(2026, 7, 3 + i);
-      expect(startOfBillingWeek(d).getTime()).toBe(monday.getTime());
+      expect(asDay(startOfBillingWeek(d))).toBe('2026-08-03');
+      expect(zonedParts(startOfBillingWeek(d)).hours).toBe(0);
     }
   });
 
   it('walks back across a month boundary from a Sunday', () => {
     // 2026-08-02 is a Sunday → its week started Monday 2026-07-27.
-    expect(startOfBillingWeek(new Date(2026, 7, 2)).getTime()).toBe(new Date(2026, 6, 27).getTime());
+    expect(asDay(startOfBillingWeek(new Date(2026, 7, 2)))).toBe('2026-07-27');
   });
 });
 
@@ -286,5 +295,34 @@ describe('billing control patches (pause / stop, without archiving the client)',
       { recurringFrequency: 'monthly', ...patch },
       new Date('2026-09-26T12:00:00'),
     )).toBe('not-recurring');
+  });
+});
+
+// ── Period keys must not depend on where the code runs ───────────────────────
+//
+// The UI claims the period in Europe/Tirane; the cron body compares against that
+// claim from Vercel, in UTC. While both read the MACHINE's getters, a retainer
+// created just after local midnight on the 1st was claimed for the new month by
+// the browser and billed again for the OLD month by the job, an extra invoice
+// that was emailed to the client.
+describe('billing period keys are answered in the business zone', () => {
+  it('keys a local-midnight 1 August as August', () => {
+    // 2026-07-31T22:00Z IS 1 August 00:00 in Europe/Tirane.
+    const localMidnight = new Date('2026-07-31T22:00:00.000Z');
+    expect(projectBillingPeriodKey('monthly', localMidnight)).toBe('2026-08');
+  });
+
+  it('anchors a weekly retainer on the business week Monday', () => {
+    // 2026-08-02T22:00Z = Monday 3 Aug 00:00 in Tirane.
+    const localMidnightMonday = new Date('2026-08-02T22:00:00.000Z');
+    expect(projectBillingPeriodKey('weekly', localMidnightMonday)).toBe('W2026-08-03');
+  });
+
+  it('ends a monthly period on the last day of the business month', () => {
+    const mid = new Date('2026-08-15T10:00:00.000Z');
+    const end = projectBillingPeriodEnd('monthly', mid);
+    expect(projectBillingPeriodKey('monthly', end)).toBe('2026-08');
+    // One millisecond later is already September.
+    expect(projectBillingPeriodKey('monthly', new Date(end.getTime() + 1))).toBe('2026-09');
   });
 });

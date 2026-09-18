@@ -7,8 +7,21 @@ import { Button } from './ui/button';
 
 const PendingInvitesBanner: React.FC = () => {
   const { user } = useAuth();
+  const email = user?.email?.toLowerCase() || '';
+  // Shaped for the rule, not for convenience: on a LIST the teamInvites read rule
+  // can only be proven from the query's own constraints, and the invitee's clause is
+  // `email == token.email`. The old business-scoped query (auto `businessId ==`,
+  // status filtered client-side) named no provable clause and was denied outright
+  // for every non-super-admin — "Error fetching teamInvites" on every page. It also
+  // hid the one invite this banner exists for: an invite into ANOTHER business.
   const { data: invites } = useCollection<any>('teamInvites', {
-    where: [{ field: 'status', operator: '==', value: 'Pending' }]
+    skip: !email,
+    where: [
+      { field: 'email', operator: '==', value: email },
+      { field: 'status', operator: '==', value: 'Pending' },
+    ],
+    skipTeamFilter: true,
+    skipBusinessFilter: true,
   });
   const navigate = useNavigate();
 

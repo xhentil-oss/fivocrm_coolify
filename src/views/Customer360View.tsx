@@ -24,6 +24,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Separator } from '../components/ui/separator';
 import { safeHref, toAll, canSeeFinancials, currencySymbol } from '../lib/utils';
+import { getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
 import { resolvePortalUserId } from '../lib/notifyClient';
 import FollowUpBadge from '../components/crm/FollowUpBadge';
 import ContactQuickActions from '../components/crm/ContactQuickActions';
@@ -245,8 +246,11 @@ const Customer360View: React.FC = () => {
   const totalRevenue = customerInvoices
     .filter(i => i.status !== 'Draft' && i.status !== 'Cancelled')
     .reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
-  const paidRevenue = customerInvoices.filter(i => i.status === 'Paid').reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
-  const pendingAmount = customerInvoices.filter(i => i.status === 'Pending' || i.status === 'Overdue').reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
+  // Banked vs still owed go through the canonical helpers (as CustomersView does):
+  // a status allow-list dropped `Partial` from BOTH sides, so an invoice of
+  // 100 000 L with 60 000 L received read as 0 paid and 0 outstanding.
+  const paidRevenue = customerInvoices.reduce((s, i) => s + getInvoiceCollectedAll(i), 0);
+  const pendingAmount = customerInvoices.reduce((s, i) => s + getInvoiceOutstandingAll(i), 0);
   const activeProjectCount = customerProjects.filter(p => p.status === 'Active').length;
 
   // Per-client P&L: billed revenue − cost (labor + project expenses, rolled up

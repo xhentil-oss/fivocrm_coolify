@@ -39,6 +39,7 @@ import { addFrequency, completeTask } from '../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { formatCurrency, formatCompactRange, toAll, canSeeFinancials, cn } from '../lib/utils';
 import { computeProjectLabor } from '../lib/finance/laborCost';
+import { useMemberCompensation } from '../hooks/useMemberCompensation';
 import { applyValuedTaskSideEffects } from '../lib/finance/taskValue';
 import {
   getInvoiceTotalAll,
@@ -260,7 +261,14 @@ const ProjectDetailView: React.FC = () => {
   const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
-  const teamMembers = useUniqueTeamMembers(rawTeamMembers);
+  const uniqueTeamMembers = useUniqueTeamMembers(rawTeamMembers);
+  // The burn-down costs logged time at `hourlyCostRate` (falling back to
+  // monthlySalary/160), which is compensation — it now lives in
+  // `teamMemberComp`. Dual read: the comp document wins where it exists, the
+  // legacy `teamMembers` fields are the fallback until the backfill has run.
+  // A non-privileged user reads only their OWN comp row, so a colleague's rate
+  // still resolves through the legacy fallback and no figure changes today.
+  const { members: teamMembers } = useMemberCompensation(uniqueTeamMembers);
   // Team-scoped (not skipTeamFilter) so we don't download every team's comments
   // from the whole database; comments are then matched per task client-side.
   const { data: comments } = useCollection<any>('taskComments');

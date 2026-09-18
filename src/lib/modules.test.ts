@@ -9,6 +9,8 @@ import {
   findModuleForPath,
   isModuleEnabled,
   isPathEnabled,
+  lockedPathsFor,
+  optionalPathsExcept,
   moduleBlockReason,
   planIncludes,
 } from './modules';
@@ -131,6 +133,45 @@ describe('moduleBlockReason', () => {
       disabledModules: ['/app/products'],
       permissions: allowAll,
     })).toBe('disabled');
+  });
+
+  it('reports a platform lock before the owner toggle — the owner cannot undo it', () => {
+    // Both lists name the module: the lock is what the tenant must be told about,
+    // because flipping their own switch changes nothing.
+    expect(moduleBlockReason(shop, {
+      plan: 'business',
+      lockedModules: ['/app/products'],
+      disabledModules: ['/app/products'],
+      permissions: allowAll,
+    })).toBe('locked');
+    expect(moduleBlockReason(shop, {
+      plan: 'business',
+      lockedModules: ['/app/products'],
+      permissions: allowAll,
+    })).toBe('locked');
+  });
+
+  it('reports the plan before a platform lock', () => {
+    expect(moduleBlockReason(shop, {
+      plan: 'starter',
+      lockedModules: ['/app/products'],
+      permissions: allowAll,
+    })).toBe('plan');
+  });
+
+  it('a lock on another module does not touch this one', () => {
+    expect(moduleBlockReason(shop, {
+      plan: 'business',
+      lockedModules: ['/app/hosting'],
+      permissions: allowAll,
+    })).toBeNull();
+  });
+
+  it('lockedPathsFor mirrors disabledPathsFor over the optional set', () => {
+    const available = MODULES.filter(m => m.optional && m.id !== 'hosting').map(m => m.path);
+    expect(lockedPathsFor(available)).toEqual(['/app/hosting']);
+    expect(lockedPathsFor(MODULES.map(m => m.path))).toEqual([]);
+    expect(lockedPathsFor([])).toEqual(optionalPathsExcept([]));
   });
 
   it('lets a super-admin through every gate', () => {

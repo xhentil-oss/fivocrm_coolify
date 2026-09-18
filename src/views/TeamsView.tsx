@@ -61,8 +61,10 @@ function getTeamDeptIcon(department?: string) {
 import { usePermissions } from '../contexts/PermissionsContext';
 import { cn } from '../lib/utils';
 import { appendSalaryChange } from '../lib/finance/salaryHistory';
+import { useMemberCompensation, saveMemberCompensation } from '../hooks/useMemberCompensation';
 import { readTenantClaims } from '../lib/tenantClaims';
 import { parseDate } from '../lib/finance/financialAnalytics';
+import { updateDateValue } from '../lib/formValue';
 import { toast } from '../hooks/use-toast';
 import { useSubscription } from '../hooks/useSubscription';
 import { Card } from '../components/ui/card';
@@ -128,10 +130,15 @@ const TeamsView: React.FC = () => {
       return tb - ta;
     });
   }, [allTeams, businessId]);
-  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
+  const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers', {
     skip: !businessId,
     where: businessScope,
   });
+  // Pay comes from `teamMemberComp` (restricted to self + the tenant's
+  // admins/managers) with the legacy `teamMembers` fields as the fallback, so
+  // the roster, the salary column and the edit dialog all show the same figure
+  // before AND after the backfill.
+  const { members: teamMembers } = useMemberCompensation(rawTeamMembers, { skip: !businessId });
   const { data: teamInvites } = useCollection<TeamInvite>('teamInvites', {
     skip: !businessId,
     where: businessScope,
@@ -838,6 +845,41 @@ const TeamsView: React.FC = () => {
                   toast({ title: 'Ruajtja dështoi', description: why, variant: 'destructive' });
                   return;
                 }
+                // DUAL WRITE, on purpose. Pay now lives in
+                // `teamMemberComp/{teamId}_{userId}` (readable by the member and by
+                // the tenant's admins/managers only), but the legacy fields on
+                // `teamMembers` are still the fallback everywhere until the backfill
+                // has run and been verified — so both halves must stay in step.
+                // Dropping the legacy write before that point silently zeroes
+                // payroll for every reader that has not migrated; dropping this one
+                // leaves the comp document STALE, and a stale comp document WINS
+                // over the corrected legacy field. That is why a failure here is
+                // reported loudly instead of being swallowed. The follow-up order is
+                // written above the teamMembers read rule in firestore.rules.
+                const compFields: Record<string, unknown> = {};
+                if ('monthlySalary' in data) compFields.monthlySalary = (data as any).monthlySalary;
+                if ('hourlyCostRate' in data) compFields.hourlyCostRate = (data as any).hourlyCostRate;
+                if ('salaryHistory' in data) compFields.salaryHistory = (data as any).salaryHistory;
+                if (Object.keys(compFields).length && editingMember.teamId && editingMember.userId) {
+                  try {
+                    await saveMemberCompensation({
+                      teamId: editingMember.teamId,
+                      userId: editingMember.userId,
+                      businessId: (editingMember as any).businessId || businessId || undefined,
+                      actorUserId: user?.uid || null,
+                      fields: compFields,
+                    });
+                  } catch (err) {
+                    toast({
+                      title: 'Pagesa nuk u ruajt plotësisht',
+                      description: 'Të dhënat e anëtarit u ruajtën, por rroga nuk u shkrua te dosja e mbrojtur (teamMemberComp). '
+                        + 'Provo përsëri — ndryshimi i rrogës mund të mos jetë aktiv. '
+                        + `[${(err as Error)?.message || 'gabim i panjohur'}]`,
+                      variant: 'destructive',
+                    });
+                    return;
+                  }
+                }
                 toast({
                   title: 'Anëtari u përditësua',
                   description: data.monthlySalary != null
@@ -1349,6 +1391,13 @@ const InviteMemberForm: React.FC<{
   );
 };
 
+/** `Date` → the `yyyy-mm-dd` an <input type="date"> expects, read in the LOCAL
+ *  calendar (`toISOString()` would shift the day back for any Tirane evening). */
+function toDateInput(d: Date | null | undefined): string {
+  if (!d) return '';
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 // Edit Member Permissions Form
 const EditMemberForm: React.FC<{
   member: TeamMember;
@@ -1373,6 +1422,9 @@ const EditMemberForm: React.FC<{
   // value actually changes) + a flag to wipe the recorded history.
   const [salaryEffectiveFrom, setSalaryEffectiveFrom] = useState(new Date().toISOString().slice(0, 10));
   const [clearSalaryHistory, setClearSalaryHistory] = useState(false);
+  // Termination date. `status: 'Inactive'` alone carries no date, so the P&L of
+  // every closed month silently improved when someone left (see TeamMember.leftAt).
+  const [leftAt, setLeftAt] = useState(() => toDateInput(parseDate((member as any).leftAt)));
   const [hourlyCostRate, setHourlyCostRate] = useState(member.hourlyCostRate?.toString() || '');
   // The member's CRAFT. Distinct from `role` (authorisation) and from `serviceLines`
   // (P&L allocation) — see TeamMember.position.
@@ -1403,19 +1455,29 @@ const EditMemberForm: React.FC<{
     e.preventDefault();
     const newSalary = monthlySalary ? parseFloat(monthlySalary) : undefined;
 
-    // Maintain the effective-dated salary timeline. Record a new entry only when
+    // Maintain the effective-dated salary timeline. Record a new entry whenever
     // the amount actually changed; seed the old amount as a baseline first time.
+    //
+    // A change to 0 (emptying the box, or typing 0) is a change like any other
+    // and MUST be recorded: once `salaryHistory` is non-empty, memberSalaryForMonth
+    // never consults `monthlySalary` again, so deleting the field alone left the
+    // last recorded amount charged to every future month, forever.
     let salaryHistory = member.salaryHistory;
     const salaryChanged = (newSalary || 0) !== (member.monthlySalary || 0);
     if (clearSalaryHistory) {
       salaryHistory = [];
-    } else if (salaryChanged && newSalary != null && newSalary > 0) {
+    } else if (salaryChanged) {
       salaryHistory = appendSalaryChange(
         member,
-        newSalary,
+        newSalary || 0,
         new Date(salaryEffectiveFrom + 'T12:00:00'),
       );
     }
+
+    // Termination date: only meaningful for someone off payroll. Going back to
+    // Active clears it (an explicit `null`, because `undefined` is stripped by
+    // the mutation helper and would leave the old date in place).
+    const leftAtValue = status === 'Inactive' ? updateDateValue(leftAt ? `${leftAt}T12:00:00` : '') : null;
 
     onSubmit({
       role,
@@ -1439,6 +1501,8 @@ const EditMemberForm: React.FC<{
       serviceLines: serviceLines.length ? serviceLines : undefined,
       // Only include when we changed it, so unrelated edits don't clobber history.
       ...(salaryHistory !== member.salaryHistory ? { salaryHistory } : {}),
+      // Skip the key entirely when there is nothing to say (no date now, none before).
+      ...(leftAtValue !== null || (member as any).leftAt ? { leftAt: leftAtValue } : {}),
     });
   };
 
@@ -1535,6 +1599,23 @@ const EditMemberForm: React.FC<{
               <SelectItem value="Pending">Në Pritje</SelectItem>
             </SelectContent>
           </Select>
+          {/* A leaver needs a DATE, not just a status: without it the salary was
+              retro-zeroed in every closed month and the P&L silently improved. */}
+          {status === 'Inactive' && (
+            <div className="mt-2">
+              <Label htmlFor="editLeftAt" className="text-xs">Data e largimit</Label>
+              <p className="text-[11px] text-muted-foreground">
+                Muajt para kësaj date ruajnë rrogën në llogaritjen e fitimit. Bosh = nga sot e tutje.
+              </p>
+              <input
+                id="editLeftAt"
+                type="date"
+                value={leftAt}
+                onChange={(e) => setLeftAt(e.target.value)}
+                className="mt-1 w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -1646,9 +1727,11 @@ const EditMemberForm: React.FC<{
 
         {/* Effective date — used when the salary above changes, so historical
             months keep the old figure in the financial P&L. */}
-        {(parseFloat(monthlySalary) || 0) !== (member.monthlySalary || 0) && (parseFloat(monthlySalary) || 0) > 0 && (
+        {(parseFloat(monthlySalary) || 0) !== (member.monthlySalary || 0) && (
           <div className="pt-1">
-            <Label htmlFor="salaryEffectiveFrom" className="text-xs text-amber-800 dark:text-amber-300">Rroga e re efektive nga</Label>
+            <Label htmlFor="salaryEffectiveFrom" className="text-xs text-amber-800 dark:text-amber-300">
+              {(parseFloat(monthlySalary) || 0) > 0 ? 'Rroga e re efektive nga' : 'Rroga ndalon nga'}
+            </Label>
             <p className="text-[11px] text-muted-foreground">Muajt para kësaj date ruajnë rrogën e vjetër në llogaritjen e fitimit.</p>
             <input
               id="salaryEffectiveFrom"

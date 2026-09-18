@@ -19,7 +19,7 @@ import {
   EXPENSE_CATEGORY_SALARY,
 } from './financialAnalytics';
 import { forwardPayrollEstimate } from './payroll';
-import { monthlyRecurringRevenue } from './forecast';
+import { monthlyRecurringRevenue, withoutEndedRecurringSeries } from './forecast';
 import { monthlyRecurringExpenseRate } from './recurringExpenses';
 
 export interface CashflowAlarm {
@@ -77,7 +77,11 @@ export function computeCashflowHealth(
   // what was actually paid in recent months. Recurring Salary-category rows are
   // excluded from `monthlyRecurringExpenseRate`, so nothing is counted twice.
   const salaries = forwardPayrollEstimate(teamMembers, exp, now).amount; // next month
-  const recurringExpenses = monthlyRecurringExpenseRate(exp);
+  // A series past its "repeat until" date generates nothing (the engine answers
+  // `series-ended`), but `isActiveRecurringParent` never checked that — so an
+  // expired commitment kept widening the gap. Filtered at the consumer for now;
+  // see the TODO on `withoutEndedRecurringSeries`.
+  const recurringExpenses = monthlyRecurringExpenseRate(withoutEndedRecurringSeries(exp, now));
   const monthlyOutflow = salaries + recurringExpenses;
 
   const gap = monthlyInflow - monthlyOutflow;
@@ -145,7 +149,10 @@ export function computeCashflowHealth(
   }
 
   // ── Client concentration: one client > 40% of last-3-month collected.
-  const start3 = monthStart(now, -3);
+  // The window must be the THREE months the copy promises: `monthStart(now, -3)`
+  // opened it four calendar months back (Apr 1 → Jul 15 is Apr+May+Jun+Jul), so
+  // the alarm was measured over a span nobody could reconcile with the text.
+  const start3 = monthStart(now, -2);
   const byCustomer = new Map<string, number>();
   let total3 = 0;
   for (const i of inv) {

@@ -606,8 +606,16 @@ export interface Business {
     docsTotal?: number;
     computedAt?: Date;
   };
-  /** Nav paths disabled for this tenant (super-admin toggles per business). */
+  /**
+   * Module paths the OWNER switched off (their own visibility choice — reversible
+   * from Cilësimet → Modulet). Layer 2 of module access.
+   */
   disabledModules?: string[];
+  /**
+   * Module paths the PLATFORM withheld from this tenant (entitlement — written only
+   * via `POST /api/platform-admin`, the owner cannot change it). Layer 1.
+   */
+  lockedModules?: string[];
   /** Portal subdomain for this tenant: `<portalSubdomain>.fivocrm.com/portal`.
    * Resolves hostname → businessId so this tenant's clients register/scope to it. */
   portalSubdomain?: string;
@@ -718,6 +726,16 @@ export interface TeamMember {
    * was employed BEFORE their record was created in the app.
    */
   hiredAt?: Date;
+  /**
+   * Last day on payroll. The counterpart of `hiredAt`, and the ONLY honest way
+   * to stop charging a leaver: `status` carries no date, so flipping someone to
+   * `Inactive` used to retro-zero their salary in every CLOSED month — eight
+   * months of payroll vanished from the P&L, the project fixed pool and the
+   * department labour line the moment they left. With `leftAt` set, months that
+   * ended before it keep their cost; months at or after it cost 0.
+   * See `memberSalaryForMonth` in lib/finance/salaryHistory.ts.
+   */
+  leftAt?: Date;
   /** Effective-dated salary changes, so historical months use the salary that
    *  applied then (not today's). Each entry = the monthly salary in effect from
    *  `effectiveFrom` until the next entry. When empty, `monthlySalary` is used
@@ -751,6 +769,38 @@ export interface TeamMember {
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
+}
+
+/**
+ * `teamMemberComp/{teamId}_{userId}` — a member's PAY, split out of
+ * `teamMembers` because that collection is readable by the whole business:
+ * every employee could read every colleague's salary with one query.
+ *
+ * Same document-id shape as the membership row, so it is derivable without a
+ * lookup. Readable only by the member themselves, an admin/manager of the
+ * business, or a super-admin; writable only by an owner/admin (firestore.rules).
+ *
+ * DUAL-READ PERIOD: the legacy fields still exist on `TeamMember` and are the
+ * fallback. Resolution lives in ONE place — `src/lib/finance/compensation.ts`
+ * (mirrored by `project-spend-rollup` in api/cron/run.ts). Never read this
+ * collection on its own.
+ */
+export interface MemberCompensation {
+  id?: string;
+  /** The tenant. Stamped on every row; GDPR export/delete query by it. */
+  businessId?: string;
+  /** The department the membership row belongs to — half of the document id. */
+  teamId?: string;
+  /** The member's Firebase uid — the other half of the document id. */
+  userId?: string;
+  monthlySalary?: number | null;
+  salaryHistory?: Array<{ monthlySalary: number; effectiveFrom: Date }> | null;
+  hourlyCostRate?: number | null;
+  /** Set by the `backfill-member-compensation` job: the teamMembers doc it copied. */
+  backfilledFrom?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+  updatedByUserId?: string | null;
 }
 
 export interface Task {
@@ -1672,6 +1722,14 @@ export interface ShopOrder {
   invoiceId?: string;
   /** true after stock was decremented, so fulfilment stays idempotent. */
   stockApplied?: boolean;
+  /** Set once the order's stock was returned (cancel / refund), so a second
+   *  cancel cannot return the same units twice. */
+  stockReturned?: boolean;
+  /** A PORTAL order's `paymentStatus` is written by the client's browser, so it
+   *  is a claim, not a fact. An invoice is only issued as settled when a staff
+   *  member confirmed the payment — nothing a client can reach writes these. */
+  paymentConfirmedByStaff?: boolean;
+  paymentConfirmedAt?: Date;
   notes?: string;
   internalNotes?: string;
   /** 'portal' = placed by the client themselves; 'staff' = entered in the back office. */
@@ -2103,6 +2161,12 @@ export interface Payment {
   sourceKey: string;
   createdAt: Date;
   createdByUserId?: string | null;
+  /** Written by the Stripe webhook on a refund. `refunded` means FULLY refunded;
+   *  `refundedCents` is in the CHARGE currency, which need not be the invoice's
+   *  own — so a partial refund is surfaced but never netted off a total. */
+  refunded?: boolean;
+  refundedCents?: number;
+  stripePaymentIntentId?: string;
 }
 
 export interface InvoiceItem {

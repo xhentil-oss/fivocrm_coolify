@@ -1,19 +1,15 @@
-import React, { useMemo, useState } from 'react';
-import { Building2, Loader2, Copy, Check, Send, SlidersHorizontal, Lock } from 'lucide-react';
+import React, { useState } from 'react';
+import { Building2, Loader2, Copy, Check, Send, SlidersHorizontal } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
-import { Switch } from '../../components/ui/switch';
 import { useToast } from '../../hooks/use-toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { createTenantFromConsole, type CreateTenantResult } from '../../lib/platformAdmin';
-import { MODULES, PLAN_LABELS, disabledPathsFor, groupedOptionalModules, planIncludes } from '../../lib/modules';
+import { defaultDisabledModulePaths } from '../../lib/modules';
+import ModuleAccessEditor from './ModuleAccessEditor';
 import { PLAN_LABEL } from './tenantMeta';
-
-/** Registry default: every optional module on, except the ones flagged `defaultOff`. */
-const defaultEnabledPaths = () => new Set(MODULES.filter(m => m.optional && !m.defaultOff).map(m => m.path));
-const allOptionalPaths = () => new Set(MODULES.filter(m => m.optional).map(m => m.path));
 
 /**
  * Sales-assisted onboarding.
@@ -22,6 +18,10 @@ const allOptionalPaths = () => new Set(MODULES.filter(m => m.optional).map(m => 
  * onboarding a customer over the phone or at a meeting was impossible. This creates the
  * business + its default team and INVITES the owner as Admin — it never pre-creates an
  * account or a password, because the invite flow is what proves the email is theirs.
+ *
+ * Module access is decided here too, in the platform's own layer (`lockedModules`):
+ * what the contract includes. The owner's layer (`disabledModules`) starts at the
+ * registry default (shop/hosting/… off until they opt in) and stays theirs to change.
  */
 const CreateTenantDialog: React.FC<{ open: boolean; onOpenChange: (v: boolean) => void }> = ({ open, onOpenChange }) => {
   const { toast } = useToast();
@@ -30,33 +30,23 @@ const CreateTenantDialog: React.FC<{ open: boolean; onOpenChange: (v: boolean) =
   const [ownerEmail, setOwnerEmail] = useState('');
   const [plan, setPlan] = useState('trial');
   const [trialDays, setTrialDays] = useState('14');
-  // Module switches for the new tenant. Stored as the ENABLED set so the UI reads
-  // naturally; converted to `disabledModules` (the persisted shape) on submit.
-  const [enabled, setEnabled] = useState<Set<string>>(defaultEnabledPaths);
+  // Layer 1 — nothing withheld by default: the plan is the ceiling, the contract may
+  // narrow it further.
+  const [locked, setLocked] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CreateTenantResult | null>(null);
   const [copied, setCopied] = useState(false);
   const [sending, setSending] = useState(false);
 
-  const groups = useMemo(() => groupedOptionalModules(), []);
-  const optionalCount = useMemo(() => MODULES.filter(m => m.optional).length, []);
-  const enabledCount = useMemo(() => MODULES.filter(m => m.optional && enabled.has(m.path)).length, [enabled]);
-  // Switched on but above the chosen plan: the toggle is stored, the plan still
-  // locks it — the operator should see that before the tenant does.
-  const planLockedOn = useMemo(
-    () => MODULES.filter(m => m.optional && enabled.has(m.path) && !planIncludes(plan, m.minPlan)).length,
-    [enabled, plan],
-  );
-
-  const toggle = (path: string) => setEnabled(prev => {
+  const toggleLocked = (path: string, nextLocked: boolean) => setLocked(prev => {
     const next = new Set(prev);
-    if (next.has(path)) next.delete(path); else next.add(path);
+    if (nextLocked) next.add(path); else next.delete(path);
     return next;
   });
 
   const reset = () => {
     setName(''); setOwnerEmail(''); setPlan('trial'); setTrialDays('14');
-    setEnabled(defaultEnabledPaths());
+    setLocked(new Set());
     setResult(null); setCopied(false);
   };
 
@@ -73,7 +63,8 @@ const CreateTenantDialog: React.FC<{ open: boolean; onOpenChange: (v: boolean) =
         ownerEmail: ownerEmail.trim(),
         plan,
         trialDays: Number(trialDays) || 0,
-        disabledModules: disabledPathsFor(enabled),
+        lockedModules: Array.from(locked),
+        disabledModules: defaultDisabledModulePaths(),
         force,
       });
       setResult(res);
@@ -199,88 +190,17 @@ const CreateTenantDialog: React.FC<{ open: boolean; onOpenChange: (v: boolean) =
               kontratë të nënshkruar, sepse asnjë pagesë nuk kërkohet nga Stripe.
             </p>
 
-            {/* Modules — every optional module can start on or off. The registry's
-                defaults are pre-selected; the owner can still change it later from
-                Cilësimet → Modulet, and the console from the tenant page. */}
-            <div className="rounded-md border border-border">
-              <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/40">
-                <SlidersHorizontal className="h-3.5 w-3.5 text-primary" />
-                <span className="text-xs font-semibold">Modulet</span>
-                <span className="text-[11px] text-muted-foreground">{enabledCount}/{optionalCount} aktive</span>
-                <div className="ml-auto flex gap-1">
-                  <button
-                    type="button"
-                    className="text-[11px] text-primary hover:underline"
-                    onClick={() => setEnabled(allOptionalPaths())}
-                  >
-                    Të gjitha
-                  </button>
-                  <span className="text-[11px] text-muted-foreground">·</span>
-                  <button
-                    type="button"
-                    className="text-[11px] text-primary hover:underline"
-                    onClick={() => setEnabled(defaultEnabledPaths())}
-                  >
-                    Standard
-                  </button>
-                  <span className="text-[11px] text-muted-foreground">·</span>
-                  <button
-                    type="button"
-                    className="text-[11px] text-primary hover:underline"
-                    onClick={() => setEnabled(new Set())}
-                  >
-                    Asnjë
-                  </button>
-                </div>
-              </div>
-              <div className="max-h-64 overflow-y-auto divide-y divide-border">
-                {groups.map(({ group, modules }) => (
-                  <div key={group} className="px-3 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5">{group}</p>
-                    <div className="space-y-1.5">
-                      {modules.map(m => {
-                        const on = enabled.has(m.path);
-                        const planLocked = !planIncludes(plan, m.minPlan);
-                        return (
-                          <label
-                            key={m.path}
-                            className="flex items-center gap-2.5 cursor-pointer select-none"
-                            title={m.description}
-                          >
-                            <Switch
-                              checked={on}
-                              onCheckedChange={() => toggle(m.path)}
-                              aria-label={`${on ? 'Çaktivizo' : 'Aktivizo'} ${m.label}`}
-                            />
-                            <span className={`text-xs flex-1 min-w-0 truncate ${on ? '' : 'text-muted-foreground'}`}>
-                              {m.label}
-                            </span>
-                            {planLocked && (
-                              <span
-                                className={`inline-flex items-center gap-1 text-[10px] rounded-full px-1.5 py-0.5 border ${
-                                  on
-                                    ? 'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800'
-                                    : 'text-muted-foreground border-border'
-                                }`}
-                                title={`Kërkon planin ${PLAN_LABELS[m.minPlan]}`}
-                              >
-                                <Lock className="h-2.5 w-2.5" />
-                                {PLAN_LABELS[m.minPlan]}
-                              </span>
-                            )}
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {planLockedOn > 0 && (
-                <p className="px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300 border-t border-border">
-                  {planLockedOn} modul{planLockedOn === 1 ? '' : 'e'} të ndezura janë mbi paketën{' '}
-                  <strong>{PLAN_LABEL[plan] || plan}</strong> — mbeten të mbyllura derisa plani të ngrihet.
-                </p>
-              )}
+            <div className="space-y-1.5">
+              <Label className="flex items-center gap-1.5">
+                <SlidersHorizontal className="h-3.5 w-3.5 text-primary" /> Modulet e kontratës
+              </Label>
+              <ModuleAccessEditor
+                compact
+                plan={plan}
+                locked={locked}
+                onToggleLocked={toggleLocked}
+                onReplaceLocked={setLocked}
+              />
             </div>
 
             <Button type="submit" className="w-full" disabled={busy}>

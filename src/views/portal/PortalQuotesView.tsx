@@ -11,6 +11,7 @@ import { useToast } from '../../hooks/use-toast';
 import type { Quote, Customer, Lead } from '../../types';
 import { notifyStaff } from '../../lib/notifyStaff';
 import { currencySymbol } from '../../lib/utils';
+import { CLIENT_VISIBLE_QUOTE_STATUSES } from '../../lib/quoteVisibility';
 
 const statusMap: Record<string, { label: string; class: string }> = {
   Draft: { label: 'Draft', class: 'bg-gray-100 text-gray-700' },
@@ -19,6 +20,12 @@ const statusMap: Record<string, { label: string; class: string }> = {
   Rejected: { label: 'Refuzuar', class: 'bg-red-100 text-red-700' },
   Expired: { label: 'Skaduar', class: 'bg-gray-100 text-gray-500' },
 };
+
+// Statuses the portal is allowed to READ. Mirrors `quoteVisibleToClient()` in
+// firestore.rules: a `Draft` is internal pricing and must never leave the tenant.
+// `leadIdList` is capped at 10, so the lead query expands to at most 10 x 3 = 30
+// disjunctions — Firestore's limit.
+
 
 const STATUS_FILTERS = [
   { value: 'all', label: 'Të gjitha' },
@@ -72,14 +79,26 @@ const PortalQuotesView: React.FC = () => {
 
   // Quotes are read with two narrowed queries the server RLS authorizes:
   // by the client's customerId, and by leadId for their own leads.
+  //
+  // The `status in` constraint is NOT a convenience filter — it is what makes the
+  // query shape provable against the rule (`quoteVisibleToClient()` in
+  // firestore.rules). A Draft is internal pricing; it used to be fetched and then
+  // hidden in React, i.e. it sat in the client's devtools. Keep this list and the
+  // rule's list identical, or the whole query is denied (rules are not filters).
   const { data: quotesByCustomer, loading: loadingByCustomer } = useCollection<Quote>('quotes', {
     skip: !customerId,
-    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
+    where: [
+      { field: 'customerId', operator: '==', value: customerId || '' },
+      { field: 'status', operator: 'in', value: CLIENT_VISIBLE_QUOTE_STATUSES },
+    ],
     skipTeamFilter: true,
   });
   const { data: quotesByLead, loading: loadingByLead } = useCollection<Quote>('quotes', {
     skip: leadIdList.length === 0,
-    where: [{ field: 'leadId', operator: 'in', value: leadIdList }],
+    where: [
+      { field: 'leadId', operator: 'in', value: leadIdList },
+      { field: 'status', operator: 'in', value: CLIENT_VISIBLE_QUOTE_STATUSES },
+    ],
     skipTeamFilter: true,
   });
   // Wait for the lead-based path too, otherwise the empty state flashes before the
@@ -91,7 +110,8 @@ const PortalQuotesView: React.FC = () => {
     const seen = new Set<string>();
     return merged
       .filter(q => { if (seen.has(q.id)) return false; seen.add(q.id); return true; })
-      .filter(q => q.status !== 'Draft') // Don't show drafts to clients
+      // No Draft filter here: both queries constrain `status in CLIENT_VISIBLE_QUOTE_STATUSES`
+      // server-side, so a Draft never reaches the browser at all.
       .sort((a, b) => {
         const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
         const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? 0;

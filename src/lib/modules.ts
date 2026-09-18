@@ -127,7 +127,11 @@ export const MODULES: ModuleDef[] = [
   // ── Financa ──
   { id: 'invoices', path: '/app/invoices', label: 'Faturat', description: 'Faturim, faturim i përsëritur dhe arkëtime.', permissionKey: 'canAccessInvoices', minPlan: 'starter', optional: true, group: 'Financa' },
   { id: 'expenses', path: '/app/expenses', label: 'Shpenzimet', description: 'Shpenzime, aprovime dhe kategori.', permissionKey: 'canAccessExpenses', minPlan: 'starter', optional: true, group: 'Financa' },
-  { id: 'bonus', path: '/app/bonus', label: 'Bonuset', description: 'Bonuset dhe komisionet e ekipit.', permissionKey: 'canAccessProfile', minPlan: 'business', optional: true, group: 'Financa' },
+  // `canAccessProfile` is TRUE for every role, Viewer included — so this route
+  // was open to the whole company while the page reads every colleague's salary
+  // and the tenant's entire expense ledger. Gated on the Financat/Shpenzimet key
+  // instead, which is what "may see the team's compensation figures" means here.
+  { id: 'bonus', path: '/app/bonus', label: 'Bonuset', description: 'Bonuset dhe komisionet e ekipit.', permissionKey: 'canAccessExpenses', minPlan: 'business', optional: true, group: 'Financa' },
 
   // ── Komunikim ──
   { id: 'chat', path: '/app/chat', label: 'Chat', description: 'Chat i ekipit, DM dhe kanale me klientët.', permissionKey: 'canAccessChat', minPlan: 'starter', optional: true, group: 'Komunikim' },
@@ -184,15 +188,24 @@ export function groupedOptionalModules(): Array<{ group: ModuleDef['group']; mod
 }
 
 /**
- * Turn "which modules did the operator switch ON" into the `disabledModules` value
- * to store. Only optional modules can be off; a core module is never written to the
- * list even if the caller left it out, and unknown paths are ignored — so a stale
- * selection from an older UI cannot switch off something that no longer exists or
- * that a tenant may not lose.
+ * The optional module paths NOT in `kept`. Only optional modules can be withheld; a
+ * core module is never written to either list even if the caller left it out, and
+ * unknown paths are ignored — so a stale selection from an older UI cannot switch
+ * off something that no longer exists or that a tenant may not lose.
  */
-export function disabledPathsFor(enabledPaths: Iterable<string>): string[] {
-  const on = new Set(enabledPaths);
+export function optionalPathsExcept(kept: Iterable<string>): string[] {
+  const on = new Set(kept);
   return MODULES.filter(m => m.optional && !on.has(m.path)).map(m => m.path);
+}
+
+/** "Which modules did the owner switch ON" → the `disabledModules` value to store. */
+export function disabledPathsFor(enabledPaths: Iterable<string>): string[] {
+  return optionalPathsExcept(enabledPaths);
+}
+
+/** "Which modules did the platform make AVAILABLE" → the `lockedModules` value to store. */
+export function lockedPathsFor(availablePaths: Iterable<string>): string[] {
+  return optionalPathsExcept(availablePaths);
 }
 
 /** Does `plan` include a module requiring at least `minPlan`? */
@@ -208,11 +221,25 @@ export function requiredPlanLabel(mod: ModuleDef): string {
   return PLAN_LABELS[mod.minPlan];
 }
 
-export type ModuleBlockReason = 'permission' | 'plan' | 'disabled' | null;
+/**
+ * Why a module is unavailable:
+ *   - `permission` — the user's role does not grant it;
+ *   - `plan`       — the tenant's subscription tier does not include it;
+ *   - `locked`     — the PLATFORM withheld it from this tenant (`businesses.lockedModules`,
+ *                    written only by the super-admin console; the owner cannot undo it);
+ *   - `disabled`   — the OWNER switched it off (`businesses.disabledModules`, the
+ *                    tenant's own visibility choice, reversible from Cilësimet → Modulet).
+ *
+ * `locked` and `disabled` are two layers on purpose: entitlement belongs to the
+ * vendor, configuration to the customer. With a single field the owner could simply
+ * re-enable whatever the platform had switched off.
+ */
+export type ModuleBlockReason = 'permission' | 'plan' | 'locked' | 'disabled' | null;
 
 export interface ModuleAccessInput {
   plan?: PlanKey | string;
   disabledModules?: string[];
+  lockedModules?: string[];
   isSuperAdmin?: boolean;
   /** Map of permission key → granted. Pass the UserPermissions object directly. */
   permissions?: Record<string, any>;
@@ -221,13 +248,15 @@ export interface ModuleAccessInput {
 /**
  * Resolve why (or whether) a module is unavailable. Returns null when accessible.
  * Order matters: permission first (a Viewer shouldn't be told to upgrade a plan
- * they can't reach anyway), then plan, then the tenant toggle.
+ * they can't reach anyway), then plan, then the platform lock, then the owner's
+ * toggle — each later gate is only worth explaining once the earlier ones pass.
  */
 export function moduleBlockReason(mod: ModuleDef, input: ModuleAccessInput): ModuleBlockReason {
   // Super-admins run the platform — they see every tenant's modules regardless.
   if (input.isSuperAdmin) return null;
   if (input.permissions && input.permissions[mod.permissionKey] !== true) return 'permission';
   if (!planIncludes(input.plan, mod.minPlan)) return 'plan';
+  if ((input.lockedModules || []).includes(mod.path)) return 'locked';
   if ((input.disabledModules || []).includes(mod.path)) return 'disabled';
   return null;
 }

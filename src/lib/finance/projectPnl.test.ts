@@ -387,3 +387,73 @@ describe('computeProjectPnl — payroll in the fixed pool', () => {
     expect(r.fixedPool.salaries).toBe(5_000);
   });
 });
+
+// ── Sep 2026 audit: a retainer earns for as long as its BILLING SERIES ran ──
+// `lastCompletedAt ?? periodEnd` was wrong in both directions: it let a dead
+// retainer book full budget revenue forever, and it stopped a live one the first
+// time every task happened to be done.
+describe('monthly retainer active span', () => {
+  const now = new Date('2026-09-20');
+  const sep = { start: new Date(2026, 8, 1), end: new Date(2026, 8, 30, 23, 59, 59, 999) };
+
+  const retainer = (over: Partial<Project>) => mkProject({
+    id: 'r', name: 'Retainer', budget: 50_000, billingType: 'monthly',
+    createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01'),
+    status: 'Active', isRecurring: true, ...over,
+  } as Partial<Project>);
+
+  it('books nothing in September for a retainer cancelled in February', () => {
+    // The live bug: 50 000/month × 7 months = 450 000 of revenue that will never
+    // be billed, credited to the project, its department and its owner.
+    const cancelled = retainer({ status: 'Cancelled', isRecurring: false, updatedAt: new Date('2026-02-20') } as any);
+    const res = computeProjectPnl([cancelled], [], [], { range: sep, months: 1, now });
+    expect(res.rows).toHaveLength(0);
+    expect(res.totals.revenue).toBe(0);
+  });
+
+  it('still books the months it DID run (Jan–Feb) in a full-year view', () => {
+    const cancelled = retainer({ status: 'Cancelled', isRecurring: false, updatedAt: new Date('2026-02-20') } as any);
+    const res = computeProjectPnl([cancelled], [], [], { year: 2026, now });
+    expect(res.rows[0].activeMonths).toBe(2);
+    expect(res.rows[0].revenue).toBe(100_000);
+  });
+
+  it('ends an archived retainer at archivedAt', () => {
+    const archived = retainer({ status: 'Archived', isRecurring: false,
+      archivedAt: new Date('2026-04-10'), updatedAt: new Date('2026-09-01') } as any);
+    expect(computeProjectPnl([archived], [], [], { range: sep, months: 1, now }).rows).toHaveLength(0);
+    // …and counts Jan–Apr in the year view, not Jan–Sep.
+    expect(computeProjectPnl([archived], [], [], { year: 2026, now }).rows[0].activeMonths).toBe(4);
+  });
+
+  it('ends a series the owner switched off at recurringBillingStoppedAt', () => {
+    // stopProjectBillingPatch() leaves the project Active and billingType alone.
+    const stopped = retainer({ isRecurring: false, recurringBillingStoppedReason: 'manual',
+      recurringBillingStoppedAt: new Date('2026-05-31') } as any);
+    expect(computeProjectPnl([stopped], [], [], { range: sep, months: 1, now }).rows).toHaveLength(0);
+    expect(computeProjectPnl([stopped], [], [], { year: 2026, now }).rows[0].activeMonths).toBe(5);
+  });
+
+  it('ends a series at its "repeat until" date', () => {
+    const ending = retainer({ recurringEndDate: new Date('2026-06-30') } as any);
+    expect(computeProjectPnl([ending], [], [], { range: sep, months: 1, now }).rows).toHaveLength(0);
+    expect(computeProjectPnl([ending], [], [], { year: 2026, now }).rows[0].activeMonths).toBe(6);
+  });
+
+  it('keeps a LIVE retainer earning after an all-tasks-done moment', () => {
+    // `lastCompletedAt` means "the last time every task was done", not "the
+    // engagement ended" — reading it as the end stopped a running retainer from
+    // earning for the rest of the year.
+    const live = retainer({ lastCompletedAt: new Date('2026-03-20') } as any);
+    const res = computeProjectPnl([live], [], [], { year: 2026, now: new Date('2026-07-23') });
+    expect(res.rows[0].activeMonths).toBe(7);   // Jan..Jul, not Jan..Mar
+    expect(res.rows[0].revenue).toBe(350_000);
+  });
+
+  it('still honours lastCompletedAt for a legacy row with no series flags', () => {
+    // Nothing says when this one stopped except the completion stamp, so it is
+    // the only evidence there is.
+    const legacy = retainer({ isRecurring: false, lastCompletedAt: new Date('2026-03-20') } as any);
+    expect(computeProjectPnl([legacy], [], [], { year: 2026, now: new Date('2026-07-23') }).rows[0].activeMonths).toBe(3);
+  });
+});

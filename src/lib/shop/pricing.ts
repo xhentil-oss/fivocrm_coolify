@@ -58,7 +58,13 @@ export function listedUnitPrice(
   return round2(product.price || 0);
 }
 
-/** Net (tax-exclusive) unit price — what an order line stores. */
+/**
+ * Net (tax-exclusive) unit price — the per-unit figure shown and audited.
+ *
+ * Only ever a per-UNIT display value: a gross-listed 10.00 at 20 % has no exact
+ * net unit (8.333…), so this necessarily rounds. Never multiply it by quantity to
+ * get a line total — that is what `netLineTotal()` is for.
+ */
 export function netUnitPrice(
   product: Pick<Product, 'price' | 'priceTiers' | 'taxRatePercent' | 'taxIncluded'>,
   variant?: ProductVariant | null,
@@ -68,6 +74,28 @@ export function netUnitPrice(
   const rate = taxRate(product);
   if (!product.taxIncluded || rate <= 0) return listed;
   return round2(listed / (1 + rate / 100));
+}
+
+/**
+ * Net (tax-exclusive) LINE total for `qty` units — the cent-exact figure an order
+ * line stores.
+ *
+ * On a tax-inclusive product the customer is quoted the GROSS price, so the gross
+ * line is the authoritative amount: round `listed × qty` once and back the tax out
+ * of that. Rounding the unit net first (8.33 × 3 = 24.99 + 5.00 tax = 29.99) lost a
+ * cent per line against a catalogue price of 10.00 × 3 = 30.00, and 0.40 at qty 100.
+ */
+export function netLineTotal(
+  product: Pick<Product, 'price' | 'priceTiers' | 'taxRatePercent' | 'taxIncluded'>,
+  variant: ProductVariant | null | undefined,
+  qty: number,
+): number {
+  const units = Math.max(0, Math.floor(qty) || 0);
+  const listed = listedUnitPrice(product, variant, units || 1);
+  const rate = taxRate(product);
+  const line = round2(listed * units);
+  if (!product.taxIncluded || rate <= 0) return line;
+  return round2(line / (1 + rate / 100));
 }
 
 /** Gross (tax-inclusive) unit price — what the portal shows the customer. */
@@ -141,7 +169,8 @@ export function buildOrderItem(
   const qty = Math.max(1, Math.floor(quantity) || 1);
   const unitPrice = netUnitPrice(product, variant, qty);
   const rate = taxRate(product);
-  const netAfterDiscount = Math.max(0, round2(unitPrice * qty - (discount || 0)));
+  // The LINE is the authoritative amount, not unitPrice × qty — see netLineTotal().
+  const netAfterDiscount = Math.max(0, round2(netLineTotal(product, variant, qty) - (discount || 0)));
   const optionNames = (product.options || []).map(o => o.name);
   return {
     productId: product.id,
@@ -177,10 +206,24 @@ export interface OrderTotalsOptions {
 }
 
 /**
+ * The line's net amount BEFORE its own discount.
+ *
+ * The line's stored `total` is the snapshot and therefore the authority: on a
+ * tax-inclusive product it is derived from the gross line, so `unitPrice × qty`
+ * can legitimately be a cent short of it. Only when a caller hands us a line with
+ * no usable total do we fall back to the multiplication.
+ */
+function lineNetBeforeDiscount(item: ShopOrderItem): number {
+  const total = Number(item?.total);
+  if (Number.isFinite(total)) return round2(total + (Number(item?.discount) || 0));
+  return round2((item?.unitPrice || 0) * (item?.quantity || 0));
+}
+
+/**
  * Roll order lines up to a payable total.
  *
- * `subtotal` is gross-of-discount (list × qty) so the UI can show a discount row;
- * an order-level discount is spread across lines PRO-RATA before tax, so the tax
+ * `subtotal` is gross-of-discount so the UI can show a discount row; an
+ * order-level discount is spread across lines PRO-RATA before tax, so the tax
  * base always matches what the customer actually pays.
  */
 export function computeOrderTotals(
@@ -188,7 +231,7 @@ export function computeOrderTotals(
   opts: OrderTotalsOptions = {},
 ): OrderTotals {
   const lines = items || [];
-  const subtotal = round2(lines.reduce((s, i) => s + (i.unitPrice || 0) * (i.quantity || 0), 0));
+  const subtotal = round2(lines.reduce((s, i) => s + lineNetBeforeDiscount(i), 0));
   const lineDiscounts = round2(lines.reduce((s, i) => s + (i.discount || 0), 0));
   const netAfterLineDiscounts = Math.max(0, round2(subtotal - lineDiscounts));
 
@@ -200,12 +243,15 @@ export function computeOrderTotals(
   const discountTotal = round2(lineDiscounts + orderDiscount);
   const ratio = netAfterLineDiscounts > 0 ? (netAfterLineDiscounts - orderDiscount) / netAfterLineDiscounts : 0;
 
+  // Rounded PER LINE, then summed: with no order discount (ratio 1) this reproduces
+  // each line's own `taxAmount` exactly, so the invoice and the order agree cent
+  // for cent instead of differing by the rounding of the aggregate.
   let taxTotal = round2(
     lines.reduce((s, i) => {
       const rate = i.taxRatePercent || 0;
       if (!rate) return s;
-      const lineNet = Math.max(0, (i.unitPrice || 0) * (i.quantity || 0) - (i.discount || 0));
-      return s + (lineNet * ratio * rate) / 100;
+      const lineNet = Math.max(0, lineNetBeforeDiscount(i) - (i.discount || 0));
+      return s + round2((lineNet * ratio * rate) / 100);
     }, 0),
   );
 

@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useRef, useState } from 'react';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { createTenant } from '../lib/createTenant';
+import { useAuth } from '../contexts/AuthContext';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -16,6 +17,12 @@ import { Loader2, Building2 } from 'lucide-react';
  */
 const WorkspaceSignupView: React.FC = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  // Set the moment THIS page starts a signup. From then on the page must stay mounted
+  // even though the user is signed in: navigating away is the success handler's job
+  // (after createTenant), and a failure after the account was created must stay
+  // visible instead of bouncing to a half-provisioned workspace.
+  const startedSignup = useRef(false);
   const [companyName, setCompanyName] = useState('');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -42,6 +49,7 @@ const WorkspaceSignupView: React.FC = () => {
     }
 
     setLoading(true);
+    startedSignup.current = true;
     try {
       // 1. Create the owner's auth account (auto-signs them in).
       const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
@@ -77,6 +85,10 @@ const WorkspaceSignupView: React.FC = () => {
       setLoading(false);
     }
   };
+
+  // Someone already signed in who simply opened /signup — the app shell decides
+  // where they belong (workspace, invite, or portal).
+  if (user && !startedSignup.current) return <Navigate to="/" replace />;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/5 via-background to-background p-4">

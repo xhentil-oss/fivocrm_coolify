@@ -35,6 +35,7 @@ import { computeCashflowHealth } from '../lib/finance/cashflowAlarms';
 import { forecastNextMonth } from '../lib/finance/forecast';
 import { computeDepartmentPnl, buildDepartmentProfitTrend } from '../lib/finance/departmentPnl';
 import { attributeCollectedRevenue, resolveCollectionWindow } from '../lib/finance/revenueAttribution';
+import { useMemberCompensation } from '../hooks/useMemberCompensation';
 
 // ── Financat — owner dashboard ────────────────────────────────────────────────
 // Rebuilt against the hifi design reference "Financat FivoCRM.dc.html".
@@ -173,7 +174,12 @@ const FinancesView: React.FC = () => {
   const { data: expenses, loading: lExp } = useCollection<Expense>('expenses', { skipTeamFilter: true });
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
-  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
+  const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
+  // Pay lives in `teamMemberComp` now (a colleague's salary is not the whole
+  // business's to read). Dual read: the comp document wins where it exists, the
+  // legacy `teamMembers` fields are the fallback until the backfill has run —
+  // every payroll engine below still takes plain TeamMember objects.
+  const { members: teamMembers } = useMemberCompensation(rawTeamMembers);
   // Hosting module: subscriptions we bill are a recurring-revenue source too.
   const { isEnabled: moduleEnabled } = useModules();
   const hostingOn = moduleEnabled('hosting');

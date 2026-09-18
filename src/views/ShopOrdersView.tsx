@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { doc, runTransaction, Timestamp } from 'firebase/firestore';
 import {
-  ArrowLeft, Ban, CheckCircle2, FileText, Loader2, Package, PackageCheck, Plus,
-  Receipt, Search, ShoppingCart, Trash2, Truck, User as UserIcon,
+  AlertTriangle, ArrowLeft, Ban, CheckCircle2, FileText, Loader2, Package, PackageCheck,
+  Plus, Receipt, Search, ShieldCheck, ShoppingCart, Trash2, Truck, Undo2, User as UserIcon,
 } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -16,8 +17,9 @@ import { SkeletonLoader } from '../components/PageSkeleton';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useToast } from '../hooks/use-toast';
+import { db } from '../lib/firebase';
 import { formatCurrency, getTimestampMs, toAll } from '../lib/utils';
-import { buildOrderItem, computeOrderTotals } from '../lib/shop/pricing';
+import { buildOrderItem, computeOrderTotals, round2 } from '../lib/shop/pricing';
 import { allocationsForOrder, applyStockToProduct, canFulfill } from '../lib/shop/inventory';
 import { nextOrderNumber } from '../lib/shop/product';
 import { variantLabel } from '../lib/shop/variants';
@@ -60,6 +62,136 @@ const fmtDate = (d: any) => {
   const ms = getTimestampMs(d);
   return ms ? new Date(ms).toLocaleDateString('sq-AL', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
 };
+
+const num = (v: unknown) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+// ── The trust boundary ──────────────────────────────────────────────────────
+//
+// A `source: 'portal'` order is written straight from the client's browser
+// (PortalShopView), so EVERY money field on it — unitPrice, line totals,
+// discountTotal, total, paymentStatus — is whatever that browser chose to send.
+// There is no budget for a serverless re-pricing endpoint (Vercel Hobby caps the
+// project at 12 functions and it is at 12), so the boundary is enforced HERE,
+// where the order first turns into money: the invoice.
+//
+// Two rules follow, and neither may be softened without moving the check server-
+// side first:
+//   1. a portal order is billed at the price the LIVE CATALOG says, never at the
+//      figure the browser sent;
+//   2. an invoice is never marked Paid because a portal document said so — only a
+//      staff member's own "Shëno paguar" (or a back-office order) settles it.
+//
+// A back-office order was typed by a staff member, so its lines stay the price
+// SNAPSHOT they are meant to be; a divergence from today's catalog is still shown,
+// because it can equally mean "the catalog changed after the order".
+
+interface OrderRepricing {
+  /** true when the stored figures were authored by staff, so the snapshot stands. */
+  trusted: boolean;
+  /** Lines rebuilt from the live catalog (the stored line is kept when unknown). */
+  repricedItems: ShopOrderItem[];
+  /** Products that are no longer in the catalog, by name. */
+  missing: string[];
+  storedTotal: number;
+  catalogTotal: number;
+  /** The two figures disagree by more than half a cent. */
+  differs: boolean;
+  /** A portal order we cannot re-price — refuse to bill rather than trust it. */
+  blocked: boolean;
+  /** What the invoice must actually charge. */
+  billed: {
+    items: ShopOrderItem[];
+    subtotal: number;
+    discount: number;
+    tax: number;
+    shipping: number;
+    total: number;
+  };
+}
+
+/** The order-level discount, i.e. whatever `discountTotal` holds beyond the lines. */
+function orderLevelDiscount(order: ShopOrder): number {
+  const lines = (order.items || []).reduce((s, i) => s + num(i.discount), 0);
+  return Math.max(0, round2(num(order.discountTotal) - lines));
+}
+
+/** Re-price an order from the live catalog with the same pure helpers that priced it. */
+function repriceOrder(order: ShopOrder, products: Product[]): OrderRepricing {
+  const trusted = order.source !== 'portal';
+  const byId = new Map((products || []).map(p => [p.id, p]));
+  const missing: string[] = [];
+  const repricedItems: ShopOrderItem[] = [];
+
+  for (const item of order.items || []) {
+    const product = byId.get(item.productId);
+    if (!product) {
+      missing.push(item.name || item.productId);
+      repricedItems.push(item);
+      continue;
+    }
+    const variant = item.variantId ? product.variants?.find(v => v.id === item.variantId) : undefined;
+    // A discount only ever LOWERS the bill, so it is not the client's to author:
+    // a portal line is re-priced at full catalog price, a staff line keeps the
+    // discount the staff member typed.
+    repricedItems.push(buildOrderItem(product, variant, item.quantity, trusted ? num(item.discount) : 0));
+  }
+
+  const catalog = computeOrderTotals(repricedItems, {
+    // Shipping can only raise the bill and the portal cart never sets it, so the
+    // stored value is carried across; an order-level discount is not.
+    shipping: Math.max(0, num(order.shippingTotal)),
+    orderDiscount: trusted ? orderLevelDiscount(order) : 0,
+  });
+
+  const storedTotal = round2(num(order.total));
+  const catalogTotal = catalog.total;
+  const billed = trusted
+    ? {
+        items: order.items || [],
+        subtotal: round2(num(order.subtotal)),
+        discount: round2(num(order.discountTotal)),
+        tax: round2(num(order.taxTotal)),
+        shipping: round2(num(order.shippingTotal)),
+        total: storedTotal,
+      }
+    : {
+        items: repricedItems,
+        subtotal: catalog.subtotal,
+        discount: catalog.discountTotal,
+        tax: catalog.taxTotal,
+        shipping: catalog.shippingTotal,
+        total: catalogTotal,
+      };
+
+  return {
+    trusted,
+    repricedItems,
+    missing,
+    storedTotal,
+    catalogTotal,
+    differs: Math.abs(catalogTotal - storedTotal) > 0.005,
+    // A portal line whose product is gone cannot be re-priced, and the stored
+    // figure is exactly the one we refuse to trust — so there is nothing to bill.
+    blocked: !trusted && missing.length > 0,
+    billed,
+  };
+}
+
+/**
+ * May this order's invoice be created already settled?
+ *
+ * Only on a staff member's own confirmation. `paymentStatus` on a portal order is
+ * a client-supplied string; `paymentConfirmedByStaff` is stamped by "Shëno paguar"
+ * in this view and by nothing the browser of a client can reach.
+ */
+function isStaffConfirmedPaid(order: ShopOrder): boolean {
+  if (order.paymentStatus !== 'Paid') return false;
+  if (order.source !== 'portal') return true;
+  return (order as any).paymentConfirmedByStaff === true;
+}
 
 const ShopOrdersView: React.FC = () => {
   const permissions = usePermissions();
@@ -115,30 +247,99 @@ const ShopOrdersView: React.FC = () => {
 
   const visible = filtered.slice(0, visibleCount);
 
-  // ── Fulfilment: decrement stock exactly once per order ──
-  const applyStock = async (order: ShopOrder) => {
-    if (order.stockApplied) return;
+  // What the open order would ACTUALLY be billed, re-priced from today's catalog.
+  const pricing = useMemo(
+    () => (selected ? repriceOrder(selected, products || []) : null),
+    [selected, products],
+  );
+
+  // ── Fulfilment: every stock change is a claimed, compensable ledger entry ──
+
+  /**
+   * Claim a one-shot flag on the order document, atomically.
+   *
+   * The flag IS the idempotency guard, so reading it from a React snapshot and
+   * writing it N awaits later was a race: two staff confirming the same order in
+   * the same second both saw `stockApplied: false` and both decremented. The
+   * transaction makes the claim the first write, and only the winner goes on to
+   * move stock — under-decrementing if the follow-up writes then fail is a
+   * recoverable book-keeping error, double-decrementing is lost inventory.
+   */
+  const claimOrderFlag = async (
+    orderId: string,
+    flag: 'stockApplied' | 'stockReturned',
+  ): Promise<boolean> => {
+    const ref = doc(db, 'shopOrders', orderId);
+    return runTransaction(db, async tx => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return false;
+      const data = snap.data() as any;
+      if (data[flag] === true) return false;
+      // Stock can only be RETURNED if it was ever taken.
+      if (flag === 'stockReturned' && data.stockApplied !== true) return false;
+      tx.update(ref, { [flag]: true, updatedAt: Timestamp.now() });
+      return true;
+    });
+  };
+
+  /**
+   * Write the ledger rows for an order and the balances they imply.
+   *
+   * Stock is never set directly — `applyStockToProduct` derives the patch from a
+   * movement. Allocations are folded per product FIRST: two lines of the same
+   * product (or two variants of it) each produced a patch computed from the same
+   * stale snapshot, so the second write silently undid the first.
+   */
+  const moveOrderStock = async (order: ShopOrder, type: 'sale' | 'return', reason?: string) => {
     const allocations = allocationsForOrder(order.items || [], products || []);
+    const working = new Map<string, Product>();
+    const patches = new Map<string, Partial<Product>>();
+    const movements: any[] = [];
+
     for (const alloc of allocations) {
-      const product = (products || []).find(p => p.id === alloc.productId);
-      if (!product) continue;
-      const { patch, balanceAfter } = applyStockToProduct(product, alloc.variantId, 'sale', alloc.quantity);
-      await productMutation.update(product.id, patch as any);
-      await movementMutation.create({
-        productId: product.id,
-        productName: product.name,
+      const current = working.get(alloc.productId) || (products || []).find(p => p.id === alloc.productId);
+      if (!current) continue;
+      const { patch, balanceAfter } = applyStockToProduct(current, alloc.variantId, type, alloc.quantity);
+      working.set(alloc.productId, { ...current, ...patch } as Product);
+      patches.set(alloc.productId, { ...(patches.get(alloc.productId) || {}), ...patch });
+      movements.push({
+        productId: alloc.productId,
+        productName: alloc.productName,
         variantId: alloc.variantId,
         variantLabel: alloc.variantLabel,
-        type: 'sale',
+        type,
         quantity: alloc.quantity,
         balanceAfter,
         reference: order.orderNumber,
         shopOrderId: order.id,
-      } as any);
+        ...(reason ? { reason } : {}),
+      });
     }
-    // stockApplied is the idempotency guard — set it even when nothing was tracked,
-    // so re-confirming an order can never double-decrement.
-    await orderMutation.update(order.id, { stockApplied: true } as any);
+
+    for (const [productId, patch] of patches) await productMutation.update(productId, patch as any);
+    for (const movement of movements) await movementMutation.create(movement);
+  };
+
+  /** Decrement stock exactly once per order. */
+  const applyStock = async (order: ShopOrder) => {
+    if (order.stockApplied) return false;
+    if (!(await claimOrderFlag(order.id, 'stockApplied'))) return false;
+    await moveOrderStock(order, 'sale');
+    return true;
+  };
+
+  /**
+   * Give the stock back when an order dies.
+   *
+   * Cancelling or refunding used to write nothing at all, so goods that never left
+   * the shelf stayed sold forever. `stockReturned` is its own claim, so a double
+   * cancel cannot double-return.
+   */
+  const restoreStock = async (order: ShopOrder, reason: string) => {
+    if (!order.stockApplied || (order as any).stockReturned) return false;
+    if (!(await claimOrderFlag(order.id, 'stockReturned'))) return false;
+    await moveOrderStock(order, 'return', reason);
+    return true;
   };
 
   const changeStatus = async (order: ShopOrder, status: ShopOrderStatus) => {
@@ -150,9 +351,16 @@ const ShopOrdersView: React.FC = () => {
       if (status === 'Cancelled') patch.cancelledAt = new Date();
       if (status === 'Refunded') patch.paymentStatus = 'Refunded';
       await orderMutation.update(order.id, patch as any);
-      // Confirming is the point of no return for inventory.
-      if (status === 'Confirmed') await applyStock(order);
-      setSelected(prev => (prev && prev.id === order.id ? { ...prev, ...patch } as ShopOrder : prev));
+      const stockPatch: Record<string, boolean> = {};
+      // Confirming is the point of no return for inventory; cancelling undoes it.
+      if (status === 'Confirmed' && (await applyStock(order))) stockPatch.stockApplied = true;
+      if (status === 'Cancelled' && (await restoreStock(order, `Anulim i porosisë ${order.orderNumber}`))) {
+        stockPatch.stockReturned = true;
+      }
+      if (status === 'Refunded' && (await restoreStock(order, `Rimbursim i porosisë ${order.orderNumber}`))) {
+        stockPatch.stockReturned = true;
+      }
+      setSelected(prev => (prev && prev.id === order.id ? { ...prev, ...patch, ...stockPatch } as ShopOrder : prev));
       toast({ title: `Porosia ${order.orderNumber}`, description: STATUS_META[status].label });
     } catch (err: any) {
       toast({ title: 'Ndryshimi dështoi', description: err?.message, variant: 'destructive' });
@@ -164,9 +372,18 @@ const ShopOrdersView: React.FC = () => {
   const markPaid = async (order: ShopOrder) => {
     setBusy(true);
     try {
-      await orderMutation.update(order.id, { paymentStatus: 'Paid' } as any);
-      setSelected(prev => (prev && prev.id === order.id ? { ...prev, paymentStatus: 'Paid' } : prev));
+      // `paymentConfirmedByStaff` is what lets an invoice be created settled — a
+      // portal `paymentStatus` never does. Only this handler writes it.
+      const patch = {
+        paymentStatus: 'Paid' as const,
+        paymentConfirmedByStaff: true,
+        paymentConfirmedAt: new Date(),
+      };
+      await orderMutation.update(order.id, patch as any);
+      setSelected(prev => (prev && prev.id === order.id ? { ...prev, ...patch } as ShopOrder : prev));
       toast({ title: 'Shënuar si e paguar', description: order.orderNumber });
+    } catch (err: any) {
+      toast({ title: 'Shënimi dështoi', description: err?.message, variant: 'destructive' });
     } finally {
       setBusy(false);
     }
@@ -177,31 +394,65 @@ const ShopOrdersView: React.FC = () => {
       toast({ title: 'Fatura ekziston', description: 'Kjo porosi është faturuar më parë.' });
       return;
     }
+    // Re-price from the LIVE catalog before any money is written — see the trust
+    // boundary note above `repriceOrder`.
+    const repriced = repriceOrder(order, products || []);
+    if (repriced.blocked) {
+      toast({
+        title: 'Faturimi u ndalua',
+        description: `Porosia vjen nga portali dhe nuk mund të rivlerësohet: ${repriced.missing.join(', ')} nuk gjendet më në katalog. Rikthe produktin ose krijo faturën manualisht.`,
+        variant: 'destructive',
+      });
+      return;
+    }
     setBusy(true);
     try {
+      const { billed } = repriced;
+      // Shipping is CHARGED, so it belongs inside the invoice's own arithmetic:
+      // without a line of its own, `subtotal - discount + tax` did not equal
+      // `total` on the invoice or in its PDF. It is folded into the subtotal and
+      // printed as its own row.
+      const lineItems = billed.items.map(i => ({
+        description: [i.name, i.variantLabel].filter(Boolean).join(' · ') + ` × ${i.quantity}`,
+        amount: i.total,
+        type: 'product',
+      }));
+      if (billed.shipping > 0) {
+        lineItems.push({ description: 'Transporti', amount: billed.shipping, type: 'shipping' });
+      }
+      const notes = [
+        `Porosi ${order.orderNumber}`,
+        repriced.differs && !repriced.trusted
+          ? `Rivlerësuar nga katalogu: ${formatCurrency(repriced.catalogTotal, order.currency)} (porosia e portalit deklaronte ${formatCurrency(repriced.storedTotal, order.currency)}).`
+          : '',
+      ].filter(Boolean).join('\n');
+
       // Written as inline lineItems (the same shape WHMCS-mirrored invoices use), so
       // InvoicesView renders it without needing an invoiceItems subcollection.
       const created = await invoiceMutation.create({
         customerId: order.customerId,
-        amount: order.total,
-        total: order.total,
-        subtotal: order.subtotal,
-        tax: order.taxTotal,
-        discount: order.discountTotal,
+        amount: billed.total,
+        total: billed.total,
+        subtotal: round2(billed.subtotal + billed.shipping),
+        tax: billed.tax,
+        discount: billed.discount,
         currency: (order.currency === 'ALL' || order.currency === 'EUR' ? order.currency : 'ALL'),
-        status: order.paymentStatus === 'Paid' ? 'Paid' : 'Pending',
+        // NEVER `order.paymentStatus === 'Paid'`: on a portal order that string
+        // came from the client's browser.
+        status: isStaffConfirmedPaid(order) ? 'Paid' : 'Pending',
         invoiceDate: new Date(),
-        notes: `Porosi ${order.orderNumber}`,
-        lineItems: (order.items || []).map(i => ({
-          description: [i.name, i.variantLabel].filter(Boolean).join(' · ') + ` × ${i.quantity}`,
-          amount: i.total,
-          type: 'product',
-        })),
-        productSummary: (order.items || []).map(i => i.name).join(', ').slice(0, 200),
+        notes,
+        lineItems,
+        productSummary: billed.items.map(i => i.name).join(', ').slice(0, 200),
       } as any);
       await orderMutation.update(order.id, { invoiceId: (created as any).id } as any);
       setSelected(prev => (prev && prev.id === order.id ? { ...prev, invoiceId: (created as any).id } : prev));
-      toast({ title: 'Fatura u krijua', description: `Nga porosia ${order.orderNumber}` });
+      toast({
+        title: 'Fatura u krijua',
+        description: repriced.differs && !repriced.trusted
+          ? `Nga porosia ${order.orderNumber} — faturuar ${formatCurrency(billed.total, order.currency)} sipas katalogut.`
+          : `Nga porosia ${order.orderNumber}`,
+      });
     } catch (err: any) {
       toast({ title: 'Faturimi dështoi', description: err?.message, variant: 'destructive' });
     } finally {
@@ -475,9 +726,58 @@ const ShopOrdersView: React.FC = () => {
                   </div>
                 )}
 
+                {/* The invoice is not allowed to trust a portal order's own figures —
+                    show the staff user both numbers rather than silently overwriting. */}
+                {pricing && !selected.invoiceId && (pricing.differs || pricing.missing.length > 0) && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 p-3 space-y-1">
+                    <p className="text-sm font-medium text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      Çmimi i porosisë nuk përputhet me katalogun
+                    </p>
+                    <p className="text-xs text-amber-900/90 dark:text-amber-200/90">
+                      Porosia: <strong>{formatCurrency(pricing.storedTotal, selected.currency)}</strong>
+                      {' · '}
+                      Katalogu sot: <strong>{formatCurrency(pricing.catalogTotal, selected.currency)}</strong>
+                    </p>
+                    {pricing.missing.length > 0 && (
+                      <p className="text-xs text-amber-900/90 dark:text-amber-200/90">
+                        Nuk gjenden në katalog: {pricing.missing.join(', ')}.
+                      </p>
+                    )}
+                    <p className="text-xs text-amber-900/90 dark:text-amber-200/90">
+                      {pricing.blocked
+                        ? 'Porosia e portalit nuk mund të rivlerësohet pa këto produkte — faturimi është i bllokuar. Rikthe produktin në katalog ose krijo faturën manualisht.'
+                        : pricing.trusted
+                          ? 'Porosia është e stafit, ndaj do të faturohet vlera e regjistruar në porosi (çmimet e rreshtave janë fotografi e momentit). Ndryshimi mund të vijë thjesht nga një ndryshim i mëvonshëm i katalogut.'
+                          : 'Porosia vjen nga portali dhe çmimet e saj janë llogaritur nga shfletuesi i klientit, ndaj do të faturohet vlera e katalogut.'}
+                    </p>
+                  </div>
+                )}
+
+                {pricing && !pricing.trusted && !pricing.differs && !selected.invoiceId && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5 text-success" />
+                    Çmimet e kësaj porosie portali përputhen me katalogun.
+                  </p>
+                )}
+
+                {selected.paymentStatus === 'Paid' && !isStaffConfirmedPaid(selected) && (
+                  <p className="text-xs text-amber-700 dark:text-amber-300 flex items-center gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    Pagesa është deklaruar nga portali, jo nga stafi — fatura do të krijohet si e papaguar
+                    derisa ta konfirmosh me "Shëno paguar".
+                  </p>
+                )}
+
                 {selected.stockApplied && (
                   <p className="text-xs text-muted-foreground flex items-center gap-1">
                     <PackageCheck className="w-3.5 h-3.5 text-success" />Stoku është zbritur për këtë porosi.
+                  </p>
+                )}
+
+                {(selected as any).stockReturned && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Undo2 className="w-3.5 h-3.5 text-success" />Stoku është kthyer në magazinë.
                   </p>
                 )}
 
@@ -497,9 +797,12 @@ const ShopOrdersView: React.FC = () => {
                         {STATUS_META[next].label}
                       </Button>
                     ))}
-                    {selected.paymentStatus !== 'Paid' && selected.status !== 'Cancelled' && (
+                    {/* Not `paymentStatus !== 'Paid'`: a portal order that claims to be
+                        paid still needs a staff confirmation, so the button must stay. */}
+                    {!isStaffConfirmedPaid(selected) && selected.status !== 'Cancelled' && selected.paymentStatus !== 'Refunded' && (
                       <Button size="sm" variant="outline" disabled={busy} onClick={() => markPaid(selected)}>
-                        <Receipt className="w-3.5 h-3.5 mr-1" />Shëno paguar
+                        <Receipt className="w-3.5 h-3.5 mr-1" />
+                        {selected.paymentStatus === 'Paid' ? 'Konfirmo pagesën' : 'Shëno paguar'}
                       </Button>
                     )}
                     {selected.invoiceId ? (
@@ -507,8 +810,16 @@ const ShopOrdersView: React.FC = () => {
                         <Link to="/app/invoices"><FileText className="w-3.5 h-3.5 mr-1" />Shiko faturën</Link>
                       </Button>
                     ) : (
-                      <Button size="sm" variant="outline" disabled={busy} onClick={() => convertToInvoice(selected)}>
-                        <FileText className="w-3.5 h-3.5 mr-1" />Krijo faturë
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy || !!pricing?.blocked}
+                        onClick={() => convertToInvoice(selected)}
+                      >
+                        <FileText className="w-3.5 h-3.5 mr-1" />
+                        {pricing && !pricing.trusted && pricing.differs
+                          ? `Krijo faturë (${formatCurrency(pricing.catalogTotal, selected.currency)})`
+                          : 'Krijo faturë'}
                       </Button>
                     )}
                   </div>

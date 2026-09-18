@@ -5,9 +5,7 @@ import { Badge } from './ui/badge';
 import { Switch } from './ui/switch';
 import { useToast } from '../hooks/use-toast';
 import { useModules } from '../hooks/useModules';
-import { MODULES, PLAN_LABELS, planIncludes, type ModuleDef, type PlanKey } from '../lib/modules';
-
-const GROUP_ORDER: ModuleDef['group'][] = ['CRM', 'Shitje', 'Operacione', 'Financa', 'Komunikim', 'Marketing'];
+import { MODULES, MODULE_GROUP_ORDER, PLAN_LABELS, planIncludes, type ModuleDef, type PlanKey } from '../lib/modules';
 
 /**
  * Tenant-facing module manager (Cilësimet → Modulet).
@@ -16,10 +14,14 @@ const GROUP_ORDER: ModuleDef['group'][] = ['CRM', 'Shitje', 'Operacione', 'Finan
  * deleted, so re-enabling brings the data straight back. Only the business OWNER
  * can write `businesses/{id}` per the Firestore rules, so anyone else sees the
  * same list read-only rather than a switch that silently fails.
+ *
+ * A module the PLATFORM withheld (`lockedModules`) is shown, not hidden: the owner
+ * should know it exists and whom to ask — but its switch is inert, and the row says
+ * so instead of pretending to be a setting.
  */
 const ModulesSettingsPanel: React.FC = () => {
   const { toast } = useToast();
-  const { plan, disabledModules, canManage, isEnabled, blockReason, setModuleEnabled, loading } = useModules();
+  const { plan, disabledModules, lockedModules, canManage, isEnabled, blockReason, setModuleEnabled, loading } = useModules();
   const [pending, setPending] = useState<string | null>(null);
 
   const grouped = useMemo(() => {
@@ -28,10 +30,11 @@ const ModulesSettingsPanel: React.FC = () => {
       if (!map.has(mod.group)) map.set(mod.group, []);
       map.get(mod.group)!.push(mod);
     }
-    return GROUP_ORDER.filter(g => map.has(g)).map(g => ({ group: g, modules: map.get(g)! }));
+    return MODULE_GROUP_ORDER.filter(g => map.has(g)).map(g => ({ group: g, modules: map.get(g)! }));
   }, []);
 
   const activeCount = MODULES.filter(m => isEnabled(m.id)).length;
+  const lockedCount = MODULES.filter(m => lockedModules.includes(m.path)).length;
 
   const toggle = async (mod: ModuleDef, next: boolean) => {
     setPending(mod.id);
@@ -67,9 +70,14 @@ const ModulesSettingsPanel: React.FC = () => {
             Aktivizo vetëm ato që përdor ekipi — menuja qëndron e pastër dhe rrugët e tjera bllokohen.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Badge className="bg-accent-soft text-primary">Plani {PLAN_LABELS[plan as PlanKey] || plan}</Badge>
           <Badge variant="outline">{activeCount}/{MODULES.length} aktive</Badge>
+          {lockedCount > 0 && (
+            <Badge variant="outline" className="gap-1 text-muted-foreground">
+              <Lock className="w-3 h-3" />{lockedCount} jashtë kontratës
+            </Badge>
+          )}
         </div>
       </Card>
 
@@ -88,15 +96,24 @@ const ModulesSettingsPanel: React.FC = () => {
           <div className="space-y-2">
             {modules.map(mod => {
               const reason = blockReason(mod.id);
+              const locked = lockedModules.includes(mod.path);
               const planLocked = !planIncludes(plan, mod.minPlan);
               const off = disabledModules.includes(mod.path);
               const noPermission = reason === 'permission';
               return (
-                <div key={mod.id} className="flex items-start justify-between gap-3 rounded-lg border p-3">
+                <div
+                  key={mod.id}
+                  className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${locked ? 'bg-muted/30' : ''}`}
+                >
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <p className="text-sm font-medium text-foreground">{mod.label}</p>
-                      {planLocked && (
+                      <p className={`text-sm font-medium ${locked ? 'text-muted-foreground' : 'text-foreground'}`}>{mod.label}</p>
+                      {locked && (
+                        <Badge variant="outline" className="gap-1 text-muted-foreground">
+                          <Lock className="w-3 h-3" />E menaxhuar nga FivoCRM
+                        </Badge>
+                      )}
+                      {planLocked && !locked && (
                         <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 gap-1">
                           <Sparkles className="w-3 h-3" />{PLAN_LABELS[mod.minPlan]}
                         </Badge>
@@ -104,26 +121,30 @@ const ModulesSettingsPanel: React.FC = () => {
                       {!mod.optional && (
                         <Badge variant="outline" className="gap-1"><Lock className="w-3 h-3" />Bazë</Badge>
                       )}
-                      {noPermission && !planLocked && (
+                      {noPermission && !planLocked && !locked && (
                         <Badge variant="outline" className="gap-1">
                           <Info className="w-3 h-3" />Pa leje për rolin tuaj
                         </Badge>
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">{mod.description}</p>
-                    {planLocked && !off && (
+                    {locked ? (
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        Nuk përfshihet në kontratën tuaj — kontaktoni FivoCRM për ta shtuar.
+                      </p>
+                    ) : planLocked && !off ? (
                       <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
                         I aktivizuar, por i kyçur nga plani aktual — bëj upgrade për t'i hapur.
                       </p>
-                    )}
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-2 shrink-0 pt-0.5">
                     {pending === mod.id && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
                     <Switch
-                      checked={!off}
-                      disabled={!canManage || !mod.optional || pending === mod.id}
+                      checked={locked ? false : !off}
+                      disabled={locked || !canManage || !mod.optional || pending === mod.id}
                       onCheckedChange={v => toggle(mod, v)}
-                      aria-label={`${mod.label} aktiv`}
+                      aria-label={locked ? `${mod.label} — e menaxhuar nga FivoCRM` : `${mod.label} aktiv`}
                     />
                   </div>
                 </div>

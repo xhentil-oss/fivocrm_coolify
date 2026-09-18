@@ -32,6 +32,8 @@ import type { Project, TeamMember, Expense, Invoice } from '../../types';
 import { toAll } from '../utils';
 import { parseDate, monthsElapsedInYear, getInvoiceCollectedBetween } from './financialAnalytics';
 import { payrollBetween } from './payroll';
+import { memberEndDate, memberSalaryForMonth } from './salaryHistory';
+import { TERMINAL_PROJECT_STATUSES } from './recurringBilling';
 
 export interface ProjectPnlOptions {
   /** 'completed' counts only Completed (or recurring-completed) projects; 'all' counts every project. */
@@ -131,6 +133,94 @@ function billingTypeOf(p: Project): 'one-time' | 'monthly' {
   return (p as any).isRecurring ? 'monthly' : 'one-time';
 }
 
+/**
+ * When does a MONTHLY retainer stop earning its fee?
+ *
+ * The period filter and the revenue calculation both used
+ * `lastCompletedAt ?? periodEnd`, which is wrong in BOTH directions:
+ *
+ *  · too generous — a retainer cancelled in February and viewed in September
+ *    still overlapped every month in between, so a 50 000/month fee credited
+ *    450 000 of revenue that will never be billed, to the project, its
+ *    department and its responsible person;
+ *  · too mean — `lastCompletedAt` means "the last time every task on this
+ *    project was done", not "the engagement ended". One all-done afternoon in
+ *    March silently stopped a live retainer from earning for the rest of the
+ *    year.
+ *
+ * So the span is derived from the BILLING SERIES wherever the data allows, and
+ * `lastCompletedAt` is only consulted for a project whose series is not running
+ * (legacy rows, which have no stop stamp at all). The candidates, all optional:
+ *   · `recurringBillingStoppedAt` — `stopProjectBillingPatch()`; read only while
+ *     the series is off, because restoring a project does not clear it;
+ *   · `recurringEndDate` — "repeat until": nothing bills past it;
+ *   · `archivedAt` — only while the project actually IS archived (same reason);
+ *   · for a terminal status (Cancelled/Archived) the best evidence available,
+ *     falling back to `updatedAt`, since cancelling is itself an update.
+ * Nothing found = still running = `fallbackEnd` (the period end).
+ *
+ * `isRecurringPaused` deliberately does NOT end the span: a pause is temporary
+ * and carries no timestamp, so there is nothing honest to end it at.
+ */
+export function retainerEarningEnd(p: Project, fallbackEnd: Date): Date {
+  const ends: number[] = [fallbackEnd.getTime()];
+  const push = (d: Date | null) => { if (d) ends.push(d.getTime()); };
+  const running = !!(p as any).isRecurring;
+  const terminal = !!p.status && TERMINAL_PROJECT_STATUSES.includes(p.status);
+
+  if (!running) push(parseDate((p as any).recurringBillingStoppedAt));
+  push(parseDate((p as any).recurringEndDate));
+  if (p.status === 'Archived') push(parseDate((p as any).archivedAt));
+  if (terminal) {
+    push(parseDate((p as any).archivedAt)
+      || parseDate((p as any).recurringBillingStoppedAt)
+      || parseDate((p as any).lastCompletedAt)
+      || parseDate(p.updatedAt)
+      || parseDate(p.createdAt));
+  }
+  if (!running && !terminal) push(parseDate((p as any).lastCompletedAt));
+
+  return new Date(Math.min(...ends));
+}
+
+/**
+ * Was this member on payroll at any point inside [start, end]?
+ *
+ * Leaving payroll is an EVENT WITH A DATE, not a status — that is the whole
+ * point of `memberEndDate()` / `memberSalaryForMonth()` in salaryHistory.ts. A
+ * plain `status === 'Active'` filter placed BEFORE those functions defeats them
+ * one layer up: the day a leaver is flipped to Inactive, every closed month's
+ * labour line and fixed pool loses their salary and the past year's profit
+ * silently improves. A month that has already been paid cannot become free.
+ *
+ * The rule itself is never re-derived here:
+ *   · Active → on payroll (the salary function still zeroes any month after a
+ *     `leftAt` that was recorded anyway);
+ *   · a status that was never Active (a `Pending` invite nobody accepted) →
+ *     never on payroll, unchanged;
+ *   · Inactive WITH `leftAt` → on payroll for the period when they left after it
+ *     opened (each month inside is then priced individually);
+ *   · Inactive WITHOUT `leftAt` → ask `memberSalaryForMonth` month by month; a
+ *     month it prices above 0 is a month this person was on payroll. That keeps
+ *     salaryHistory.ts the single owner of the "when did they leave" fallback.
+ */
+export function memberOnPayrollBetween(member: TeamMember, start: Date, end: Date): boolean {
+  if (member.status === 'Active') return true;
+  if (member.status !== 'Inactive') return false;
+
+  const left = memberEndDate(member);
+  if (left) return left.getTime() > start.getTime();
+
+  let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+  const lastMonth = new Date(end.getFullYear(), end.getMonth(), 1);
+  for (let guard = 0; cursor.getTime() <= lastMonth.getTime() && guard < 600; guard++) {
+    const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0, 23, 59, 59, 999);
+    if (memberSalaryForMonth(member, monthEnd) > 0) return true;
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+  }
+  return false;
+}
+
 const CATEGORY_SALARY = 'Salary';
 
 export function computeProjectPnl(
@@ -199,7 +289,10 @@ export function computeProjectPnl(
     // the month of their last update) so a single-month view still counts them.
     if (billingTypeOf(p) === 'monthly') {
       const start = parseDate(p.createdAt) ?? membershipWindow.start;
-      const end = parseDate((p as any).lastCompletedAt) ?? membershipWindow.end;
+      // The span ENDS where the billing series ended (cancelled, archived,
+      // stopped, past its "repeat until") — see retainerEarningEnd. A cancelled
+      // retainer used to overlap every later period and book full budget revenue.
+      const end = retainerEarningEnd(p, membershipWindow.end);
       return start <= membershipWindow.end && end >= membershipWindow.start;
     }
     return inPeriod(projectDate(p));
@@ -242,7 +335,9 @@ export function computeProjectPnl(
   let payrollFallbackMonths = 0;
   if (opts.months != null) {
     salaries = (teamMembers ?? [])
-      .filter(m => m.status === 'Active')
+      // Date-aware, not status-aware: someone who left in September is still on
+      // the June payroll (see memberOnPayrollBetween).
+      .filter(m => memberOnPayrollBetween(m, periodStart, periodEnd))
       .reduce((s, m) => s + (m.monthlySalary || 0), 0) * months;
   } else {
     // Recorded salary payments per month, plan only where a month has none —
@@ -307,10 +402,12 @@ export function computeProjectPnl(
       return { revenue: inPeriodNow ? fee : 0, billingType: bt, activeMonths: 1 };
     }
     const projStart = parseDate(p.createdAt) ?? periodStart;
-    const projEnd = parseDate((p as any).lastCompletedAt) ?? periodEnd;
+    const projEnd = retainerEarningEnd(p, periodEnd);
     const s = projStart > periodStart ? projStart : periodStart;
     const e = projEnd < periodEnd ? projEnd : periodEnd;
-    const active = e >= s ? Math.min(monthsBetween(s, e), periodMonths) : 1;
+    // A span that ended BEFORE the period opened earns nothing. It used to fall
+    // back to 1, i.e. a whole month of a dead retainer's fee.
+    const active = e >= s ? Math.min(monthsBetween(s, e), periodMonths) : 0;
     return { revenue: fee * active, billingType: bt, activeMonths: active };
   };
   const revInfo = new Map(periodProjects.map(p => [p.id, revenueOf(p)] as const));

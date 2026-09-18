@@ -6,6 +6,7 @@ import {
   grossUnitPrice,
   listedUnitPrice,
   marginPercent,
+  netLineTotal,
   netUnitPrice,
   orderCogs,
   round2,
@@ -86,6 +87,27 @@ describe('net vs gross pricing', () => {
   });
 });
 
+describe('netLineTotal (tax-inclusive lines must not lose a cent)', () => {
+  // A gross-listed 10.00 at 20% has no exact net unit (8.333…). The catalogue
+  // price is what the customer was quoted, so the LINE is the authority.
+  const tenAtTwenty = base({ price: 10, taxRatePercent: 20, taxIncluded: true });
+
+  it('backs the tax out of the gross line, not out of a rounded unit', () => {
+    expect(netLineTotal(tenAtTwenty, null, 3)).toBe(25); // not 8.33 × 3 = 24.99
+    expect(netLineTotal(tenAtTwenty, null, 100)).toBe(833.33); // not 833.00
+  });
+
+  it('is a plain multiplication for a net-listed product', () => {
+    expect(netLineTotal(base({ price: 10, taxRatePercent: 20 }), null, 3)).toBe(30);
+    expect(netLineTotal(base({ price: 10 }), null, 7)).toBe(70);
+  });
+
+  it('honours the quantity tier that the quantity reaches', () => {
+    const tiered = base({ price: 10, priceTiers: [{ minQty: 10, unitPrice: 8 }] });
+    expect(netLineTotal(tiered, null, 10)).toBe(80);
+  });
+});
+
 describe('margin and discount', () => {
   it('computes margin from cost', () => {
     expect(marginPercent(base({ price: 100, costPrice: 60 }))).toBe(40);
@@ -122,6 +144,27 @@ describe('buildOrderItem', () => {
     const item = buildOrderItem(base(), null, 0, 25);
     expect(item.quantity).toBe(1);
     expect(item.total).toBe(75);
+  });
+
+  it('bills a tax-inclusive line at the catalogue price, to the cent', () => {
+    // 10.00 gross @ 20% × 3 must total exactly 30.00 gross — 8.33 × 3 + tax was 29.99.
+    const product = base({ price: 10, taxRatePercent: 20, taxIncluded: true });
+    const item = buildOrderItem(product, null, 3);
+    expect(item.unitPrice).toBe(8.33); // per-unit display value only
+    expect(item.total).toBe(25);
+    expect(item.taxAmount).toBe(5);
+    expect(round2(item.total + (item.taxAmount || 0))).toBe(30);
+
+    const bulk = buildOrderItem(product, null, 100);
+    expect(bulk.total).toBe(833.33);
+    expect(bulk.taxAmount).toBe(166.67);
+    expect(round2(bulk.total + (bulk.taxAmount || 0))).toBe(1000); // was 999.60
+  });
+
+  it('keeps the order total on the catalogue price for a tax-inclusive cart', () => {
+    const product = base({ price: 10, taxRatePercent: 20, taxIncluded: true });
+    expect(computeOrderTotals([buildOrderItem(product, null, 3)]).total).toBe(30);
+    expect(computeOrderTotals([buildOrderItem(product, null, 100)]).total).toBe(1000);
   });
 });
 

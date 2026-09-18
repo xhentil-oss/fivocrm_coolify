@@ -24,13 +24,13 @@ Auditi Android/UI/UX (18 Shtator 2026) — rregullimet e mbetura
 </todo>
 
 <todo>
-Rregullo 6 P0-të e financave (audit 18 Shtator 2026)
-Lista e plotë: workspace/FINANCE_BUGS_2026_09_18.md. (1) `invoice-reminders`/`overdue-reminders`/`recurring-expenses` pa skop biznesi në nisje manuale — një Admin i një qiraxhiu u dërgon email/WhatsApp klientëve të të gjithëve; (2) çelësat e periudhave llogariten në zonën e makinës, por cron-i ekzekutohet në UTC në Vercel dhe UI-ja në Europe/Tirane — seritë e shpenzimeve ose ngecin ose dyfishohen; (3) /app/bonus e hapur për çdo rol dhe shkarkon të gjitha rrogat; (4) porositë e dyqanit nga portali vijnë me çmim e status pagese nga shfletuesi; (5) klienti i portalit mund të rishkruajë çmimin e ofertës së vet.
+Deploy audit-in e financave (rregulla, indekse, VPS)
+Kodi i 18 Shtatorit është në pemë, i patestuar kundrejt prodhimit. Duhen: `firebase deploy --only firestore:rules` (klauzolat e reja `quotes` për portalin + `shopOrders` paymentStatus) dhe `--only firestore:indexes` (`quotes (customerId,status)` dhe `(leadId,status)`) — pa to numëruesi i ofertave në portal bie në 0; pastaj push në main (Vercel merr `api/cron/run.ts`) dhe `pm2 restart` në VPS. Provë e shpejtë: nis `invoice-reminders` manualisht nga një qiraxhi dhe shiko që përgjigja kthen `scopedTo` me biznesin e tij.
 </todo>
 
 <todo>
-Rregullo P1-të e financave: parashikimi, faturat dhe rrogat
-workspace/FINANCE_BUGS_2026_09_18.md §P1. Parashikimi/MRR nuk pyet `isRecurring` dhe nuk normalizon frekuencën javore; projectPnl/departmentPnl numërojnë retainerë të anuluar; email-i i vonesës kërkon totalin bruto; `paidAt` humbet kur fatura krijohet e paguar; data e afatit zhvendoset një ditë në ruajtje; koleksionet `payments` dhe `expenseCategories` mungojnë te listat e skopit (query e mohuar); `status !== 'Active'` i zeron rrogat edhe në muajt e shkuar.
+Nxirr rrogat jashtë `teamMembers` (P0 i mbetur i auditit)
+workspace/FINANCE_BUGS_2026_09_18.md → "Still open". Rregullat ende i japin çdo anëtari biznesi leximin e `monthlySalary`/`salaryHistory` dhe të rreshtave `category: 'Salary'` te `expenses`; klienti nuk i dërgon më, por pyetja e drejtpërdrejtë punon. Plani: koleksion `teamMemberComp/{teamId}_{uid}` me `read` vetëm për vetveten dhe aprovuesit, backfill nga cron, periudhë me lexim të dyfishtë, dhe vetëm pastaj fshirja e fushave të vjetra. Kërkon ekzekutim kundrejt prodhimit, ndaj nuk u bë bashkë me pjesën tjetër.
 </todo>
 
 <todo>
@@ -65,18 +65,13 @@ Rules deploy (invoiceItems is now staff-only write), VPS cron restart for the ne
 </todo>
 
 <todo>
-Scope the cron's invoice reads per tenant
-`invoice-reminders`, `overdue-reminders` and `recurring-invoices` still read `invoices` cross-tenant (`where('status','==',…)`, `where('isRecurring','==',true)`), against the documented per-tenant cost rule. Belongs with the `tenantScopedDocs()` rollout — backlog #24 in the audit.
+Ndaj leximet e cron-it sipas qiraxhiut (vetëm çështje kostoje tani)
+Nisja MANUALE e `invoice-reminders`/`overdue-reminders`/`recurring-expenses` u skopua më 18 Shtator (`manualScopeId()` në `api/cron/run.ts`), pra vrima ndër-qiraxhinj është mbyllur. Mbetet vetëm gjysma e kostos: nisja e planifikuar ende lexon `invoices` pa filtër (`where('status','==',…)`), kundër rregullit të dokumentuar "asnjë punë të mos lexojë një koleksion pa filtër". Shkon bashkë me nxjerrjen e `tenantScopedDocs()` — backlog #24.
 </todo>
 
 <todo>
 Deploy Expense Rules + Indexes
 Rules tests pass 96/96 in the emulator. Deploy: firebase deploy --only firestore:rules,firestore:indexes (expenses rule now enforces keepsBusinessId, approver-only approvalStatus, re-approval on amount/date edit; indexes moved teamId -> businessId). See workspace/EXPENSES_AUDIT_2026_08.md.
-</todo>
-
-<todo>
-Scope Expense Reads Per Role
-Close the read half of finding #8: a Member can still read colleagues' Salary expenses from the console. Needs a per-role query (teamScopedWhere + createdByUserId), a (businessId, createdByUserId) index, and a fix for ProjectDetailView's burn-down read. Verify with real roles before deploying.
 </todo>
 
 <todo>

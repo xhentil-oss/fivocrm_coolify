@@ -15,7 +15,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 import { doc, setDoc, updateDoc, deleteDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
-import { MODULES, PLAN_LABELS, planIncludes } from '../../lib/modules';
+import ModuleAccessEditor from './ModuleAccessEditor';
 import {
   updateTenantPlan, setTenantModules, tenantMrr, daysUntil, tenantHealth, lastSeenLabel, HEALTH_META,
 } from '../../lib/platformAdmin';
@@ -32,10 +32,6 @@ import type { Team, TeamMember, Business } from '../../types';
  * `POST /api/platform-admin`, which validates them against one list and records
  * before/after in the audit trail. Module toggles take the same path.
  */
-
-const TOGGLEABLE_MODULES = MODULES.filter(m => m.optional).map(m => ({
-  path: m.path, label: m.label, minPlan: m.minPlan,
-}));
 
 const PLAN_KEYS = ['trial', 'starter', 'pro', 'business', 'enterprise'] as const;
 const STATUS_KEYS = ['trialing', 'active', 'past_due', 'suspended', 'canceled'] as const;
@@ -57,6 +53,8 @@ const TenantDetailView: React.FC = () => {
   // Draft state for the plan form — only committed on "Ruaj".
   const [plan, setPlan] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  // Module path whose access is being written right now (spinner + no double-clicks).
+  const [modulePending, setModulePending] = useState<string | null>(null);
   const [trialDate, setTrialDate] = useState<string | null>(null);
   const [seats, setSeats] = useState<string | null>(null);
   const [note, setNote] = useState('');
@@ -114,14 +112,42 @@ const TenantDetailView: React.FC = () => {
     }
   };
 
-  const toggleModule = async (path: string) => {
-    const next = new Set(disabled);
-    if (next.has(path)) next.delete(path); else next.add(path);
+  const locked = new Set(biz.lockedModules || []);
+
+  /** Write one of the two module layers through the audited endpoint. */
+  const writeModules = async (
+    path: string,
+    patch: { lockedModules?: string[]; disabledModules?: string[] },
+    done: string,
+  ) => {
+    if (modulePending) return;
+    setModulePending(path);
     try {
-      await setTenantModules(businessId, Array.from(next));
+      await setTenantModules(businessId, patch);
+      toast({ title: done, description: 'Ndryshimi u regjistrua në audit.' });
     } catch (err: any) {
       toast({ title: 'Ndryshimi dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
+    } finally {
+      setModulePending(null);
     }
+  };
+
+  /** Layer 1 — the platform withholds / grants a module. */
+  const setLocked = (path: string, nextLocked: boolean) => {
+    const next = new Set(locked);
+    if (nextLocked) next.add(path); else next.delete(path);
+    void writeModules(path, { lockedModules: Array.from(next) }, nextLocked ? 'Moduli u kyç' : 'Moduli u hap');
+  };
+
+  const replaceLocked = (next: Set<string>) => {
+    void writeModules('*', { lockedModules: Array.from(next) }, 'Modulet u përditësuan');
+  };
+
+  /** Layer 2, as a support assist — clear the owner's own "off" for one module. */
+  const enableForOwner = (path: string) => {
+    const next = new Set(disabled);
+    next.delete(path);
+    void writeModules(path, { disabledModules: Array.from(next) }, 'Moduli u ndez për pronarin');
   };
 
   /**
@@ -438,30 +464,18 @@ const TenantDetailView: React.FC = () => {
           <h2 className="font-semibold text-sm">Modulet</h2>
         </div>
         <p className="text-[11px] text-muted-foreground mb-3">
-          Kliko për ta aktivizuar/çaktivizuar. Një modul mbi planin mbetet i mbyllur edhe i ndezur — plani e vendos tavanin.
+          Çfarë përfshin kontrata e këtij tenanti. Një modul i kyçur këtu nuk mund të hapet nga
+          pronari; një modul mbi planin mbetet i mbyllur edhe i disponueshëm — plani e vendos tavanin.
         </p>
-        <div className="flex flex-wrap gap-1.5">
-          {TOGGLEABLE_MODULES.map(m => {
-            const off = disabled.has(m.path);
-            const planLocked = !planIncludes(planVal, m.minPlan);
-            return (
-              <button
-                key={m.path}
-                onClick={() => toggleModule(m.path)}
-                title={planLocked ? `Kërkon planin ${PLAN_LABELS[m.minPlan]}` : undefined}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors ${
-                  off
-                    ? 'bg-muted text-muted-foreground border-border line-through'
-                    : planLocked
-                      ? 'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800'
-                      : 'bg-primary/10 text-primary border-primary/20'
-                }`}
-              >
-                {m.label}{planLocked && !off && ` · ${PLAN_LABELS[m.minPlan]}`}
-              </button>
-            );
-          })}
-        </div>
+        <ModuleAccessEditor
+          plan={planVal}
+          locked={locked}
+          disabled={disabled}
+          pending={modulePending}
+          onToggleLocked={setLocked}
+          onReplaceLocked={replaceLocked}
+          onEnableForOwner={enableForOwner}
+        />
       </Card>
 
       {/* Engagement — written by the tenant-usage-rollup cron, so the console never

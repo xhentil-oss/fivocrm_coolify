@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import React, { useState, useEffect, useMemo } from 'react';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
-import { getNextInvoiceNumber, recordInvoicePartialPayment } from '../lib/firebase';
+import { getNextInvoiceNumber, recordInvoicePartialPayment, deleteInvoicePaymentRows } from '../lib/firebase';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
@@ -48,6 +48,7 @@ import { Textarea } from '../components/ui/textarea';
 import {
   buildRevenueByMonthByBasis,
   getInvoiceCollectedBetween,
+  getInvoiceOutstandingAll,
   type AccountingBasis,
 } from '../lib/finance/financialAnalytics';
 import {
@@ -59,11 +60,13 @@ import {
 } from '../components/ui/dropdown-menu';
 import type { Invoice, Customer, Service, InvoiceItem, Project, ClientPortalAccess, Payment } from '../types';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
-import { toAll, getRateToAll, getTimestampMs, canSeeFinancials, currencySymbol } from '../lib/utils';
+import { getRateToAll, getTimestampMs, canSeeFinancials, currencySymbol } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
 import { getStatusColor, getInvoiceStatusLabel } from '../lib/statusColors';
 import { projectPickerLabel, sortArchivedLast } from '../lib/projectArchive';
 import { nextInvoiceOccurrence, projectAlsoBills, invoiceBillingPeriodKey } from '../lib/finance/recurringInvoices';
+import { zonedParts, zonedDate } from '../lib/recurringUtils';
+import { computeInvoiceTotals, storedInvoiceTotals } from '../lib/finance/invoiceTotals';
 import { pauseProjectBillingPatch, resumeProjectBillingPatch, stopProjectBillingPatch } from '../lib/finance/recurringBilling';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../lib/native';
 import { resolvePortalUserId } from '../lib/notifyClient';
@@ -91,6 +94,42 @@ const statusPill = (status: string | null | undefined): StatusPill => {
       return { dotClass: 'bg-muted-foreground/60', label: getInvoiceStatusLabel(status), pillClass: 'bg-muted text-muted-foreground' };
   }
 };
+
+// ── Date <-> `<input type="date">` in the BUSINESS zone ──────────────────────
+//
+// A due date is a CALENDAR day, and a calendar day only exists inside a
+// timezone. Every seed here used to be `raw.toISOString().slice(0, 10)` (UTC)
+// while every save wrote back local noon, so the pair was not a round-trip:
+// opening the drawer on an invoice due 30 Sep (stored as 30 Sep 12:00 Tirane =
+// 10:00Z — fine) was harmless, but a date stored at local MIDNIGHT (30 Sep
+// 00:00 Tirane = 29 Sep 22:00Z) read back as "29", and simply pressing Save
+// moved the invoice a day earlier — so it went Overdue, and got dunned, a day
+// before it was due. Formatting through the same zone the billing engines read
+// (`zonedParts`/`zonedDate`, Europe/Tirane) makes the round-trip exact and
+// makes the day agree with `invoiceBillingPeriodKey`.
+const p2 = (n: number) => String(n).padStart(2, '0');
+
+/** `YYYY-MM-DD` of an instant, as the business zone sees it ('' when absent). */
+const toDateInput = (raw: unknown): string => {
+  if (!raw) return '';
+  const d = (raw as any)?.toDate ? (raw as any).toDate() : new Date(raw as any);
+  if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+  const z = zonedParts(d);
+  return `${z.year}-${p2(z.month + 1)}-${p2(z.day)}`;
+};
+
+/** `YYYY-MM-DD` → noon of that calendar day in the business zone (null when empty).
+ *  Noon, not midnight, so the stored instant can never fall on the previous day
+ *  in any zone a reader happens to run in. */
+const fromDateInput = (value: string | null | undefined): Date | null => {
+  if (!value) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!m) return null;
+  return zonedDate(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12);
+};
+
+/** Today as a `YYYY-MM-DD` input value, in the business zone. */
+const todayDateInput = (): string => toDateInput(new Date());
 
 /** A bank account as stored in teamSettings / the legacy localStorage list. */
 type BankAccount = {
@@ -265,11 +304,29 @@ const InvoicesView: React.FC = () => {
     });
   };
 
-  // Hard-remove one invoice doc and its line items.
+  // Hard-remove one invoice doc, its line items AND its payment-ledger rows.
+  //
+  // The ledger was left behind: `payments` rows carry their own amount and
+  // `paidAt`, so the Arkëtimet page (and every reader of the ledger) kept
+  // counting the cash of an invoice that no longer exists, unreachable and
+  // impossible to delete from the UI. The invoice is deleted FIRST so a failure
+  // in the cascade can never leave a live invoice without its receipts; the
+  // leftovers are reported, never silently swallowed.
   const removeInvoiceWithItems = async (id: string) => {
+    const invoice = rawInvoices?.find(i => i.id === id);
     await invoiceMutation.remove(id);
     const relatedItems = allInvoiceItems?.filter(item => (item as any).invoiceId === id) || [];
     await Promise.all(relatedItems.map(item => invoiceItemMutationTop.remove(item.id)));
+    try {
+      await deleteInvoicePaymentRows(id, (invoice as any)?.businessId || activeBusinessId);
+    } catch (err) {
+      console.error('[InvoicesView] fshirja e arkëtimeve të faturës dështoi:', err);
+      toast({
+        title: 'Fatura u fshi, por arkëtimet mbetën',
+        description: 'Rreshtat e pagesave nuk u fshinë — provo përsëri ose fshiji nga Arkëtimet.',
+        variant: 'destructive',
+      });
+    }
   };
 
   // Pause/resume generation without ending the series.
@@ -570,7 +627,7 @@ const InvoicesView: React.FC = () => {
   ): Date | undefined => {
     if (nextStatus !== 'Paid') return undefined;
     if (invoice?.status === 'Paid') return undefined; // already settled — keep the original date
-    return dateInput ? new Date(dateInput + 'T12:00:00') : new Date();
+    return fromDateInput(dateInput) ?? new Date();
   };
 
   const handleRecordPartialPayment = async () => {
@@ -597,12 +654,26 @@ const InvoicesView: React.FC = () => {
       // payment at once can neither lose an instalment nor collide on the ledger key.
       // It also re-checks the remaining balance, so a stale figure on screen cannot
       // push the invoice past its total.
+      //
+      // The WHMCS write-back queue goes in with it, INSIDE the same transaction.
+      // It used to be a second `invoiceMutation.update(...)` with a bare
+      // `.catch(console.error)`: lose that write and the overnight `whmcs-sync`
+      // finds no queued payment, treats WHMCS as authoritative and flips the
+      // invoice back to Pending — erasing `paidAt`. CLAUDE.md's rule is that the
+      // queue entry lands in the same update as the status change; here that is
+      // the transaction. The patch is built from the invoice AS READ INSIDE it,
+      // so the dedupe is against the server's copy, not a stale snapshot.
+      const isWhmcs = isWhmcsInvoice(partialPaymentInvoice);
       const result = await recordInvoicePartialPayment(partialPaymentInvoice.id, {
         amount,
         paidAt,
         method: partialMethod,
         note: partialNote || undefined,
-      });
+      }, isWhmcs ? {
+        extraPatch: (inv, index) => whmcsPendingPatch(inv as Partial<Invoice>, {
+          key: instalmentKey(index), amount, method: partialMethod, paidAt,
+        }) as Record<string, any>,
+      } : undefined);
 
       // Mirror into the payment ledger (same sourceKey scheme as the backfill). The
       // index comes from the transaction, not from a client-side array length.
@@ -620,12 +691,9 @@ const InvoicesView: React.FC = () => {
         source: 'partial',
         sourceKey: `${partialPaymentInvoice.id}#p${result.index}`,
       } as any).catch((err) => console.error('[Payments] ledger write failed:', err));
-      if (isWhmcsInvoice(partialPaymentInvoice)) {
-        // Queue the instalment for WHMCS (same key scheme as the ledger), then ask
-        // the server to post it. The transaction above already wrote the money.
-        await invoiceMutation.update(partialPaymentInvoice.id, whmcsPendingPatch(partialPaymentInvoice, {
-          key: instalmentKey(result.index), amount, method: partialMethod, paidAt,
-        }) as any).catch((err) => console.error('[WHMCS] queue write failed:', err));
+      if (isWhmcs) {
+        // The queue entry is already committed (above); this only asks the server
+        // to post it now instead of waiting for the next sync to drain it.
         void syncWhmcsPayment(partialPaymentInvoice);
       }
       if (result.isFullyPaid) {
@@ -664,13 +732,11 @@ const InvoicesView: React.FC = () => {
     if (!drawerInvoice) return;
     setDrawerCustomer(drawerInvoice.customerId || '');
     setDrawerProject(drawerInvoice.projectId || '');
-    const raw = drawerInvoice.dueDate ? new Date(drawerInvoice.dueDate) : null;
-    setDrawerDue(raw && !isNaN(raw.getTime()) ? raw.toISOString().slice(0, 10) : '');
+    // Business-zone calendar day, not UTC — see `toDateInput`. Seeding from
+    // `toISOString()` while saving back local noon lost a day on every save.
+    setDrawerDue(toDateInput(drawerInvoice.dueDate));
     setDrawerStatus(drawerInvoice.status || 'Pending');
-    const paid = drawerInvoice.paidAt ? new Date(drawerInvoice.paidAt) : null;
-    setDrawerPaidAt(paid && !isNaN(paid.getTime())
-      ? paid.toISOString().slice(0, 10)
-      : new Date().toISOString().slice(0, 10));
+    setDrawerPaidAt(toDateInput(drawerInvoice.paidAt) || todayDateInput());
   }, [drawerInvoice]);
 
   // Close the drawer on Escape.
@@ -701,7 +767,7 @@ const InvoicesView: React.FC = () => {
       await invoiceMutation.update(drawerInvoice.id, {
         customerId: drawerCustomer,
         projectId: drawerProject,
-        dueDate: drawerDue ? new Date(drawerDue + 'T12:00:00') : null,
+        dueDate: fromDateInput(drawerDue),
         status: drawerStatus,
         ...(paidAt ? { paidAt } : {}),
         ...whmcsQueue,
@@ -748,9 +814,19 @@ const InvoicesView: React.FC = () => {
   const availableYears = [currentYear, currentYear - 1, currentYear - 2, currentYear - 3];
   // "Të përfunduara" = fully paid only (a Partial invoice isn't completed).
   const paidInvoices = invoices?.filter(inv => inv.status === 'Paid').length || 0;
-  const pendingAmount = invoices?.filter(inv => inv.status === 'Pending').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
-  const overdueAmount = invoices?.filter(inv => inv.status === 'Overdue').reduce((sum, inv) => sum + Math.max(0, toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency) - toAll(inv.paidAmount ?? 0, (inv as any).currency)), 0) || 0;
-  const partialRemainingAmount = invoices?.filter(inv => inv.status === 'Partial').reduce((sum, inv) => sum + Math.max(0, toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency) - toAll(inv.paidAmount ?? 0, (inv as any).currency)), 0) || 0;
+  // "What is still owed" has ONE definition: `getInvoiceOutstandingAll`. These
+  // three were hand-rolled in three different ways in this one file — Pending
+  // never subtracted what had already been paid (an instalment on a Pending
+  // invoice was billed to the owner twice: once here, once under Partial), and
+  // Overdue/Partial read `paidAmount` where the canonical helper prefers the
+  // `partialPayments` sum (the two drift on legacy write paths).
+  const outstandingByStatus = (status: string) =>
+    (invoices || [])
+      .filter(inv => inv.status === status)
+      .reduce((sum, inv) => sum + getInvoiceOutstandingAll(inv), 0);
+  const pendingAmount = outstandingByStatus('Pending');
+  const overdueAmount = outstandingByStatus('Overdue');
+  const partialRemainingAmount = outstandingByStatus('Partial');
   // Money genuinely owed to us: issued-but-unpaid (Pending), overdue balances,
   // and the unpaid remainder of partial invoices. Drafts are NOT issued → excluded.
   const projectedRevenue = pendingAmount + overdueAmount + partialRemainingAmount;
@@ -2198,10 +2274,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     try { return JSON.parse(localStorage.getItem('bank_accounts') || '[]'); } catch { return []; }
   })();
   const [status, setStatus] = useState(editInvoice?.status || 'Pending');
+  // Business-zone calendar day (see `toDateInput`) — a UTC seed showed the
+  // previous day for any payment date stored at local midnight, and saving the
+  // form then wrote that wrong day back.
   const [paidAtDateForm, setPaidAtDateForm] = useState<string>(
-    editInvoice?.paidAt
-      ? new Date(editInvoice.paidAt).toISOString().slice(0, 10)
-      : new Date().toISOString().slice(0, 10)
+    toDateInput(editInvoice?.paidAt) || todayDateInput()
   );
   const [notes, setNotes] = useState((editInvoice as any)?.notes || '');
   const [paymentUrl, setPaymentUrl] = useState((editInvoice as any)?.paymentUrl || '');
@@ -2371,11 +2448,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     return p && projectAlsoBills(p as any) ? p : null;
   }, [projects, selectedProjectId]);
 
-  const calculateDiscountAmount = (subtotal: number) => {
-    if (!discount || discount <= 0) return 0;
-    if (discountType === 'percent') return subtotal * (Math.min(discount, 100) / 100);
-    return Math.min(discount, subtotal);
-  };
+  // One shared computation with the detail view and the PDF (`computeInvoiceTotals`),
+  // so a fixed discount larger than the subtotal is clamped everywhere and the
+  // three renderers can never print a box that does not add up.
+  const formTotals = (subtotal: number) =>
+    computeInvoiceTotals({ subtotal, discount, discountType, tax });
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -2417,38 +2494,41 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       const resolvedSubtotal = (isEditing && !loadedExistingItems && subtotal === 0)
         ? (editInvoice?.subtotal || editInvoice?.total || editInvoice?.amount || 0)
         : subtotal;
-      const discountAmount = calculateDiscountAmount(resolvedSubtotal);
-      const total = resolvedSubtotal - discountAmount + tax;
+      const { total } = formTotals(resolvedSubtotal);
 
-      // Default next-recurrence = ONE cycle after this (first) invoice's due date,
-      // so the mother covers period 1 and the first auto-generated child starts
-      // period 2 (instead of duplicating period 1). Explicit user value wins.
+      // ── ONE anchor date for the series: the INVOICE DATE ──────────────────
       //
-      // Uses the SHARED clamped helper. Hand-rolled `setMonth(+1)` here made a
-      // 31 Jan retainer next bill on 3 March — February gone for good — while the
-      // cron used a correctly-clamped helper, so the two disagreed.
-      const defaultNextRecurring = () =>
-        nextInvoiceOccurrence(new Date(dueDate || invoiceDate || new Date()), recurringFrequency);
+      // The period this invoice CLAIMS and the date the NEXT one falls due have
+      // to be derived from the same date, or they describe different periods.
+      // They did not: the claim was anchored on `invoiceDate` and the schedule
+      // on `dueDate`. On the ordinary net-30 case (dated 5 Sep, due 5 Oct) the
+      // claim covered September while the next date jumped to 5 November — so
+      // OCTOBER was never billed, and because the cron was never "late" for a
+      // period it had not been asked to bill, `periodsSkipped` reported 0 and
+      // nothing surfaced the hole.
+      //
+      // The invoice date is the right anchor because it IS the period the
+      // invoice bills for: the claim has to name exactly that period or the
+      // cron re-bills it, and the next occurrence is therefore one full cycle
+      // after it. The due date is a payment TERM (net-30, net-60) — a property
+      // of how long the client has to pay, not of the billing cycle.
+      const seriesAnchorDate = new Date(invoiceDate || dueDate || new Date());
+      const ownPeriodDate = seriesAnchorDate;
 
-      // The invoice being saved IS the first occurrence of its own series, and it
-      // covers its own period. Claiming that period is what stops the cron from
-      // billing it a second time: the default next-date lands a full cycle later,
-      // but a user who picks "generate again on the 20th" while the invoice is
-      // dated the 5th of the same month got two invoices for one month, both
-      // emailed. Same law as ExpensesView, which has stamped this since the
-      // expense audit.
-      const ownPeriodDate = new Date(invoiceDate || new Date());
-      const resolvedNextRecurring = isRecurring
-        ? (nextRecurringDate || defaultNextRecurring())
-        : null;
-      // The series' billing day, fixed for its whole life. Never re-derived later
-      // from an occurrence — one February clamp would otherwise drag a 31st
-      // retainer to the 28th permanently.
-      // An existing anchor is never rewritten from the date currently in the form
-      // unless the user actually CHANGED that date: the stored date is the next
-      // occurrence, already clamped by short months, so re-deriving the anchor on
-      // every unrelated edit IS the drift. An explicit new date is intent and wins
-      // (that is also how a series the cron pinned to the 28th gets back to 31).
+      // The series' billing day, fixed for its whole life, read in the business
+      // zone (`zonedParts`) so the browser's own timezone cannot shift it.
+      // Precedence:
+      //  1. the stored anchor, while the user has not touched the next date —
+      //     re-deriving it on every unrelated edit IS the drift it prevents;
+      //  2. the day of a next date the user EXPLICITLY picked: that is intent,
+      //     and it is how a series the cron clamped to the 28th gets back to 31;
+      //  3. otherwise the ANCHOR DATE's own day.
+      //
+      // Rung 3 used to be `resolvedNextRecurring.getDate()` — the output of
+      // `nextInvoiceOccurrence`, i.e. a date that has ALREADY been clamped by a
+      // short month. A monthly invoice dated 31 January was therefore born with
+      // anchor 28 and could never return to the 31st: the exact drift
+      // `recurringAnchorDay` exists to prevent, baked in at creation.
       const storedAnchorRaw = Number((editInvoice as any)?.recurringAnchorDay);
       const storedAnchor = Number.isFinite(storedAnchorRaw) && storedAnchorRaw >= 1 && storedAnchorRaw <= 31
         ? Math.round(storedAnchorRaw)
@@ -2457,12 +2537,26 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       const storedNextMs = storedNextRaw
         ? (storedNextRaw?.toDate ? storedNextRaw.toDate() : new Date(storedNextRaw)).getTime()
         : null;
+      const pickedNext = nextRecurringDate ?? null;
       const nextDateUntouched = isEditing
         && storedNextMs != null
-        && resolvedNextRecurring?.getTime() === storedNextMs;
-      const anchorDay = (nextDateUntouched && storedAnchor != null)
-        ? storedAnchor
-        : (resolvedNextRecurring ? resolvedNextRecurring.getDate() : undefined);
+        && pickedNext?.getTime() === storedNextMs;
+      const anchorDay = !isRecurring
+        ? undefined
+        : (nextDateUntouched && storedAnchor != null)
+          ? storedAnchor
+          : pickedNext
+            ? zonedParts(pickedNext).day
+            : (storedAnchor ?? zonedParts(seriesAnchorDate).day);
+
+      // The invoice being saved IS the first occurrence of its own series, and it
+      // covers its own period. Claiming that period is what stops the cron from
+      // billing it a second time. The default next date is one full cycle after
+      // the same anchor, clamped through the SHARED helper with the anchor day
+      // (never `setMonth(+1)`, which overflows a 31st into the month after next).
+      const resolvedNextRecurring = isRecurring
+        ? (pickedNext || nextInvoiceOccurrence(seriesAnchorDate, recurringFrequency, anchorDay))
+        : null;
       // On edit the claim is kept as-is, EXCEPT when the frequency changed: a
       // monthly key ('2026-09') can never equal a weekly one, so the stale claim
       // would silently stop blocking and the new cycle could re-bill a period
@@ -2507,7 +2601,8 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         isRecurringPaused: isRecurring ? isRecurringPaused : false,
         recurringFrequency: isRecurring ? recurringFrequency : undefined,
         // nextRecurringDate: user-set value takes priority; else default to one
-        // full cycle after the due date so the first child doesn't re-bill period 1.
+        // full cycle after the INVOICE date (the anchor), so the first child
+        // bills the very next period instead of skipping one.
         nextRecurringDate: resolvedNextRecurring,
         // "Repeat until" — cleared when recurrence is off so a stale end-date can't linger.
         recurringEndDate: isRecurring ? (recurringEndDate || null) : null,
@@ -2515,21 +2610,29 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         lastGeneratedPeriodKey: resolvedPeriodClaim,
       };
 
-      if (isEditing) {
-        // Set paidAt when manually marking as Paid via the full edit form
-        let whmcsNewlyPaid = false;
-        if (status === 'Paid' && editInvoice?.status !== 'Paid') {
-          invoiceData.paidAt = paidAtDateForm ? new Date(paidAtDateForm + 'T12:00:00') : new Date();
-          if (isWhmcsInvoice(editInvoice)) {
+      // ── `paidAt` belongs to BOTH paths ─────────────────────────────────────
+      // This block used to live inside `if (isEditing)`, yet the CREATE form
+      // offers status "Paguar" and its own "Data e Pagesës" picker: a receipt
+      // back-entered for August was created with no `paidAt` at all, so every
+      // cash-basis helper fell back to `createdAt` and the money landed in
+      // September's revenue with nothing on screen to explain it.
+      let whmcsNewlyPaid = false;
+      if (status === 'Paid') {
+        if (editInvoice?.status === 'Paid') {
+          // Already settled: keep the settlement, but let the date field correct it.
+          invoiceData.paidAt = fromDateInput(paidAtDateForm) ?? editInvoice.paidAt;
+        } else {
+          invoiceData.paidAt = fromDateInput(paidAtDateForm) ?? new Date();
+          if (isEditing && isWhmcsInvoice(editInvoice)) {
             // Mirror the payment to WHMCS (queued here, drained by /api/whmcs-payment
             // or the next sync) — see src/lib/whmcsPayment.ts.
             Object.assign(invoiceData, whmcsPendingPatch(editInvoice, { key: 'full', method: paymentMethod, paidAt: invoiceData.paidAt }));
             whmcsNewlyPaid = true;
           }
-        } else if (status === 'Paid' && editInvoice?.status === 'Paid') {
-          // Keep existing paidAt but allow updating it via the date field
-          invoiceData.paidAt = paidAtDateForm ? new Date(paidAtDateForm + 'T12:00:00') : editInvoice.paidAt;
         }
+      }
+
+      if (isEditing) {
         // Do NOT reset emailSent/reminderSent flags on edit — cron uses them to avoid duplicate sends
 
         // Update existing invoice
@@ -3150,11 +3253,14 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
               %
             </button>
           </div>
+          {/* A FIXED discount is capped at the subtotal: `computeInvoiceTotals`
+              clamps it anyway, so without the ceiling the user types a number the
+              saved invoice then silently ignores. Percent is capped at 100. */}
           <Input
             type="number"
             step="0.01"
             min="0"
-            max={discountType === 'percent' ? 100 : undefined}
+            max={discountType === 'percent' ? 100 : (calculateSubtotal() || undefined)}
             placeholder="0"
             value={discount || ''}
             onChange={(e) => setDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
@@ -3192,28 +3298,34 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         <Textarea id="notes" name="notes" rows={3} placeholder="Shënime shtesë..." value={notes} onChange={(e) => setNotes(e.target.value)} />
       </div>
 
-      <div className="border-t pt-4">
-        <div className="space-y-2 text-right">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Nëntotali:</span>
-            <span className="font-medium">{calculateSubtotal().toFixed(2)} {currencySymbol(currency)}</span>
-          </div>
-          {discount > 0 && (
-            <div className="flex justify-between text-red-500">
-              <span>Zbritje {discountType === 'percent' ? `(${discount}%)` : ''}:</span>
-              <span>−{calculateDiscountAmount(calculateSubtotal()).toFixed(2)} {currencySymbol(currency)}</span>
+      {(() => {
+        // One computation feeds all four lines — the box always adds up.
+        const box = formTotals(calculateSubtotal());
+        return (
+          <div className="border-t pt-4">
+            <div className="space-y-2 text-right">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Nëntotali:</span>
+                <span className="font-medium">{box.subtotal.toFixed(2)} {currencySymbol(currency)}</span>
+              </div>
+              {box.discountAmount > 0 && (
+                <div className="flex justify-between text-red-500">
+                  <span>Zbritje {discountType === 'percent' ? `(${Math.min(discount, 100)}%)` : ''}:</span>
+                  <span>−{box.discountAmount.toFixed(2)} {currencySymbol(currency)}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Taksa:</span>
+                <span className="font-medium">{box.tax.toFixed(2)} {currencySymbol(currency)}</span>
+              </div>
+              <div className="flex justify-between text-lg font-bold">
+                <span>Total:</span>
+                <span>{box.total.toFixed(2)} {currencySymbol(currency)}</span>
+              </div>
             </div>
-          )}
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Taksa:</span>
-            <span className="font-medium">{tax.toFixed(2)} {currencySymbol(currency)}</span>
           </div>
-          <div className="flex justify-between text-lg font-bold">
-            <span>Total:</span>
-            <span>{(calculateSubtotal() - calculateDiscountAmount(calculateSubtotal()) + tax).toFixed(2)} {currencySymbol(currency)}</span>
-          </div>
-        </div>
-      </div>
+        );
+      })()}
 
       <Button type="submit" className="w-full" disabled={isSubmitting}>
         {isSubmitting
@@ -3477,32 +3589,36 @@ const InvoiceDetails: React.FC<{
         )}
       </div>
 
-      <div className="border-t pt-4">
-        <div className="space-y-2 text-right">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Nëntotali:</span>
-            <span className="font-medium">{(invoice.subtotal || 0).toFixed(2)} {cur}</span>
-          </div>
-          {invoice.discount != null && invoice.discount > 0 && (
-            <div className="flex justify-between text-red-500">
-              <span>Zbritje {invoice.discountType === 'percent' ? `(${invoice.discount}%)` : ''}:</span>
-              <span>−{(invoice.discountType === 'percent'
-                ? (invoice.subtotal || 0) * (invoice.discount / 100)
-                : invoice.discount).toFixed(2)} {cur}</span>
+      {(() => {
+        // Same computation as the form and the PDF — see `storedInvoiceTotals`.
+        const box = storedInvoiceTotals(invoice);
+        return (
+          <div className="border-t pt-4">
+            <div className="space-y-2 text-right">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Nëntotali:</span>
+                <span className="font-medium">{box.subtotal.toFixed(2)} {cur}</span>
+              </div>
+              {box.discountAmount > 0 && (
+                <div className="flex justify-between text-red-500">
+                  <span>Zbritje {invoice.discountType === 'percent' ? `(${Math.min(invoice.discount ?? 0, 100)}%)` : ''}:</span>
+                  <span>−{box.discountAmount.toFixed(2)} {cur}</span>
+                </div>
+              )}
+              {box.tax > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Taksa:</span>
+                  <span className="font-medium">{box.tax.toFixed(2)} {cur}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-lg font-bold">
+                <span>Totali:</span>
+                <span>{box.total.toFixed(2)} {cur}</span>
+              </div>
             </div>
-          )}
-          {invoice.tax != null && invoice.tax > 0 && (
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Taksa:</span>
-              <span className="font-medium">{invoice.tax.toFixed(2)} {cur}</span>
-            </div>
-          )}
-          <div className="flex justify-between text-lg font-bold">
-            <span>Totali:</span>
-            <span>{(invoice.total || 0).toFixed(2)} {cur}</span>
           </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {invoice.notes && (
         <div>
@@ -3641,8 +3757,10 @@ const InvoiceDetails: React.FC<{
             const w = doc.internal.pageSize.getWidth();
             const h = doc.internal.pageSize.getHeight();
             const margin = 20;
-            const isEUR = (invoice as any).currency === 'EUR';
-            const cur = currencySymbol(isEUR ? 'EUR' : 'ALL');
+            // The invoice's OWN currency. Forcing "EUR or else ALL" printed Lek
+            // amounts on a WHMCS-mirrored USD or GBP invoice — the client was
+            // handed a PDF stating a figure in a currency nobody agreed to.
+            const cur = currencySymbol((invoice as any).currency);
             const fmt = (n: number) => `${n.toFixed(2)} ${cur}`;
 
             // ── Accent bar ──────────────────────────────────────────────────
@@ -3828,12 +3946,15 @@ const InvoiceDetails: React.FC<{
             const totBoxX = w - margin - 80;
             const totBoxW = 80;
 
-            const subtotal = invoice.subtotal || invoice.total || 0;
-            const discAmt = invoice.discount != null && invoice.discount > 0
-              ? (invoice.discountType === 'percent' ? subtotal * (invoice.discount / 100) : invoice.discount)
-              : 0;
-            const taxAmt = invoice.tax || 0;
-            const totalVal = invoice.total || 0;
+            // Same computation as the form and the detail view. The old fallback
+            // `invoice.subtotal || invoice.total` printed "Nëntotali = Totali" on
+            // a legacy invoice and then a discount line under it — a box that
+            // contradicted itself on the document the client actually receives.
+            const pdfTotals = storedInvoiceTotals(invoice);
+            const subtotal = pdfTotals.subtotal;
+            const discAmt = pdfTotals.discountAmount;
+            const taxAmt = pdfTotals.tax;
+            const totalVal = pdfTotals.total;
 
             // Calculate box height
             // Already settled (cash instalments and/or a partial Stripe payment). A PDF
@@ -3866,7 +3987,9 @@ const InvoiceDetails: React.FC<{
 
             if (discAmt > 0) {
               doc.setTextColor(220, 38, 38);
-              const discLabel = invoice.discountType === 'percent' ? `Zbritje (${invoice.discount}%):` : 'Zbritje:';
+              const discLabel = invoice.discountType === 'percent'
+                ? `Zbritje (${Math.min(invoice.discount ?? 0, 100)}%):`
+                : 'Zbritje:';
               doc.text(discLabel, totBoxX + 4, ty);
               doc.text(`-${fmt(discAmt)}`, totBoxX + totBoxW - 4, ty, { align: 'right' });
               doc.setTextColor(80, 80, 80);

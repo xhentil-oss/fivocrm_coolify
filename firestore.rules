@@ -651,10 +651,18 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
+      // A portal create is pinned to the client themselves, to an unpaid Pending
+      // order, and to stock NOT yet applied. Prices are re-computed server-side;
+      // what the rules can pin is the MONEY STATE: an order that arrives already
+      // `paymentStatus: 'Paid'` makes ShopOrdersView issue an invoice already
+      // marked paid, and `stockApplied: true` makes the back office skip the
+      // decrement — both are client-authored facts about our own books.
       allow create: if canCreateBusinessDoc()
         || (isPortalClientFor(request.resource.data.customerId)
             && request.resource.data.source == 'portal'
             && request.resource.data.status == 'Pending'
+            && request.resource.data.get('paymentStatus', 'Unpaid') == 'Unpaid'
+            && request.resource.data.get('stockApplied', false) != true
             && isSelfCreate());
       allow update: if canManageBusinessDoc() && keepsBusinessId();
       allow delete: if canManageBusinessDoc();
@@ -1241,17 +1249,43 @@ service cloud.firestore {
         || canManageBusinessDoc();
     }
 
+    // Statuses a quote must reach before a client may ever see it. A `Draft` is
+    // internal pricing (margins, package contents, the manual discount) and the
+    // portal used to fetch it and hide it in React — i.e. it sat in the client's
+    // devtools. Rules are not filters, so PortalQuotesView constrains BOTH of its
+    // queries with `where('status','in', CLIENT_VISIBLE_STATUSES)`; that list and
+    // this one must stay identical or the query is denied outright.
+    // DEPLOY NOTE: PortalDashboard.tsx runs the same two quote queries and must
+    // carry the same constraint before this rule ships, or the portal dashboard
+    // loses its quote counter.
+    function quoteVisibleToClient() {
+      return resource.data.get('status', 'Draft') in ['Sent', 'Accepted', 'Rejected'];
+    }
+    // The only fields a portal client may ever write on a quote, and the only
+    // statuses they may write into them. Same shape as the customers rule
+    // (tests 50a/50b): staff keep full update, the client gets a keyhole.
+    function quotePortalResponse() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'respondedAt', 'updatedAt'])
+        && resource.data.get('status', 'Draft') == 'Sent'
+        && request.resource.data.status in ['Accepted', 'Rejected'];
+    }
+
     match /quotes/{docId} {
       // Staff read via businessId; the portal client reads quotes for their own
       // customer (or a lead linked to it). Was `if isAuth()` — leaked every
       // tenant's quotes (incl. Draft pricing) to any signed-in user. Portal
       // accept/reject is an update, so the portal clause is allowed on update too.
       allow read: if isBusinessMember(resource.data.businessId)
-        || quoteAccessibleByPortal()
+        || (quoteAccessibleByPortal() && quoteVisibleToClient())
         || isSuperAdmin();
       allow create: if canCreateBusinessDoc();
+      // The portal clause used to be bare ownership: a client could rewrite
+      // `result` (the totals and the package contents that ContractsView copies
+      // verbatim into `packageSummary`) or flip a Draft to Accepted. They may now
+      // only answer a quote that was actually SENT to them.
       allow update: if isBusinessMember(resource.data.businessId)
-        || quoteAccessibleByPortal()
+        || (quoteAccessibleByPortal() && quotePortalResponse())
         || isSuperAdmin();
       allow delete: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
     }
@@ -1313,11 +1347,15 @@ service cloud.firestore {
       allow create: if isAuth() && request.resource.data.ownerId == request.auth.uid;
       // Owner manages their business; super-admin (claim) manages any (module toggles,
       // plan/status). `status` is deliberately owner-writable ONLY by the platform:
-      // a tenant must not be able to un-suspend itself.
+      // a tenant must not be able to un-suspend itself. `lockedModules` is the
+      // platform's module ENTITLEMENT layer (what the contract includes) — the owner
+      // keeps `disabledModules` (their own visibility choice) but cannot lift a lock,
+      // or the super-admin's toggle would be a suggestion, not a control.
       allow update: if isSuperAdmin()
         || (isAuth() && resource.data.ownerId == request.auth.uid
             && request.resource.data.get('status', '') == resource.data.get('status', '')
-            && request.resource.data.get('plan', '') == resource.data.get('plan', ''));
+            && request.resource.data.get('plan', '') == resource.data.get('plan', '')
+            && request.resource.data.get('lockedModules', []) == resource.data.get('lockedModules', []));
       allow delete: if isSuperAdmin();
     }
 
@@ -1379,7 +1417,85 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ── teamMemberComp: a member's PAY, out of reach of their colleagues ──────
+    // `teamMembers` is readable by the whole business (the staff roster is), and it
+    // carried `monthlySalary`, `salaryHistory` and `hourlyCostRate` — so any
+    // employee, a Viewer included, could read every colleague's salary with one
+    // query. Filtering it in React is not access control.
+    //
+    // Same document id as the membership row (`{teamId}_{userId}`), so a caller
+    // that holds a member needs no lookup to find its pay.
+    //
+    //   read   — the member themselves, an admin/owner/manager of that business
+    //            (isBusinessAdmin, the same set that approves expenses), or the
+    //            platform operator. NOT every business member.
+    //   write  — owner/admin only: canManageMembers(), exactly the authority that
+    //            may already edit the membership row's salary today (`manager` is
+    //            deliberately excluded there — a manager may SEE pay, not set it).
+    //
+    // On a LIST the engine evaluates this against the QUERY SHAPE, so:
+    //   · an admin's list must pin `businessId ==` (useCollection does, because
+    //     teamMemberComp is in businessIsolatedAlways) — that is what makes the
+    //     isBusinessAdmin clause provable;
+    //   · a plain member has no provable clause and their list is DENIED, by
+    //     design — they read their own document by id instead
+    //     (see useMemberCompensation).
+    // Every `resource.data.X` goes through `.get(X, '')` for the reason spelled
+    // out on teamMembers below: a raw access to a field the query does not
+    // constrain ERRORS, and an error inside `a || b` denies the whole query.
+    match /teamMemberComp/{docId} {
+      allow read: if isSuperAdmin()
+        || (isAuth() && resource.data.get('userId', '') == request.auth.uid)
+        || isBusinessAdmin(resource.data.get('businessId', ''));
+      // The id is part of the data model (it mirrors the membership id), so it is
+      // pinned on create — the same gap teamMembers closes: a row whose id claims
+      // one person while its data names another would let pay be written under
+      // somebody else's key.
+      allow create: if canManageMembers(
+          request.resource.data.get('businessId', ''),
+          request.resource.data.get('teamId', ''))
+        && docId == request.resource.data.get('teamId', '')
+                    + '_' + request.resource.data.get('userId', '');
+      // An edit may never move a row to another tenant, another team or another
+      // person — that would be a pay record silently re-pointed.
+      allow update: if canManageMembers(
+          resource.data.get('businessId', ''),
+          resource.data.get('teamId', ''))
+        && keepsBusinessId()
+        && request.resource.data.get('teamId', '') == resource.data.get('teamId', '')
+        && request.resource.data.get('userId', '') == resource.data.get('userId', '');
+      allow delete: if canManageMembers(
+        resource.data.get('businessId', ''),
+        resource.data.get('teamId', ''));
+    }
+
     match /teamMembers/{docId} {
+      // ┌──────────────────────────────────────────────────────────────────────┐
+      // │ FOLLOW-UP, IN THIS ORDER — do not do it from memory, and not before  │
+      // │ the backfill has RUN and been verified against real data.            │
+      // │                                                                      │
+      // │ The read rule below still grants every `isBusinessMember` the whole   │
+      // │ staff row, INCLUDING monthlySalary / salaryHistory / hourlyCostRate.  │
+      // │ Compensation now also lives in `teamMemberComp` (above), which is     │
+      // │ correctly restricted — but the legacy fields are still written (dual  │
+      // │ write) and still read as the fallback (dual read), so tightening this │
+      // │ rule today would change nothing and clearing the fields today would   │
+      // │ zero every tenant's payroll.                                          │
+      // │                                                                      │
+      // │   1. Run `?job=backfill-member-compensation` (super-admin, idempotent)│
+      // │      and verify: one teamMemberComp doc per member that has pay, and  │
+      // │      Financat / Bonuset / project labour unchanged to the lek.        │
+      // │   2. Stop the dual WRITE: TeamsView writes pay only to teamMemberComp.│
+      // │   3. Clear monthlySalary / salaryHistory / hourlyCostRate from        │
+      // │      `teamMembers` (a second, separate job) — the merge in            │
+      // │      src/lib/finance/compensation.ts then resolves from the comp doc  │
+      // │      alone, with nothing left to fall back to.                        │
+      // │   4. ONLY THEN is this read rule the last thing standing: leave it as │
+      // │      is (the roster is legitimately readable by the business) — the   │
+      // │      salary simply is not in it any more.                             │
+      // │                                                                      │
+      // │ Reverse that order and either payroll breaks or the leak stays open.  │
+      // └──────────────────────────────────────────────────────────────────────┘
       // WAS `read: if isAuth()` — every tenant's staff records were readable by any
       // signed-in user, INCLUDING monthlySalary/salaryHistory/hourly rates. Now:
       //   • members of that business (the tenant's own staff list),
@@ -1486,7 +1602,15 @@ service cloud.firestore {
       // clause was true, but the errored `isTeamAdmin(resource.data.teamId)` on its
       // left poisoned the OR. The invitee's query must ALSO constrain `email` (see
       // JoinInviteView), otherwise no clause is provable from the query shape.
+      //
+      // The `isTeamAdmin(teamId)` clause is provable only when the query pins a
+      // teamId. TeamsView lists a tenant's invites by `businessId ==` alone (the
+      // scope useCollection applies to every business-isolated collection), and
+      // nothing below was provable from that shape — the list was denied for every
+      // non-super-admin. Staff of the business may see who has been invited into
+      // it, same as they already see the roster itself (`teamMembers` read).
       allow read: if isTeamAdmin(resource.data.get('teamId', ''))
+        || isBusinessMember(resource.data.get('businessId', ''))
         || (isAuth() && request.auth.token.email != null
             && resource.data.get('email', '') == request.auth.token.email.lower())
         || isSuperAdmin();

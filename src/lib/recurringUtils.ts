@@ -72,6 +72,81 @@ export function recurrenceDayOfMonth(at: Date): number {
   return toZoned(at, RECURRENCE_TIMEZONE).getUTCDate();
 }
 
+// ── Zone-explicit calendar arithmetic for BILLING ────────────────────────────
+//
+// Billing asks the same calendar questions recurrence does — "which month is
+// this?", "which Monday anchors this week?", "one month after the 31st" — and
+// the billing engines (`finance/recurringBilling.ts`, `finance/recurringExpenses.ts`)
+// answered them with the MACHINE's getters. The UI runs in Europe/Tirane and the
+// cron body runs on Vercel in UTC, so the same instant produced different period
+// keys on each side: `2026-07-31T22:00Z` (local midnight, 1 Aug) keys as
+// '2026-08' in the browser and '2026-07' on the server. A series whose bill
+// falls on the 1st then either blocks forever (`already-generated` against a key
+// the client never claimed) or books the same month twice.
+//
+// These helpers are the billing counterpart of `toZoned`/`fromZoned` above, and
+// are mirrored in `api/cron/run.ts` (which cannot import from `src/`).
+
+/** Calendar fields of an instant, read in the recurrence zone. */
+export function zonedParts(at: Date): {
+  year: number; month: number; day: number;
+  hours: number; minutes: number; seconds: number; ms: number; weekday: number;
+} {
+  const z = toZoned(at, RECURRENCE_TIMEZONE);
+  return {
+    year: z.getUTCFullYear(), month: z.getUTCMonth(), day: z.getUTCDate(),
+    hours: z.getUTCHours(), minutes: z.getUTCMinutes(),
+    seconds: z.getUTCSeconds(), ms: z.getUTCMilliseconds(), weekday: z.getUTCDay(),
+  };
+}
+
+/** The instant at which the recurrence zone shows this wall-clock time. */
+export function zonedDate(
+  year: number, month: number, day: number,
+  hours = 0, minutes = 0, seconds = 0, ms = 0,
+): Date {
+  return fromZoned(new Date(Date.UTC(year, month, day, hours, minutes, seconds, ms)), RECURRENCE_TIMEZONE);
+}
+
+/** Number of days in the zone's calendar month containing (year, month). */
+export function daysInZonedMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+}
+
+/** `from` shifted by whole zone days, keeping its wall-clock time of day. */
+export function addZonedDays(from: Date, days: number): Date {
+  const p = zonedParts(from);
+  return zonedDate(p.year, p.month, p.day + days, p.hours, p.minutes, p.seconds, p.ms);
+}
+
+/** `from` shifted by whole zone years, keeping its wall-clock time of day. */
+export function addZonedYears(from: Date, years: number): Date {
+  const p = zonedParts(from);
+  return zonedDate(p.year + years, p.month, p.day, p.hours, p.minutes, p.seconds, p.ms);
+}
+
+/**
+ * Add months in the recurrence zone without the `setMonth` overflow: 31 Jan + 1
+ * month is 28/29 Feb, never 2/3 Mar. `anchorDay` keeps a month-end series pinned
+ * to its original day, so Jan 31 → Feb 28 → Mar 31 rather than degrading to the
+ * 28th for the rest of the contract.
+ */
+export function addZonedMonthsClamped(from: Date, months: number, anchorDay?: number): Date {
+  const p = zonedParts(from);
+  const day = anchorDay ?? p.day;
+  const targetYear = p.year + Math.floor((p.month + months) / 12);
+  const targetMonth = ((p.month + months) % 12 + 12) % 12;
+  const lastDay = daysInZonedMonth(targetYear, targetMonth);
+  return zonedDate(targetYear, targetMonth, Math.min(day, lastDay), p.hours, p.minutes, p.seconds, p.ms);
+}
+
+/** Monday 00:00 (recurrence zone) of the week `at` falls in. */
+export function startOfZonedWeek(at: Date): Date {
+  const p = zonedParts(at);
+  const backToMonday = p.weekday === 0 ? 6 : p.weekday - 1;
+  return zonedDate(p.year, p.month, p.day - backToMonday);
+}
+
 export function addFrequency(
   date: Date,
   frequency: string,

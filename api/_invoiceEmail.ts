@@ -21,7 +21,15 @@ export interface InvoiceEmailData {
   paidAmount?: number;
   dueDate: Date;
   projectName: string;
-  type: 'initial' | 'reminder1' | 'reminder2';
+  /**
+   * `reminder2` is the FINAL NOTICE on the due day itself ("skadon sot").
+   * `overdue` is the weekly chase for an invoice that is already late — it used
+   * to reuse `reminder2`, so a customer 45 days late was told the deadline
+   * expired today, every week.
+   */
+  type: 'initial' | 'reminder1' | 'reminder2' | 'overdue';
+  /** Whole days past the due date. Only read by the `overdue` variant. */
+  daysOverdue?: number;
   currency?: 'ALL' | 'EUR';
   paymentMethod?: string;
   bankName?: string;
@@ -83,7 +91,7 @@ export async function publicInvoicePayUrl(
 }
 
 export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; html: string } {
-  const { customerName, invoiceNumber, amount, paidAmount, dueDate, projectName, type, currency, paymentMethod, bankName, bankIBAN, bankSWIFT, bankAccountHolder, bankCountry, payUrl } = data;
+  const { customerName, invoiceNumber, amount, paidAmount, dueDate, projectName, type, daysOverdue, currency, paymentMethod, bankName, bankIBAN, bankSWIFT, bankAccountHolder, bankCountry, payUrl } = data;
   const currencySymbol = currency === 'EUR' ? '€' : 'L';
   const currencyLabel = currency === 'EUR' ? 'EUR' : 'ALL';
   const money = (n: number) => n.toLocaleString('sq-AL') + ' ' + currencySymbol;
@@ -203,7 +211,42 @@ export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; ht
     };
   }
 
-  // reminder2 — final notice
+  // overdue — the invoice is already late; say so honestly.
+  if (type === 'overdue') {
+    const late = Math.max(1, Math.round(daysOverdue ?? 1));
+    const lateLabel = late === 1 ? '1 ditë' : `${late} ditë`;
+    return {
+      subject: `🔴 Faturë e papaguar #${invoiceNumber} — ${lateLabel} vonesë`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background: #f9fafb; border-radius: 8px;">
+          <div style="background: #ef4444; padding: 20px 24px; border-radius: 6px 6px 0 0;">
+            <h2 style="color: white; margin: 0; font-size: 20px;">🔴 Faturë e Papaguar</h2>
+          </div>
+          <div style="background: white; padding: 24px; border-radius: 0 0 6px 6px; border: 1px solid #e5e7eb;">
+            <p style="color: #374151; margin-top: 0;">I/E dashur <strong>${escHtml(customerName)}</strong>,</p>
+            <p style="color: #374151;">Fatura <strong>#${escHtml(invoiceNumber)}</strong> — shërbimi <strong>${escHtml(projectName)}</strong> — ka kaluar afatin e pagesës prej <strong>${lateLabel}</strong>.</p>
+            <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+              <tr style="background: #fee2e2;">
+                <td style="padding: 10px 14px; color: #6b7280; font-size: 14px;">Shuma e papaguar</td>
+                <td style="padding: 10px 14px; color: #991b1b; font-weight: bold; font-size: 16px;">${outstandingStr}</td>
+              </tr>${settledRowHtml}
+              <tr>
+                <td style="padding: 10px 14px; color: #6b7280; font-size: 14px;">Afati ishte</td>
+                <td style="padding: 10px 14px; color: #111827; font-weight: bold;">${dueDateStr}</td>
+              </tr>
+            </table>
+            ${bankDetailsHtml}
+            ${payButtonHtml}
+            <p style="color: #dc2626; font-weight: bold;">Ju lutemi kryeni pagesën sa më shpejt. Nëse pagesa është kryer tashmë, na njoftoni që ta regjistrojmë.</p>
+            <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
+            <p style="color: #9ca3af; font-size: 12px; margin: 0;">FivoCRM — Njoftime automatike &bull; Mos iu përgjigjeni këtij emaili direkt.</p>
+          </div>
+        </div>
+      `,
+    };
+  }
+
+  // reminder2 — final notice, sent ON the due day.
   return {
     subject: `🔴 Njoftim i fundit: Fatura #${invoiceNumber} skadon sot`,
     html: `
@@ -226,7 +269,7 @@ export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; ht
           </table>
           ${bankDetailsHtml}
           ${payButtonHtml}
-          <p style="color: #dc2626; font-weight: bold;">Pagesa duhet të kryhet sot. Pas kësaj date fatura do të shënohet si e skalur.</p>
+          <p style="color: #dc2626; font-weight: bold;">Pagesa duhet të kryhet sot. Pas kësaj date fatura do të shënohet si e skaduar.</p>
           <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
           <p style="color: #9ca3af; font-size: 12px; margin: 0;">FivoCRM — Njoftime automatike &bull; Mos iu përgjigjeni këtij emaili direkt.</p>
         </div>

@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, runTransaction, doc, Timestamp } from 'firebase/firestore';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, runTransaction, doc, Timestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { formatInvoiceNumber } from './invoiceNumber';
 import { installFirestoreCrashGuard, shouldUseMemoryCache } from './firestoreRecovery';
@@ -88,6 +88,29 @@ export interface InvoiceInstalment {
   paidAt: Date;
 }
 
+export interface InvoiceInstalmentOptions {
+  /**
+   * Extra fields to write in the SAME transaction as the instalment — this is
+   * how the WHMCS write-back queue gets there.
+   *
+   * CLAUDE.md's law for a WHMCS-mirrored invoice is that the queue entry is
+   * written "in the same update as the status change". It was not: the view
+   * recorded the instalment transactionally and then issued a SEPARATE
+   * `update(...whmcsPendingPatch)` with a bare `.catch(console.error)`. Lose
+   * that second write (rules denial, closed tab, offline) and the overnight
+   * `whmcs-sync` sees an empty queue, believes WHMCS is authoritative, and
+   * flips the invoice back to Pending — erasing `paidAt` and the money with it.
+   *
+   * The callback receives the invoice AS READ INSIDE the transaction and the
+   * index this instalment is taking, so the queue is deduped against the
+   * server's copy of `whmcsPendingPayments` rather than a stale React snapshot.
+   */
+  extraPatch?: (
+    invoice: Record<string, any>,
+    instalmentIndex: number,
+  ) => Record<string, any> | null | undefined;
+}
+
 export interface InvoiceInstalmentResult {
   /** Index this instalment took in `partialPayments` — the ledger `sourceKey` suffix. */
   index: number;
@@ -116,6 +139,7 @@ export interface InvoiceInstalmentResult {
 export async function recordInvoicePartialPayment(
   invoiceId: string,
   instalment: InvoiceInstalment,
+  options?: InvoiceInstalmentOptions,
 ): Promise<InvoiceInstalmentResult> {
   const invoiceRef = doc(db, 'invoices', invoiceId);
   return runTransaction(db, async (transaction) => {
@@ -158,6 +182,17 @@ export async function recordInvoicePartialPayment(
     // `paidAt` is the settlement date, set once. The instalment history keeps the
     // per-payment dates, so cash-basis reporting stays month-accurate.
     if (isFullyPaid) patch.paidAt = Timestamp.fromDate(instalment.paidAt);
+    // Anything the caller must land ATOMICALLY with the money (the WHMCS queue).
+    // Merged last, but it may not overwrite the payment fields themselves.
+    if (options?.extraPatch) {
+      const extra = options.extraPatch(inv, existing.length);
+      if (extra) {
+        for (const [key, value] of Object.entries(extra)) {
+          if (key in patch) continue;
+          patch[key] = value;
+        }
+      }
+    }
     transaction.update(invoiceRef, patch);
 
     return {
@@ -168,6 +203,40 @@ export async function recordInvoicePartialPayment(
       status,
     };
   });
+}
+
+/**
+ * Delete the `payments` ledger rows mirroring one invoice.
+ *
+ * Deleting an invoice used to remove the document and its line items only, so
+ * every receipt derived from it survived as an orphan: the Arkëtimet page (and
+ * anything else reading the ledger) kept counting the cash of an invoice that
+ * no longer exists, with no way to reach the row and delete it by hand.
+ *
+ * A one-shot query rather than a `useCollection` listener: `payments` is a
+ * business-scoped collection, so the LIST must carry the tenant predicate the
+ * rule proves against (`isBusinessMember(resource.data.businessId)`) — and the
+ * whole ledger has no business being streamed into this page just to delete a
+ * handful of rows. Returns how many rows were removed.
+ */
+export async function deleteInvoicePaymentRows(
+  invoiceId: string,
+  businessId: string | null | undefined,
+): Promise<number> {
+  // Without the tenant predicate the list is denied outright, so refuse rather
+  // than issue a query that can only fail (a legacy invoice with no businessId).
+  if (!invoiceId || !businessId) return 0;
+  const rows = await getDocs(query(
+    collection(db, 'payments'),
+    where('businessId', '==', businessId),
+    where('invoiceId', '==', invoiceId),
+  ));
+  if (rows.empty) return 0;
+  // Batched so a half-deleted ledger cannot survive a mid-flight failure.
+  const batch = writeBatch(db);
+  rows.forEach((row) => batch.delete(row.ref));
+  await batch.commit();
+  return rows.size;
 }
 
 export default app;

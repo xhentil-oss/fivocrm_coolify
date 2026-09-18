@@ -139,7 +139,14 @@ const teamScopedCollections = new Set([
   'tasks', 'invoices', 'customers', 'leads', 'services',
   'expenses', 'goals', 'timeEntries', 'channels', 'messages',
   'activities', 'clientRequests', 'invoiceItems', 'taskComments', 'leadActivities', 'deals',
-  'taskCollaborators', 'customIndustries', 'typingIndicators',
+  // `payments` (Arkëtimet) is the invoice ledger, so it is scoped exactly like
+  // `invoices`: listed here it gets teamId+businessId stamped on create (the
+  // "Sinkronizo" backfill wrote neither, so the rule refused every row), and
+  // listed in businessIsolatedAlways below its LIST query carries the tenant
+  // predicate the rule requires — an unscoped list over a scoped collection is
+  // denied outright, which is why the page rendered empty.
+  'payments',
+  'taskCollaborators', 'customIndustries', 'expenseCategories', 'typingIndicators',
   'directMessages', 'milestones', 'serviceInquiries', 'projectComments',
   'workspaceFolders', 'workspaceDriveFiles', 'projects', 'dailyReports', 'dailyReportMisses',
   'roleTemplates', 'standups', 'quotes', 'contracts', 'dailyFocus', 'productivitySettings', 'weeklyReviews',
@@ -167,6 +174,11 @@ const teamScopedCollections = new Set([
   // Identity/structure collections — scoped to the business so a tenant only sees
   // its own staff/invites (usePermissions opts out via skipBusinessFilter).
   'teamMembers', 'teamInvites',
+  // Compensation, split out of `teamMembers` (which the whole business may read).
+  // Listed here so a create carries teamId + businessId; the read rule is much
+  // narrower than membership — self, or an admin/manager of the business — so
+  // useMemberCompensation is the only caller and it picks its query shape by role.
+  'teamMemberComp',
 ]);
 
 // Multi-tenant isolation: tenant data is ALWAYS scoped by teamId for normal users
@@ -188,7 +200,8 @@ const businessIsolatedAlways = new Set<string>([
   'leads', 'projects', 'invoices', 'invoiceItems', 'customers', 'deals', 'leadActivities',
   'services', 'expenses', 'goals', 'quotes', 'contracts', 'tasks', 'taskComments',
   'taskCollaborators', 'milestones', 'projectComments', 'clientRequests', 'serviceInquiries',
-  'timeEntries', 'standups', 'dailyReports', 'dailyFocus', 'productivitySettings', 'weeklyReviews', 'customIndustries', 'activities',
+  'timeEntries', 'standups', 'dailyReports', 'dailyFocus', 'productivitySettings', 'weeklyReviews', 'customIndustries', 'expenseCategories', 'activities',
+  'payments',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',
   'crmAutomationRules', 'crmAutomationRuns',
   'socialAccounts', 'socialSnapshots',
@@ -208,6 +221,11 @@ const businessIsolatedAlways = new Set<string>([
   // TLD price list are margin intelligence; a subscription is a customer contract).
   'domains', 'subscriptions', 'hostingProducts', 'hostingServers', 'domainTlds', 'hostingOrders', 'hostingEvents', 'hostingCoupons', 'hostingBackups',
   'teamMembers', 'teamInvites',
+  // Pay. Business-isolated like everything else, AND rule-restricted to the
+  // member themselves plus the tenant's admins/managers — the businessId
+  // predicate this set applies is what makes the admin LIST provable at all
+  // (rules are not filters: an unscoped list here is denied outright).
+  'teamMemberComp',
   // ── Structure/identity collections, now tenant-scoped as well ──
   // A TEAM IS A DEPARTMENT INSIDE A BUSINESS, so a team list is always read within
   // the active business — never platform-wide. `userProfiles`, `channels` and
@@ -778,14 +796,35 @@ export function useMutation<T = DocumentData>(collectionName: string) {
     }
   }, [collectionName, user]);
 
-  const update = useCallback(async (id: string, data: Partial<T>) => {
+  const update = useCallback(async (
+    id: string,
+    data: Partial<T>,
+    /**
+     * `touchUpdatedAt: false` writes the fields WITHOUT stamping `updatedAt`.
+     *
+     * `updatedAt` is not a neutral audit column — it is read as a DATE by the
+     * finance engines: `projectPnl.projectDate()` falls back to it when a
+     * project has no completion date, so bumping it drags a project delivered
+     * in March into the current month's P&L. Any write that is bookkeeping
+     * ABOUT a document (a cache-invalidation flag, a rollup marker) rather than
+     * a change to it must opt out. `project-spend-rollup` in `api/cron/run.ts`
+     * does exactly this on the server side (it writes `spendRolledUpAt` and
+     * deliberately leaves `updatedAt` alone); this is the client half of the
+     * same rule.
+     *
+     * Default stays `true` — every ordinary edit is a real change and must keep
+     * stamping, or the rollup cron (which finds work via `expenses.updatedAt`)
+     * would stop seeing edits.
+     */
+    options?: { touchUpdatedAt?: boolean },
+  ) => {
     setLoading(true);
     setError(null);
     try {
       const docRef = doc(db, collectionName, id);
       const updateData = removeUndefined({
         ...data,
-        updatedAt: Timestamp.now()
+        ...(options?.touchUpdatedAt === false ? {} : { updatedAt: Timestamp.now() }),
       }) as any;
       if (typeof updateData.email === 'string') updateData.email = updateData.email.trim().toLowerCase();
       await updateDoc(docRef, updateData);

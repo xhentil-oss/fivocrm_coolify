@@ -46,8 +46,19 @@ export function updateTenantPlan(businessId: string, update: PlanUpdate) {
   return post({ action: 'update-plan', businessId, ...update });
 }
 
-export function setTenantModules(businessId: string, disabledModules: string[]) {
-  return post({ action: 'set-modules', businessId, disabledModules });
+/**
+ * The two module layers. Send only the one you changed:
+ *   - `lockedModules`   — layer 1, the platform's entitlement (owner cannot undo);
+ *   - `disabledModules` — layer 2, the owner's own visibility choice (a support assist
+ *                         when the console writes it).
+ */
+export interface TenantModulesPatch {
+  lockedModules?: string[];
+  disabledModules?: string[];
+}
+
+export function setTenantModules(businessId: string, patch: TenantModulesPatch) {
+  return post({ action: 'set-modules', businessId, ...patch });
 }
 
 export interface CreateTenantResult {
@@ -71,10 +82,15 @@ export function createTenantFromConsole(input: {
   plan?: string;
   trialDays?: number;
   /**
-   * Module paths the tenant starts WITHOUT (`businesses.disabledModules`). The
-   * console always sends it — computed with `disabledPathsFor()` from the registry —
-   * because the server has no copy of the registry and would otherwise create the
-   * tenant with every module on.
+   * Layer 1 — module paths the platform withholds from this tenant
+   * (`businesses.lockedModules`, computed with `lockedPathsFor()`).
+   */
+  lockedModules?: string[];
+  /**
+   * Layer 2 — the owner's initial "off" set (`businesses.disabledModules`). The
+   * console sends the registry default (`defaultDisabledModulePaths()`) because the
+   * server has no copy of the registry and would otherwise create the tenant with
+   * every module visible.
    */
   disabledModules?: string[];
   force?: boolean;

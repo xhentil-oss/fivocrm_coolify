@@ -28,6 +28,8 @@
 
 import { startOfBillingWeek } from './recurringBilling';
 import { addMonthsClamped } from './recurringExpenses';
+// Calendar questions are answered in ONE declared zone — see recurringUtils.
+import { zonedParts, addZonedDays } from '../recurringUtils';
 
 export type InvoiceFrequency = 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
@@ -102,16 +104,17 @@ const p2 = (n: number) => String(n).padStart(2, '0');
  */
 export function invoiceBillingPeriodKey(frequency: string, at: Date): string {
   if (frequency === 'weekly') {
-    const m = startOfBillingWeek(at);
-    return `W${m.getFullYear()}-${p2(m.getMonth() + 1)}-${p2(m.getDate())}`;
+    const m = zonedParts(startOfBillingWeek(at));
+    return `W${m.year}-${p2(m.month + 1)}-${p2(m.day)}`;
   }
+  const at_ = zonedParts(at);
   if (frequency === 'quarterly') {
-    return `Q${at.getFullYear()}-${Math.floor(at.getMonth() / 3) + 1}`;
+    return `Q${at_.year}-${Math.floor(at_.month / 3) + 1}`;
   }
   if (frequency === 'yearly') {
-    return `Y${at.getFullYear()}`;
+    return `Y${at_.year}`;
   }
-  return `${at.getFullYear()}-${p2(at.getMonth() + 1)}`;
+  return `${at_.year}-${p2(at_.month + 1)}`;
 }
 
 /**
@@ -127,9 +130,12 @@ export function resolveInvoiceAnchorDay(
   scheduled: Date,
 ): number {
   const raw = invoice.recurringAnchorDay;
-  const n = typeof raw === 'number' ? Math.round(raw) : NaN;
+  // `Number(raw)` rather than a `typeof` test: the cron mirror has always
+  // coerced, so a legacy anchor stored as the string "31" made the two engines
+  // compute different due dates for the same series.
+  const n = raw == null || raw === '' ? NaN : Math.round(Number(raw));
   if (Number.isFinite(n) && n >= 1 && n <= 31) return n;
-  return scheduled.getDate();
+  return zonedParts(scheduled).day;
 }
 
 /**
@@ -138,11 +144,7 @@ export function resolveInvoiceAnchorDay(
  * next and silently skips a month).
  */
 export function nextInvoiceOccurrence(from: Date, frequency: string, anchorDay?: number): Date {
-  if (frequency === 'weekly') {
-    const out = new Date(from);
-    out.setDate(out.getDate() + 7);
-    return out;
-  }
+  if (frequency === 'weekly') return addZonedDays(from, 7);
   if (frequency === 'yearly') {
     // Feb 29 → Feb 28 in a non-leap year, rather than 1 March.
     return addMonthsClamped(from, 12, anchorDay);
@@ -181,7 +183,7 @@ export function periodsSkipped(
   if (scheduled >= now) return 0;
   let count = 0;
   let cursor = new Date(scheduled);
-  const anchor = anchorDay ?? scheduled.getDate();
+  const anchor = anchorDay ?? zonedParts(scheduled).day;
   const nowKey = invoiceBillingPeriodKey(frequency, now);
   // Bounded: a decade of weeks is the worst realistic drift, and the loop must
   // never be able to hang the cron on corrupt data.

@@ -276,7 +276,11 @@ function AppContent() {
       <Route path="/login" element={user ? <DefaultRedirect /> : <LoginView />} />
       <Route path="/register" element={<RegisterView />} />
       {/* SaaS workspace signup — creates a new isolated tenant (vs /register lead-capture) */}
-      <Route path="/signup" element={user ? <DefaultRedirect /> : <WorkspaceSignupView />} />
+      {/* Rendered for signed-in users too: createUserWithEmailAndPassword signs the
+          registrant in BEFORE createTenant has written anything, and swapping to
+          <DefaultRedirect /> here sent a membership-less owner to /portal mid-signup.
+          The view redirects a signed-in visitor itself, unless it is mid-provisioning. */}
+      <Route path="/signup" element={<WorkspaceSignupView />} />
       <Route path="/join/:token" element={<JoinInviteView />} />
       <Route path="/seo" element={<Suspense fallback={<LazyFallback />}><SeoLandingPage /></Suspense>} />
       <Route path="/real-estate" element={<Suspense fallback={<LazyFallback />}><RealEstateLandingPage /></Suspense>} />
@@ -442,7 +446,11 @@ function AppContent() {
                       <Route path="/app/social" element={<PermissionGate permissionKey="canAccessMarketing"><SocialMediaView /></PermissionGate>} />
                       <Route path="/app/gmb" element={<ModuleGate moduleId="gmb"><GmbReviewsView /></ModuleGate>} />
                       <Route path="/app/finances" element={<PermissionGate permissionKey="isAdmin"><FinancesView /></PermissionGate>} />
-                      <Route path="/app/bonus" element={<PermissionGate permissionKey="canAccessProfile"><BonusView /></PermissionGate>} />
+                      {/* Bonuset — <ModuleGate>, not <PermissionGate>: the registry
+                          entry carries minPlan 'business' plus the lock/toggle layers,
+                          which a bare PermissionGate skipped entirely. BonusView
+                          itself fetches nothing tenant-wide for a non-admin viewer. */}
+                      <Route path="/app/bonus" element={<ModuleGate moduleId="bonus"><BonusView /></ModuleGate>} />
                       <Route path="/app/profile" element={<UserProfileView />} />
                       <Route path="/app/customers" element={<PermissionGate permissionKey="canAccessCustomers"><CustomersView /></PermissionGate>} />
                       <Route path="/app/customers/:customerId" element={<PermissionGate permissionKey="canAccessCustomers"><Customer360View /></PermissionGate>} />

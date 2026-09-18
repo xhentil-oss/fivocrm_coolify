@@ -128,6 +128,22 @@ async function callerBusinessId(req: VercelRequest): Promise<string | null> {
   }
 }
 
+/**
+ * The tenant a MANUAL run is confined to, or null when the run is the platform's
+ * own scheduled tick (and for a super-admin). Returned as a sentinel rather than
+ * throwing so each case can answer with its own Albanian message.
+ *
+ * `authorizeManual` accepts any Admin/Owner of any team, so without this a
+ * tenant's own "Ekzekuto Tani" button reached every other tenant's data — and,
+ * for the jobs that mail or WhatsApp, every other tenant's customers.
+ */
+const MANUAL_SCOPE_UNRESOLVED = '__manual_scope_unresolved__';
+async function manualScopeId(req: VercelRequest, isManual: boolean): Promise<string | null> {
+  if (!isManual) return null;
+  if (await callerIsSuperAdmin(req)) return null;
+  return (await callerBusinessId(req)) || MANUAL_SCOPE_UNRESOLVED;
+}
+
 async function callerIsSuperAdmin(req: VercelRequest): Promise<boolean> {
   const authHeader = req.headers.authorization as string;
   if (!authHeader?.startsWith('Bearer ')) return false;
@@ -214,6 +230,102 @@ function startOfRecurrenceDay(x: Date): number {
   return z.getTime();
 }
 
+/**
+ * The per-tenant job switches from Cilësimet → Automatizime.
+ *
+ * They are stored on `teamSettings.cronSettings.<key>.enabled` and, until this
+ * existed, were written by the UI and read by NOBODY — so a tenant who switched
+ * "Kujtesa faturash" off kept dunning their customers every day, and a tenant
+ * who switched recurring tasks off kept getting them. Absent means ON, matching
+ * the UI's own `?? true` default, so a tenant that never touched a switch is
+ * unaffected.
+ *
+ * Returns a cached per-run reader: one `teamSettings` read per team, not one
+ * per document, because a job iterates thousands of rows across a few teams.
+ */
+type CronToggleKey = 'task_alerts' | 'task_reminders' | 'invoice_reminders' | 'whmcs_sync' | 'recurring_tasks';
+function cronToggleReader(key: CronToggleKey) {
+  const cache = new Map<string, boolean>();
+  return async (teamId: string | null | undefined): Promise<boolean> => {
+    if (!teamId) return true;
+    const cached = cache.get(teamId);
+    if (cached !== undefined) return cached;
+    let enabled = true;
+    try {
+      const snap = await db.collection('teamSettings').doc(teamId).get();
+      enabled = (snap.data() as any)?.cronSettings?.[key]?.enabled !== false;
+    } catch { /* a failed lookup must never silence a job for everyone */ }
+    cache.set(teamId, enabled);
+    return enabled;
+  };
+}
+
+/** Calendar fields of an instant, read in the business zone. Mirrors
+ *  `zonedParts` in src/lib/recurringUtils.ts. */
+function zonedParts(at: Date): {
+  year: number; month: number; day: number;
+  hours: number; minutes: number; seconds: number; ms: number; weekday: number;
+} {
+  const z = toRecurrenceZone(at);
+  return {
+    year: z.getUTCFullYear(), month: z.getUTCMonth(), day: z.getUTCDate(),
+    hours: z.getUTCHours(), minutes: z.getUTCMinutes(),
+    seconds: z.getUTCSeconds(), ms: z.getUTCMilliseconds(), weekday: z.getUTCDay(),
+  };
+}
+
+/** The instant at which the business zone shows this wall-clock time. */
+function zonedDate(year: number, month: number, day: number,
+                   hours = 0, minutes = 0, seconds = 0, ms = 0): Date {
+  return fromRecurrenceZone(new Date(Date.UTC(year, month, day, hours, minutes, seconds, ms)));
+}
+
+/** Days in the business zone's calendar month containing (year, month). */
+function daysInZonedMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+}
+
+/** `from` shifted by whole zone days, keeping its wall-clock time of day. */
+function addZonedDays(from: Date, days: number): Date {
+  const p = zonedParts(from);
+  return zonedDate(p.year, p.month, p.day + days, p.hours, p.minutes, p.seconds, p.ms);
+}
+
+/** `from` shifted by whole zone years, keeping its wall-clock time of day. */
+function addZonedYears(from: Date, years: number): Date {
+  const p = zonedParts(from);
+  return zonedDate(p.year + years, p.month, p.day, p.hours, p.minutes, p.seconds, p.ms);
+}
+
+/** Add months in the business zone, clamped (31 Jan + 1 = 28/29 Feb, never 3 Mar). */
+function addZonedMonthsClamped(from: Date, months: number, anchorDay?: number): Date {
+  const p = zonedParts(from);
+  const day = anchorDay ?? p.day;
+  const targetYear = p.year + Math.floor((p.month + months) / 12);
+  const targetMonth = ((p.month + months) % 12 + 12) % 12;
+  const lastDay = daysInZonedMonth(targetYear, targetMonth);
+  return zonedDate(targetYear, targetMonth, Math.min(day, lastDay), p.hours, p.minutes, p.seconds, p.ms);
+}
+
+/** Monday 00:00 (business zone) of the week `at` falls in. */
+function startOfZonedWeek(at: Date): Date {
+  const p = zonedParts(at);
+  const backToMonday = p.weekday === 0 ? 6 : p.weekday - 1;
+  return zonedDate(p.year, p.month, p.day - backToMonday);
+}
+
+/**
+ * The last instant of a due DAY, in the business zone. A due date is a calendar
+ * promise ("pay by the 30th"), so nothing is late until that day has ended
+ * where the customer lives — comparing a local-midnight `dueDate` against `now`
+ * marked an invoice overdue at 00:00 of the day it was due.
+ */
+function endOfBillingDay(x: Date): Date {
+  const z = toRecurrenceZone(x);
+  z.setUTCHours(23, 59, 59, 999);
+  return fromRecurrenceZone(z);
+}
+
 function addFrequency(date: Date, frequency: string, dayOfWeek?: number, dayOfMonth?: number, interval = 1, daysOfWeek?: number[]): Date {
   const d = toRecurrenceZone(date);
   const step = Math.max(1, Math.round(interval));
@@ -288,6 +400,8 @@ async function tenantScopedDocs(
 async function runTaskDeadlineAlerts() {
   const transporter = makeTransporter();
   const smtpUser = safeSenderAddress(process.env.SMTP_USER);
+  const alertsEnabledFor = cronToggleReader('task_alerts');
+  let toggledOffSkipped = 0;
   const now = new Date();
   const alertThreshold = new Date(now);
   alertThreshold.setDate(alertThreshold.getDate() + 2);
@@ -316,6 +430,7 @@ async function runTaskDeadlineAlerts() {
 
   for (const doc of tasksSnap.docs) {
     const task = doc.data();
+    if (!(await alertsEnabledFor(task.teamId))) { toggledOffSkipped++; continue; }
     if (!task.endDate || task.status === 'Done') continue;
     const recipientId = task.assignedToUserId || task.createdByUserId;
     if (!recipientId) continue;
@@ -383,7 +498,7 @@ async function runTaskDeadlineAlerts() {
   }
 
   await settleAll(ops, 'task-deadline-alerts');
-  return { notified };
+  return { notified, toggledOffSkipped };
 }
 
 // ── JOB: task-reminders ("Më kujto") ─────────────────────────────────────────
@@ -410,6 +525,8 @@ function taskReminderBlockReason(task: any, now: Date): string | null {
 }
 
 async function runTaskReminders() {
+  const remindersEnabledFor = cronToggleReader('task_reminders');
+  let toggledOffSkipped = 0;
   const now = new Date();
   const floor = new Date(now.getTime() - TASK_REMINDER_LOOKBACK_MS);
   const snap = await db.collection('tasks')
@@ -424,6 +541,7 @@ async function runTaskReminders() {
 
   for (const doc of snap.docs) {
     const task = doc.data();
+    if (!(await remindersEnabledFor(task.teamId))) { toggledOffSkipped++; continue; }
     const reason = taskReminderBlockReason(task, now);
     if (reason) { blocked[reason] = (blocked[reason] || 0) + 1; continue; }
 
@@ -471,11 +589,11 @@ async function runTaskReminders() {
   }
 
   await settleAll(ops, 'task-reminders');
-  return { scanned: snap.size, sent, blocked };
+  return { scanned: snap.size, sent, blocked, toggledOffSkipped };
 }
 
 // ── JOB: invoice-reminders ───────────────────────────────────────────────────
-async function runInvoiceReminders() {
+async function runInvoiceReminders(opts?: { businessId?: string | null }) {
   const transporter = makeTransporter();
   const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const now = new Date();
@@ -483,9 +601,34 @@ async function runInvoiceReminders() {
   reminderThreshold.setDate(reminderThreshold.getDate() + 3);
   reminderThreshold.setHours(23, 59, 59, 999);
 
+  // A manual run is scoped to the caller's tenant — same law as
+  // `recurring-invoices`: this job SENDS EMAIL to customers, so an unscoped
+  // manual trigger let any tenant Admin dun every other tenant's clients (the
+  // "Ekzekuto Tani" button lives in every tenant's Cilësimet).
+  const scopeId = opts?.businessId || null;
+  const scoped = <T extends FirebaseFirestore.Query>(q: T): T =>
+    (scopeId ? q.where('businessId', '==', scopeId) : q) as T;
+
+  // A SUSPENDED tenant must not dun its customers in our name. The Admin SDK
+  // bypasses `tenantActive()` in the rules, so the exclusion must live here.
+  const suspendedBusinessIds = new Set<string>();
+  try {
+    const suspSnap = await db.collection('businesses').where('status', '==', 'suspended').get();
+    suspSnap.docs.forEach(d => suspendedBusinessIds.add(d.id));
+  } catch { /* a failed lookup must not stop reminders for everyone else */ }
+  let suspendedSkipped = 0;
+
+  // The per-tenant switch in Cilësimet → Automatizime is HONOURED here. It was
+  // written to `teamSettings.cronSettings` and read by nobody, so a tenant who
+  // turned "Kujtesa faturash" off kept dunning their customers every day. Absent
+  // means on, matching the UI's `?? true` default, so nothing changes for a
+  // tenant that never touched the switch.
+  const remindersEnabledFor = cronToggleReader('invoice_reminders');
+  let toggledOffSkipped = 0;
+
   const [pendingSnap, partialSnap] = await Promise.all([
-    db.collection('invoices').where('status', '==', 'Pending').get(),
-    db.collection('invoices').where('status', '==', 'Partial').get(),
+    scoped(db.collection('invoices').where('status', '==', 'Pending')).get(),
+    scoped(db.collection('invoices').where('status', '==', 'Partial')).get(),
   ]);
   const invoiceDocs = [...pendingSnap.docs, ...partialSnap.docs];
   let overdueMarked = 0, remindersSent = 0, reminder25Sent = 0, reminderLastDaySent = 0;
@@ -493,11 +636,18 @@ async function runInvoiceReminders() {
 
   for (const doc of invoiceDocs) {
     const invoice = doc.data();
+    if (invoice.businessId && suspendedBusinessIds.has(invoice.businessId)) { suspendedSkipped++; continue; }
+    if (!(await remindersEnabledFor(invoice.teamId))) { toggledOffSkipped++; continue; }
     if (!invoice.dueDate) continue;
     const dueDate: Date = invoice.dueDate.toDate ? invoice.dueDate.toDate() : new Date(invoice.dueDate);
     const invoiceLabel = invoice.invoiceNumber || doc.id.slice(0, 8).toUpperCase();
 
-    if (dueDate < now) {
+    // An invoice is overdue only once its due DAY has ended in the tenant's
+    // zone. `dueDate` is a local-midnight instant and this job ticks at 10:00
+    // Tirane, so a bare `dueDate < now` flagged the invoice — and mailed the
+    // creator "🔴 Faturë e skaduar" — on the morning of the day it was due,
+    // while the client still had the whole day to pay.
+    if (endOfBillingDay(dueDate) < now) {
       ops.push(doc.ref.update({ status: 'Overdue', updatedAt: admin.firestore.Timestamp.now() }));
       overdueMarked++;
       if (invoice.createdByUserId) {
@@ -533,11 +683,13 @@ async function runInvoiceReminders() {
     // The flag is filtered CLIENT-SIDE, not with `where(flagField,'==',false)`:
     // Firestore equality never matches a document where the field is absent, so
     // legacy/WHMCS invoices that predate these flags were silently never reminded.
-    const recurringSnap = await db.collection('invoices').where('autoGenerated', '==', true).where('status', '==', 'Pending').get();
+    const recurringSnap = await scoped(db.collection('invoices').where('autoGenerated', '==', true).where('status', '==', 'Pending')).get();
     const reminderOps: Promise<any>[] = [];
 
     for (const doc of recurringSnap.docs) {
       const invoice = doc.data();
+      if (invoice.businessId && suspendedBusinessIds.has(invoice.businessId)) { suspendedSkipped++; continue; }
+      if (!(await remindersEnabledFor(invoice.teamId))) { toggledOffSkipped++; continue; }
       if (invoice[flagField] === true) continue;
       if (!invoice.customerId) continue;
       const invoiceLabel = invoice.invoiceNumber || doc.id.slice(0, 8).toUpperCase();
@@ -558,7 +710,7 @@ async function runInvoiceReminders() {
     await settleAll(reminderOps, 'invoice-reminders-recurring');
   }
 
-  return { overdueMarked, remindersSent, reminder25Sent, reminderLastDaySent };
+  return { overdueMarked, remindersSent, reminder25Sent, reminderLastDaySent, suspendedSkipped, toggledOffSkipped, scopedTo: scopeId };
 }
 
 // ── JOB: overdue-reminders ───────────────────────────────────────────────────
@@ -573,25 +725,40 @@ async function runInvoiceReminders() {
 //     settings panel can show why nothing went out. Never add a filter inline.
 // Runs every ~2h from the VPS; the local send window (default 09–19
 // Europe/Tirane) is what keeps a 3 a.m. tick from messaging anyone.
-async function runOverdueReminders() {
+async function runOverdueReminders(opts?: { businessId?: string | null }) {
   const transporter = makeTransporter();
   const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const now = Date.now();
+
+  // Same law as `recurring-invoices` / `invoice-reminders`: this job EMAILS and
+  // WhatsApps customers, so a manual trigger runs inside the caller's tenant
+  // only. Unscoped, one tenant's Admin dunned every other tenant's clients.
+  const scopeId = opts?.businessId || null;
+  const scoped = <T extends FirebaseFirestore.Query>(q: T): T =>
+    (scopeId ? q.where('businessId', '==', scopeId) : q) as T;
+
+  // A suspended tenant must not keep chasing its customers in our name.
+  const suspendedBusinessIds = new Set<string>();
+  try {
+    const suspSnap = await db.collection('businesses').where('status', '==', 'suspended').get();
+    suspSnap.docs.forEach(d => suspendedBusinessIds.add(d.id));
+  } catch { /* a failed lookup must not stop reminders for everyone else */ }
+  let suspendedSkipped = 0;
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
   const EMAIL_RENOTIFY_DAYS = 7;
   const MAX_PRE_DUE_DAYS = 30; // == INVOICE_WA_LIMITS.preDueDays.max
 
   // Overdue invoices (email + WA 'overdue' stage) …
-  const overdueSnap = await db.collection('invoices').where('status', '==', 'Overdue').get();
+  const overdueSnap = await scoped(db.collection('invoices').where('status', '==', 'Overdue')).get();
   // … plus open invoices whose due date is within the widest pre-due window
   // (WA 'pre-due' / 'due' stages; a Partial one past due also reaches the
   // 'overdue' stage here — it never flips to Overdue). Index: (status, dueDate).
   const horizon = admin.firestore.Timestamp.fromMillis(now + MAX_PRE_DUE_DAYS * 86_400_000);
   let openSnapDocs: admin.firestore.QueryDocumentSnapshot[] = [];
   try {
-    const openSnap = await db.collection('invoices')
+    const openSnap = await scoped(db.collection('invoices')
       .where('status', 'in', ['Pending', 'Partial'])
-      .where('dueDate', '<=', horizon)
+      .where('dueDate', '<=', horizon))
       .get();
     openSnapDocs = openSnap.docs;
   } catch (err: any) {
@@ -644,6 +811,7 @@ async function runOverdueReminders() {
 
   for (const doc of invoiceDocs) {
     const inv = doc.data();
+    if (inv.businessId && suspendedBusinessIds.has(inv.businessId)) { suspendedSkipped++; continue; }
     if (!inv.customerId) continue;
     const customer = await getCustomer(inv.customerId);
     const settings = inv.teamId ? await getTeamSettings(inv.teamId) : null;
@@ -661,7 +829,14 @@ async function runOverdueReminders() {
         const dueDate = dueMs ? new Date(dueMs) : new Date();
         const { html } = buildInvoiceEmail({
           customerName: customer.name || 'Klient', invoiceNumber: invoiceLabel,
-          amount: inv.total || inv.amount || 0, dueDate, projectName: '', type: 'reminder2',
+          // `paidAmount` is NOT optional here: without it `_invoiceEmail.ts`
+          // computes `settled = 0`, drops the "Paguar deri tani" row and dunned
+          // the customer for the GROSS total — money they had already paid.
+          amount: inv.total || inv.amount || 0, paidAmount: inv.paidAmount || 0,
+          // `reminder2` is the FINAL NOTICE for the due day ("skadon sot"). This
+          // job chases invoices that are ALREADY late, so it told a customer 45
+          // days overdue that the deadline expired today — every single week.
+          dueDate, projectName: '', type: 'overdue', daysOverdue,
           currency: inv.currency || 'ALL', paymentMethod: inv.paymentMethod,
           bankName: inv.bankName, bankIBAN: inv.bankIBAN, bankSWIFT: inv.bankSWIFT,
           bankAccountHolder: inv.bankAccountHolder, bankCountry: inv.bankCountry,
@@ -769,11 +944,13 @@ async function runOverdueReminders() {
   }
 
   await settleAll(ops, 'overdue-reminders');
-  return { emailsSent, waSent, waBlocked };
+  return { emailsSent, waSent, waBlocked, suspendedSkipped, scopedTo: scopeId };
 }
 
 // ── JOB: recurring-tasks ─────────────────────────────────────────────────────
 async function runRecurringTasks() {
+  const recurrenceEnabledFor = cronToggleReader('recurring_tasks');
+  let toggledOffSkipped = 0;
   const now = new Date();
   const tasksSnap = await db.collection('tasks').where('isRecurring', '==', true).get();
   let created = 0;
@@ -798,6 +975,7 @@ async function runRecurringTasks() {
   const bizCache = new Map<string, string | null>();
   for (const doc of tasksSnap.docs) {
     const task = doc.data();
+    if (!(await recurrenceEnabledFor(task.teamId))) { toggledOffSkipped++; continue; }
     // Self-heal: a recurring task must carry businessId or it disappears from the
     // business-scoped list & calendar. If it's missing, derive it from the project
     // (or team) and patch the source so it (and every future cycle) stays visible.
@@ -903,7 +1081,7 @@ async function runRecurringTasks() {
   }
 
   await settleAll(ops, 'recurring-tasks');
-  return { created, skippedDuplicate };
+  return { created, skippedDuplicate, toggledOffSkipped };
 }
 
 // ── helpers for recurring-invoices ───────────────────────────────────────────
@@ -919,12 +1097,7 @@ const PERMANENT_INVOICE_BLOCKS = ['series-ended', 'project-also-bills'];
 
 /** Add `months`, preserving the day-of-month and clamping instead of overflowing. */
 function addInvoiceMonthsClamped(from: Date, months: number, anchorDay?: number): Date {
-  const day = anchorDay ?? from.getDate();
-  const out = new Date(from.getFullYear(), from.getMonth() + months, 1,
-    from.getHours(), from.getMinutes(), from.getSeconds(), from.getMilliseconds());
-  const lastDayOfTarget = new Date(out.getFullYear(), out.getMonth() + 1, 0).getDate();
-  out.setDate(Math.min(day, lastDayOfTarget));
-  return out;
+  return addZonedMonthsClamped(from, months, anchorDay);
 }
 
 /**
@@ -934,40 +1107,35 @@ function addInvoiceMonthsClamped(from: Date, months: number, anchorDay?: number)
  * three days early for the rest of its life. Mirrors `resolveInvoiceAnchorDay`.
  */
 function resolveInvoiceAnchorDay(invoice: any, scheduled: Date): number {
-  const n = Math.round(Number(invoice?.recurringAnchorDay));
+  const raw = invoice?.recurringAnchorDay;
+  const n = raw == null || raw === '' ? NaN : Math.round(Number(raw));
   if (Number.isFinite(n) && n >= 1 && n <= 31) return n;
-  return scheduled.getDate();
+  return zonedParts(scheduled).day;
 }
 
 /** The due date one full cycle after `fromDate`. Never `setMonth(+1)`. */
 function nextInvoiceDueDate(fromDate: Date, frequency: string, anchorDay?: number): Date {
-  if (frequency === 'weekly') {
-    const w = new Date(fromDate);
-    w.setDate(w.getDate() + 7);
-    return w;
-  }
+  if (frequency === 'weekly') return addZonedDays(fromDate, 7);
   if (frequency === 'yearly') return addInvoiceMonthsClamped(fromDate, 12, anchorDay);
   if (frequency === 'quarterly') return addInvoiceMonthsClamped(fromDate, 3, anchorDay);
   return addInvoiceMonthsClamped(fromDate, 1, anchorDay);
 }
 
 function startOfInvoiceWeek(d: Date): Date {
-  const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const dow = out.getDay(); // 0 = Sunday
-  out.setDate(out.getDate() - (dow === 0 ? 6 : dow - 1));
-  return out;
+  return startOfZonedWeek(d);
 }
 
 /** Idempotency token: one occurrence per (parent invoice, period key). */
 function invoiceBillingPeriodKey(frequency: string, at: Date): string {
   const p2 = (n: number) => String(n).padStart(2, '0');
   if (frequency === 'weekly') {
-    const m = startOfInvoiceWeek(at);
-    return `W${m.getFullYear()}-${p2(m.getMonth() + 1)}-${p2(m.getDate())}`;
+    const m = zonedParts(startOfInvoiceWeek(at));
+    return `W${m.year}-${p2(m.month + 1)}-${p2(m.day)}`;
   }
-  if (frequency === 'quarterly') return `Q${at.getFullYear()}-${Math.floor(at.getMonth() / 3) + 1}`;
-  if (frequency === 'yearly') return `Y${at.getFullYear()}`;
-  return `${at.getFullYear()}-${p2(at.getMonth() + 1)}`;
+  const z = zonedParts(at);
+  if (frequency === 'quarterly') return `Q${z.year}-${Math.floor(z.month / 3) + 1}`;
+  if (frequency === 'yearly') return `Y${z.year}`;
+  return `${z.year}-${p2(z.month + 1)}`;
 }
 
 /**
@@ -988,7 +1156,7 @@ function invoicePeriodsSkipped(scheduled: Date, frequency: string, now: Date, an
   if (scheduled >= now) return 0;
   let count = 0;
   let cursor = new Date(scheduled);
-  const anchor = anchorDay ?? scheduled.getDate();
+  const anchor = anchorDay ?? zonedParts(scheduled).day;
   const nowKey = invoiceBillingPeriodKey(frequency, now);
   while (invoiceBillingPeriodKey(frequency, cursor) !== nowKey && count < 600) {
     cursor = nextInvoiceDueDate(cursor, frequency, anchor);
@@ -1084,27 +1252,26 @@ const TERMINAL_PROJECT_STATUSES = ['Cancelled', 'Archived'];
 const PERMANENT_BILLING_BLOCKS = ['terminal-status', 'series-ended'];
 
 function startOfBillingWeek(d: Date): Date {
-  const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const dow = out.getDay(); // 0 = Sunday
-  out.setDate(out.getDate() - (dow === 0 ? 6 : dow - 1));
-  return out;
+  return startOfZonedWeek(d);
 }
 
 function projectBillingPeriodKey(frequency: string, at: Date): string {
   const p2 = (n: number) => String(n).padStart(2, '0');
   if (frequency === 'weekly') {
-    const m = startOfBillingWeek(at);
-    return `W${m.getFullYear()}-${p2(m.getMonth() + 1)}-${p2(m.getDate())}`;
+    const m = zonedParts(startOfBillingWeek(at));
+    return `W${m.year}-${p2(m.month + 1)}-${p2(m.day)}`;
   }
-  return `${at.getFullYear()}-${p2(at.getMonth() + 1)}`;
+  const z = zonedParts(at);
+  return `${z.year}-${p2(z.month + 1)}`;
 }
 
 function projectBillingPeriodEnd(frequency: string, at: Date): Date {
   if (frequency === 'weekly') {
-    const m = startOfBillingWeek(at);
-    return new Date(m.getFullYear(), m.getMonth(), m.getDate() + 6, 23, 59, 59, 999);
+    const m = zonedParts(startOfBillingWeek(at));
+    return zonedDate(m.year, m.month, m.day + 6, 23, 59, 59, 999);
   }
-  return new Date(at.getFullYear(), at.getMonth() + 1, 0, 23, 59, 59, 999);
+  const z = zonedParts(at);
+  return zonedDate(z.year, z.month, daysInZonedMonth(z.year, z.month), 23, 59, 59, 999);
 }
 
 /**
@@ -1115,11 +1282,13 @@ function projectBillingPeriodEnd(frequency: string, at: Date): Date {
 function projectPeriodsSkipped(frequency: string, lastPeriodKey: string | undefined | null, now: Date, maxLookback = 24): number {
   if (!lastPeriodKey) return 0;
   if (projectBillingPeriodKey(frequency, now) === lastPeriodKey) return 0;
-  let cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const start = zonedParts(now);
+  let cursor = zonedDate(start.year, start.month, start.day);
   for (let i = 0; i < maxLookback; i++) {
+    const c = zonedParts(cursor);
     cursor = frequency === 'weekly'
-      ? new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() - 7)
-      : new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
+      ? zonedDate(c.year, c.month, c.day - 7)
+      : zonedDate(c.year, c.month - 1, 1);
     if (projectBillingPeriodKey(frequency, cursor) === lastPeriodKey) return i;
   }
   return 0;
@@ -1430,8 +1599,28 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
       }));
     }
 
-    // Send invoice email to customer
-    if (transporter && smtpUser && invoice.customerId) {
+    // Send invoice email to customer.
+    //
+    // NEVER mail a 0-value invoice. Part 2 has refused this since the finance
+    // audit — a parent whose lines were cleared (or whose price lives only in
+    // attached services) otherwise mailed the client a "Pending 0 L" invoice
+    // every single period. The occurrence is still created and still claims its
+    // period; only the email is withheld, and the owner is told why.
+    const occurrenceAmount = Number(invoice.total ?? invoice.amount ?? 0) || 0;
+    if (occurrenceAmount <= 0 && invoice.createdByUserId) {
+      ops.push(notifyUser({
+        userId: invoice.createdByUserId,
+        type: 'auto_invoice_created',
+        title: `⚠️ Faturë periodike me vlerë 0: #${invoiceNumber}`,
+        message: 'Fatura u krijua por NUK iu dërgua klientit sepse vlera është 0. Kontrollo artikujt ose çmimin e serisë.',
+        actionUrl: '/app/invoices',
+        actionLabel: 'Shiko Faturat',
+        businessId: invoice.businessId ?? null,
+        teamId: invoice.teamId ?? null,
+        customerId: invoice.customerId ?? null,
+      }));
+    }
+    if (occurrenceAmount > 0 && transporter && smtpUser && invoice.customerId) {
       try {
         const customerDoc = await db.collection('customers').doc(invoice.customerId).get();
         const customer = customerDoc.data();
@@ -1514,6 +1703,12 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
         legacyOps.push(projectDoc.ref.update({
           isRecurring: false,
           recurringBillingStoppedReason: block,
+          // Remember that this WAS a retainer, exactly as `archiveProjectPatch`
+          // does. Without the token, setting a project to Cancelled and then
+          // reopening it gave back a project that silently never billed again —
+          // the hazard src/lib/projectArchive.ts exists for, which until now was
+          // only handled on the Archived path.
+          ...(project.isRecurring ? { wasRecurringBeforeArchive: true } : {}),
           updatedAt: admin.firestore.Timestamp.now(),
         }));
       }
@@ -1794,27 +1989,23 @@ const SUPPORTED_EXPENSE_FREQUENCIES = ['weekly', 'monthly', 'quarterly', 'yearly
 function expensePeriodKey(frequency: string, at: Date): string {
   const p2 = (n: number) => String(n).padStart(2, '0');
   if (frequency === 'weekly') {
-    const m = startOfBillingWeek(at);
-    return `W${m.getFullYear()}-${p2(m.getMonth() + 1)}-${p2(m.getDate())}`;
+    const m = zonedParts(startOfBillingWeek(at));
+    return `W${m.year}-${p2(m.month + 1)}-${p2(m.day)}`;
   }
-  if (frequency === 'yearly') return `Y${at.getFullYear()}`;
-  if (frequency === 'quarterly') return `Q${at.getFullYear()}-${Math.floor(at.getMonth() / 3) + 1}`;
-  return `${at.getFullYear()}-${p2(at.getMonth() + 1)}`;
+  const z = zonedParts(at);
+  if (frequency === 'yearly') return `Y${z.year}`;
+  if (frequency === 'quarterly') return `Q${z.year}-${Math.floor(z.month / 3) + 1}`;
+  return `${z.year}-${p2(z.month + 1)}`;
 }
 
 /** +N months without the setMonth overflow (31 Jan → 28 Feb, never 3 Mar). */
 function addMonthsClamped(from: Date, months: number, anchorDay?: number): Date {
-  const day = anchorDay ?? from.getDate();
-  const out = new Date(from.getFullYear(), from.getMonth() + months, 1,
-    from.getHours(), from.getMinutes(), from.getSeconds(), from.getMilliseconds());
-  const lastDay = new Date(out.getFullYear(), out.getMonth() + 1, 0).getDate();
-  out.setDate(Math.min(day, lastDay));
-  return out;
+  return addZonedMonthsClamped(from, months, anchorDay);
 }
 
 function nextExpenseOccurrence(from: Date, frequency: string, anchorDay?: number): Date {
-  if (frequency === 'weekly') { const o = new Date(from); o.setDate(o.getDate() + 7); return o; }
-  if (frequency === 'yearly') { const o = new Date(from); o.setFullYear(o.getFullYear() + 1); return o; }
+  if (frequency === 'weekly') return addZonedDays(from, 7);
+  if (frequency === 'yearly') return addZonedYears(from, 1);
   // Quarterly goes through the clamped adder too: 30 Nov + 3 months must be
   // 28/29 Feb, never 2 Mar.
   if (frequency === 'quarterly') return addMonthsClamped(from, 3, anchorDay);
@@ -1847,16 +2038,34 @@ function expenseGenerationBlockReason(expense: any, now: Date): string | null {
 }
 
 // ── JOB: recurring-expenses ──────────────────────────────────────────────────
-async function runRecurringExpenses() {
+async function runRecurringExpenses(opts?: { businessId?: string | null }) {
   const now = new Date();
-  const expensesSnap = await db.collection('expenses').where('isRecurring', '==', true).get();
-  if (expensesSnap.empty) return { created: 0, healed: 0, ended: 0 };
+
+  // A manual run stays inside the caller's tenant: this job WRITES rows into a
+  // tenant's books and notifies their staff (bell + push + email), so an
+  // unscoped manual trigger let one Admin book costs for every other tenant.
+  const scopeId = opts?.businessId || null;
+  const scoped = <T extends FirebaseFirestore.Query>(q: T): T =>
+    (scopeId ? q.where('businessId', '==', scopeId) : q) as T;
+
+  // A suspended tenant must not keep accruing costs and notifications. The
+  // Admin SDK bypasses `tenantActive()`, so the exclusion belongs here.
+  const suspendedBusinessIds = new Set<string>();
+  try {
+    const suspSnap = await db.collection('businesses').where('status', '==', 'suspended').get();
+    suspSnap.docs.forEach(d => suspendedBusinessIds.add(d.id));
+  } catch { /* a failed lookup must not stop generation for everyone else */ }
+  let suspendedSkipped = 0;
+
+  const expensesSnap = await scoped(db.collection('expenses').where('isRecurring', '==', true)).get();
+  if (expensesSnap.empty) return { created: 0, healed: 0, ended: 0, suspendedSkipped, scopedTo: scopeId };
 
   let created = 0, healed = 0, ended = 0;
   const ops: Promise<any>[] = [];
 
   for (const doc of expensesSnap.docs) {
     const expense = doc.data();
+    if (expense.businessId && suspendedBusinessIds.has(expense.businessId)) { suspendedSkipped++; continue; }
     const frequency: string = expense.recurringFrequency || 'monthly';
     const reason = expenseGenerationBlockReason(expense, now);
 
@@ -1869,10 +2078,19 @@ async function runRecurringExpenses() {
       const ownRaw: Date = rawOwn?.toDate ? rawOwn.toDate() : (rawOwn ? new Date(rawOwn) : now);
       const own = isNaN(ownRaw.getTime()) ? now : ownRaw;
       const anchor = own > now ? own : now;
-      const seeded = nextExpenseOccurrence(anchor, frequency, own.getDate());
+      // An EXISTING anchor is never rewritten. `own.getDate()` is the parent's
+      // own day read in whatever zone the process runs in, so healing a 31st
+      // series degraded it to the 30th for good — the exact drift the anchor
+      // exists to prevent. Only a series that never had one gets a fresh anchor,
+      // and that one is read in the business zone.
+      const storedAnchorRaw = Number(expense.recurringAnchorDay);
+      const storedAnchor = Number.isFinite(storedAnchorRaw) && storedAnchorRaw >= 1 && storedAnchorRaw <= 31
+        ? Math.round(storedAnchorRaw) : null;
+      const healAnchor = storedAnchor ?? zonedParts(own).day;
+      const seeded = nextExpenseOccurrence(anchor, frequency, healAnchor);
       ops.push(doc.ref.update({
         nextRecurringDate: admin.firestore.Timestamp.fromDate(seeded),
-        recurringAnchorDay: own.getDate(),
+        recurringAnchorDay: healAnchor,
         // The current period is already on the books (or deliberately not being
         // backfilled) — record it so the heal can never create a row for it.
         lastGeneratedPeriodKey: expensePeriodKey(frequency, anchor),
@@ -1979,7 +2197,7 @@ async function runRecurringExpenses() {
   }
 
   await settleAll(ops, 'recurring-expenses');
-  return { created, healed, ended };
+  return { created, healed, ended, suspendedSkipped, scopedTo: scopeId };
 }
 
 // ── JOB: expire-invitations ───────────────────────────────────────────────────
@@ -4050,6 +4268,109 @@ async function runBackfillMemberKeys(opts?: { dryRun?: boolean }) {
   return { total: snap.size, alreadyKeyed, reKeyed, dedupedDuplicates, skippedIncomplete, errors, dryRun: !!opts?.dryRun };
 }
 
+// ── JOB: backfill-member-compensation ────────────────────────────────────────
+// Copy `monthlySalary`, `salaryHistory` and `hourlyCostRate` out of every
+// `teamMembers` row into `teamMemberComp/{teamId}_{userId}`.
+//
+// WHY: `teamMembers` is readable by the whole business (the roster is), so every
+// employee could read every colleague's salary with one query. The new
+// collection is restricted to the member themselves plus the tenant's
+// admins/managers (firestore.rules).
+//
+// THIS JOB DOES NOT TOUCH THE ORIGINALS. The app is in a DUAL-READ / DUAL-WRITE
+// period: the comp document wins where it exists, the legacy fields are the
+// fallback (src/lib/finance/compensation.ts, mirrored in project-spend-rollup).
+// Clearing the legacy fields is a separate, later step — see the runbook comment
+// above the `teamMembers` read rule in firestore.rules. Reverse that order and
+// either payroll breaks or the leak stays open.
+//
+// Idempotent and SAFE TO RUN TWICE: a member that already has a comp document is
+// skipped, never overwritten — a second run must not undo an edit made in the
+// app after the first one. Super-admin only (it reads every tenant's pay).
+async function runBackfillMemberCompensation(opts?: { dryRun?: boolean }) {
+  const [membersSnap, compSnap] = await Promise.all([
+    db.collection('teamMembers').get(),
+    db.collection('teamMemberComp').get(),
+  ]);
+
+  const existing = new Set<string>(compSnap.docs.map((d) => d.id));
+  let written = 0, skippedExisting = 0, skippedNoPay = 0, skippedIncomplete = 0;
+  const errors: string[] = [];
+  const now = admin.firestore.Timestamp.now();
+
+  let batch = db.batch();
+  let pending = 0;
+  const flush = async () => {
+    if (!pending) return;
+    await batch.commit();
+    batch = db.batch();
+    pending = 0;
+  };
+
+  for (const d of membersSnap.docs) {
+    const data = d.data() as any;
+    const teamId = data.teamId as string | undefined;
+    const uid = data.userId as string | undefined;
+    // The document id IS the data model here (it mirrors the membership id and
+    // the rules pin it), so a row missing either half has no home to move to.
+    // `backfill-member-keys` is the job that repairs those.
+    if (!teamId || !uid) { skippedIncomplete++; continue; }
+
+    const targetId = `${teamId}_${uid}`;
+    if (existing.has(targetId)) { skippedExisting++; continue; }
+
+    const hasHistory = Array.isArray(data.salaryHistory) && data.salaryHistory.length > 0;
+    const hasPay = data.monthlySalary !== undefined || data.hourlyCostRate !== undefined || hasHistory;
+    // No pay recorded → no document. An empty row would still be a row the
+    // dual-read has to merge, and it says nothing the fallback does not.
+    if (!hasPay) { skippedNoPay++; continue; }
+
+    if (opts?.dryRun) { written++; continue; }
+
+    try {
+      batch.set(db.collection('teamMemberComp').doc(targetId), {
+        businessId: data.businessId ?? null,
+        teamId,
+        userId: uid,
+        ...(data.monthlySalary !== undefined ? { monthlySalary: data.monthlySalary } : {}),
+        ...(hasHistory ? { salaryHistory: data.salaryHistory } : {}),
+        ...(data.hourlyCostRate !== undefined ? { hourlyCostRate: data.hourlyCostRate } : {}),
+        backfilledFrom: d.id,
+        createdAt: now,
+        updatedAt: now,
+        updatedByUserId: null,
+      });
+      existing.add(targetId);
+      written++;
+      pending++;
+      if (pending >= 400) await flush();
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      console.error(`[backfill-member-compensation] ${d.id} failed:`, msg);
+      errors.push(`${d.id}: ${msg.slice(0, 200)}`);
+    }
+  }
+
+  try {
+    await flush();
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    console.error('[backfill-member-compensation] final commit failed:', msg);
+    errors.push(`commit: ${msg.slice(0, 200)}`);
+  }
+
+  return {
+    total: membersSnap.size,
+    written,
+    skippedExisting,
+    skippedNoPay,
+    skippedIncomplete,
+    errors,
+    dryRun: !!opts?.dryRun,
+    note: 'Legacy teamMembers fields are left untouched on purpose (dual read).',
+  };
+}
+
 // ── JOB: tenant-usage-rollup (platform console: is this tenant alive?) ───────
 // Writes `businesses.usage` so the console can tell an engaged trial from a dead one,
 // and see which tenant's volume drives platform cost — WITHOUT the operator's browser
@@ -4271,6 +4592,10 @@ const TENANT_DATA_COLLECTIONS = [
   // Portal login records (client emails), staff profiles, per-tenant social OAuth
   // tokens, and the expense-dedupe archive — all businessId-stamped PII/credentials.
   'clientPortalAccess', 'userProfiles', 'socialAccounts', 'expenseDeduped',
+  // Compensation, split out of `teamMembers` (which is already covered via
+  // BACKFILL_COLLECTIONS). Salaries are a tenant's data like any other: they must
+  // travel with an export and be erased with a deletion.
+  'teamMemberComp',
 ];
 
 /**
@@ -5282,10 +5607,33 @@ async function runProjectSpendRollup(opts?: { full?: boolean }) {
   let expenseDocs: admin.firestore.QueryDocumentSnapshot[];
   let mode: 'full' | 'incremental' = 'full';
 
-  const [membersSnap, tsSnap] = await Promise.all([
+  // The cursor is stamped BEFORE the first read, never after. Taken afterwards,
+  // anything written while this run was scanning fell into neither this run's
+  // result set nor the next run's `updatedAt > lastRunAt` window, and was simply
+  // lost until the weekly full pass.
+  const scanStartedAt = admin.firestore.Timestamp.now();
+
+  // `teamMemberComp` is ONE extra collection read per run (not per member): pay
+  // moved out of `teamMembers`, which the whole business may read. Dual read —
+  // the comp document wins where it exists, the legacy fields are the fallback —
+  // mirroring src/lib/finance/compensation.ts. Keep the two in sync.
+  const [membersSnap, tsSnap, compSnap] = await Promise.all([
     db.collection('teamMembers').get(),
     db.collection('teamSettings').get(),
+    db.collection('teamMemberComp').get(),
   ]);
+  // Keyed by the document id AND by `{teamId}_{userId}` rebuilt from the row's own
+  // fields: a legacy membership created with addDoc carries a random id, so
+  // neither key alone can be trusted to match (see indexCompensation).
+  const compByKey = new Map<string, any>();
+  for (const d of compSnap.docs) {
+    const c = d.data() as any;
+    compByKey.set(d.id, c);
+    const derived = `${c.teamId || ''}_${c.userId || ''}`;
+    if (derived !== '_' && !compByKey.has(derived)) compByKey.set(derived, c);
+  }
+  const compFor = (memberId: string, d: any) =>
+    compByKey.get(`${d.teamId || ''}_${d.userId || ''}`) || compByKey.get(memberId) || null;
 
   if (lastRunAt) {
     mode = 'incremental';
@@ -5306,7 +5654,7 @@ async function runProjectSpendRollup(opts?: { full?: boolean }) {
     }
     for (const d of dirtyProjects.docs) projectIds.add(d.id);
     if (projectIds.size === 0) {
-      await stateRef.set({ lastRunAt: admin.firestore.Timestamp.now() }, { merge: true });
+      await stateRef.set({ lastRunAt: scanStartedAt }, { merge: true });
       return { updated: 0, projects: 0, mode, skipped: 'no-changes' };
     }
     // Recompute those projects from their COMPLETE history (totals must stay absolute,
@@ -5361,9 +5709,15 @@ async function runProjectSpendRollup(opts?: { full?: boolean }) {
   const costByUser = new Map<string, number>();
   for (const m of membersSnap.docs) {
     const d = m.data();
-    const rate = (d.hourlyCostRate && d.hourlyCostRate > 0)
-      ? d.hourlyCostRate
-      : (d.monthlySalary && d.monthlySalary > 0 ? d.monthlySalary / 160 : 0);
+    // Dual read: the comp document states a field or says nothing about it
+    // (`undefined`); an explicit `null` is a deliberate clear and must NOT fall
+    // back to the legacy value (mergeMemberCompensation has the same rule).
+    const c = compFor(m.id, d) || {};
+    const hourly = c.hourlyCostRate === undefined ? d.hourlyCostRate : (c.hourlyCostRate ?? undefined);
+    const salary = c.monthlySalary === undefined ? d.monthlySalary : (c.monthlySalary ?? undefined);
+    const rate = (hourly && hourly > 0)
+      ? hourly
+      : (salary && salary > 0 ? salary / 160 : 0);
     if (d.userId) costByUser.set(d.userId, rate);
   }
   const billByUser = new Map<string, number>();
@@ -5424,7 +5778,9 @@ async function runProjectSpendRollup(opts?: { full?: boolean }) {
   }
   await settleAll(ops, 'project-spend-rollup');
   await stateRef.set(
-    mode === 'full' ? { lastRunAt: now, lastFullRunAt: now } : { lastRunAt: now },
+    mode === 'full'
+      ? { lastRunAt: scanStartedAt, lastFullRunAt: scanStartedAt }
+      : { lastRunAt: scanStartedAt },
     { merge: true },
   );
   return { updated, projects: projectsSnap.size, mode };
@@ -5515,9 +5871,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'task-reminders':
         result = await runTaskReminders();
         break;
-      case 'invoice-reminders':
-        result = await runInvoiceReminders();
+      case 'invoice-reminders': {
+        // Any job that SENDS something to a customer runs inside ONE tenant when
+        // it is triggered by hand — see `recurring-invoices` below for the law.
+        const scopeId = await manualScopeId(req, isManual);
+        if (scopeId === MANUAL_SCOPE_UNRESOLVED) {
+          return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — kujtesat manuale u ndalën.' });
+        }
+        result = await runInvoiceReminders({ businessId: scopeId });
         break;
+      }
       case 'recurring-tasks':
         result = await runRecurringTasks();
         break;
@@ -5552,6 +5915,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
         }
         result = await runBackfillMemberKeys({ dryRun: req.query.dryRun === '1' });
+        break;
+      }
+      case 'backfill-member-compensation': {
+        // Reads every tenant's pay, so super-admin only — same gate as
+        // tenant-export / backfill-member-keys. Idempotent; safe to run twice.
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runBackfillMemberCompensation({ dryRun: req.query.dryRun === '1' });
         break;
       }
       case 'backfill-customerid':
@@ -5640,9 +6012,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'goal-overdue-alerts':
         result = await runGoalOverdueAlerts();
         break;
-      case 'recurring-expenses':
-        result = await runRecurringExpenses();
+      case 'recurring-expenses': {
+        const scopeId = await manualScopeId(req, isManual);
+        if (scopeId === MANUAL_SCOPE_UNRESOLVED) {
+          return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — gjenerimi manual u ndal.' });
+        }
+        result = await runRecurringExpenses({ businessId: scopeId });
         break;
+      }
       case 'expire-invitations':
         result = await runExpireInvitations();
         break;
@@ -5688,9 +6065,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'lead-wa-auto-reminders':
         result = await runLeadWhatsappAutoReminders();
         break;
-      case 'overdue-reminders':
-        result = await runOverdueReminders();
+      case 'overdue-reminders': {
+        const scopeId = await manualScopeId(req, isManual);
+        if (scopeId === MANUAL_SCOPE_UNRESOLVED) {
+          return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — kujtesat manuale u ndalën.' });
+        }
+        result = await runOverdueReminders({ businessId: scopeId });
         break;
+      }
       case 'whmcs-sync':
         result = await runWhmcsSync();
         break;
@@ -5825,6 +6207,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       case 'run-all': {
+        // `run-all` is the PLATFORM's scheduled tick: every job inside it runs
+        // unscoped, across all tenants. That is correct for the cron (no
+        // Authorization header, `authorize()` with CRON_SECRET) and a hole for a
+        // manual trigger — `authorizeManual` accepts any Admin/Owner of any
+        // team, so a tenant pressing this would have side-stepped every
+        // per-job tenant scope below it and mailed every tenant's customers.
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'run-all është punë e platformës — nisni punët një nga një nga Cilësimet.' });
+        }
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
         const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, campaignSteps, whmcs, inquiryReminders, projectRollup, leadCadence, subscriptions, reportSchedules, reportReminders, tenantUsage, platformMetricsRun, notifCleanup] = await Promise.allSettled([
           runTaskDeadlineAlerts(),

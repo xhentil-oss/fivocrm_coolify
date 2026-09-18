@@ -8,8 +8,10 @@ import { Badge } from '../../components/ui/badge';
 import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles, Calculator, ArrowRight, MessageCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useToast } from '../../hooks/use-toast';
-import { toAll, currencySymbol } from '../../lib/utils';
+import { currencySymbol } from '../../lib/utils';
+import { getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../../lib/finance/financialAnalytics';
 import { DashboardSkeleton } from './PortalSkeletons';
+import { CLIENT_VISIBLE_QUOTE_STATUSES } from '../../lib/quoteVisibility';
 import type { Invoice, InvoiceItem, Service, ClientRequest, Project, Task, Quote, Lead, ServiceInquiry } from '../../types';
 
 const QUOTES = [
@@ -153,12 +155,15 @@ const PortalDashboard: React.FC = () => {
 
   // Calculate stats
   const totalInvoices = invoices?.length || 0;
-  const pendingInvoices = invoices?.filter(i => i.status === 'Pending' || i.status === 'Overdue').length || 0;
-  // Normalize each invoice to ALL before summing (invoices may be EUR or ALL) so the
-  // fixed "ALL" label on the total is truthful.
+  // `Partial` is an OPEN invoice: it belongs in both the count and the amount owed.
+  const pendingInvoices = invoices?.filter(i => i.status === 'Pending' || i.status === 'Overdue' || i.status === 'Partial').length || 0;
+  // What the client still owes, via the canonical helper: the gross total minus
+  // what is already banked, normalised to ALL (invoices may be EUR or ALL) so the
+  // fixed "ALL" label on the total is truthful. Summing the gross of Pending and
+  // Overdue only told a client who had paid 60 000 L of a 100 000 L invoice that
+  // they owed 0, while PortalInvoicesView on the next screen showed 40 000.
   const totalOwed = invoices
-    ?.filter(i => i.status === 'Pending' || i.status === 'Overdue')
-    .reduce((sum, i) => sum + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0) || 0;
+    ?.reduce((sum, i) => sum + getInvoiceOutstandingAll(i), 0) || 0;
 
   // Get unique services purchased via invoice items
   const myServiceIds = new Set(
@@ -185,23 +190,38 @@ const PortalDashboard: React.FC = () => {
   );
 
   // Two narrowed quote queries the server RLS authorizes (by customerId, by own leadIds).
+  // The status clause is NOT optional: the portal read rule is
+  // `quoteAccessibleByPortal() && quoteVisibleToClient()`, and a list is evaluated
+  // against the QUERY SHAPE — a query constrained only on `customerId`/`leadId`
+  // cannot prove the status clause and is denied outright (the counter would read 0).
+  // The one list, imported — see PortalQuotesView.
+  // `leadIdList` is capped at 10, so the lead query expands to at most 10 x 3 = 30
+  // disjunctions — Firestore's limit.
+
   const { data: quotesByCustomer } = useCollection<Quote>('quotes', {
     skip: !customerId,
-    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
+    where: [
+      { field: 'customerId', operator: '==', value: customerId || '' },
+      { field: 'status', operator: 'in', value: CLIENT_VISIBLE_QUOTE_STATUSES },
+    ],
     skipTeamFilter: true,
   });
   const { data: quotesByLead } = useCollection<Quote>('quotes', {
     skip: leadIdList.length === 0,
-    where: [{ field: 'leadId', operator: 'in', value: leadIdList }],
+    where: [
+      { field: 'leadId', operator: 'in', value: leadIdList },
+      { field: 'status', operator: 'in', value: CLIENT_VISIBLE_QUOTE_STATUSES },
+    ],
     skipTeamFilter: true,
   });
 
   const myQuotes = React.useMemo(() => {
     const merged = [...(quotesByCustomer || []), ...(quotesByLead || [])];
     const seen = new Set<string>();
+    // No Draft filter here: both queries constrain `status in` the client-visible
+    // list server-side, so a Draft never reaches the browser at all.
     return merged
-      .filter(q => { if (seen.has(q.id)) return false; seen.add(q.id); return true; })
-      .filter(q => q.status !== 'Draft');
+      .filter(q => { if (seen.has(q.id)) return false; seen.add(q.id); return true; });
   }, [quotesByCustomer, quotesByLead]);
 
   const quotesCount = myQuotes.length;
@@ -256,16 +276,20 @@ const PortalDashboard: React.FC = () => {
     [customerProjects]
   );
 
-  // Payment history
+  // Payment history — every invoice with money against it, not only settled ones,
+  // so the list agrees with the "Totali" beside it (an instalment on a `Partial`
+  // invoice is a payment the client made and should see).
   const paidInvoices = React.useMemo(() => {
-    return invoices?.filter(i => i.status === 'Paid').sort((a, b) => {
+    return invoices?.filter(i => getInvoiceCollectedAll(i) > 0).sort((a, b) => {
       const ta = (a as any).paidAt instanceof Date ? (a as any).paidAt.getTime() : a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
       const tb = (b as any).paidAt instanceof Date ? (b as any).paidAt.getTime() : b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
       return tb - ta;
     }) || [];
   }, [invoices]);
 
-  const totalPaid = paidInvoices.reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
+  // Money actually received, across EVERY invoice — an instalment on a `Partial`
+  // invoice is paid money even though the invoice is not settled.
+  const totalPaid = (invoices || []).reduce((s, i) => s + getInvoiceCollectedAll(i), 0);
 
   const recentInvoices = invoices?.slice(0, 5) || [];
   const recentRequests = requests?.slice(0, 5) || [];
@@ -640,7 +664,7 @@ const PortalDashboard: React.FC = () => {
                       {inv.paymentMethod ? ` • ${inv.paymentMethod}` : ''}
                     </p>
                   </div>
-                  <span className="font-semibold text-green-600">{toAll(inv.total || inv.amount || 0, (inv as any).currency).toLocaleString()} ALL</span>
+                  <span className="font-semibold text-green-600">{Math.round(getInvoiceCollectedAll(inv)).toLocaleString()} ALL</span>
                 </div>
               ))}
             </div>

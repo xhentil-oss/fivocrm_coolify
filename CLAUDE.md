@@ -165,17 +165,28 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
 ### Modules (activation & SaaS plan gating)
 - **`src/lib/modules.ts` is the single source of truth** for what a module is: id,
   route(s), label, `permissionKey`, `minPlan`, `optional`, `defaultOff`, group.
-- Three gates, resolved together by `moduleBlockReason()`:
+- Four gates, resolved together by `moduleBlockReason()`, in this order:
   1. **permission** — the user's role must grant `permissionKey`;
   2. **plan** — `businesses.plan` must reach `minPlan` (`trial` ranks highest so trials
      can evaluate everything; an unknown plan is treated as trial, never as locked);
-  3. **toggle** — the path must not be in `businesses.disabledModules`.
+  3. **locked** — the path must not be in `businesses.lockedModules`: the PLATFORM's
+     entitlement layer ("what the contract includes"), written ONLY via
+     `POST /api/platform-admin` (`set-modules` / `create-tenant`); the rules deny the
+     owner any change to it (test 21b). `ModuleGate` shows "nuk përfshihet në
+     kontratën tuaj — kontaktoni FivoCRM", never a link to Cilësimet;
+  4. **toggle** — the path must not be in `businesses.disabledModules`: the OWNER's
+     own visibility choice (Cilësimet → Modulet), reversible by them.
+  Two layers on purpose: with one field the owner could re-enable whatever the
+  super-admin had switched off. `ModuleAccessEditor` (superadmin) is the one UI for
+  layer 1 — used by TenantDetailView AND CreateTenantDialog — and shows layer 2 as
+  information ("Fikur nga pronari", with a one-click "Ndize" support assist).
 - `useModules()` reads/writes that state; `<ModuleGate moduleId="…">` guards routes
   (use it **instead of** `<PermissionGate>` — the permission check is in the registry).
 - Consumers: Sidebar, MobileBottomNav, CommandPalette, TenantsView (super-admin
-  per-tenant chips), `CreateTenantDialog` (super-admin picks every module ON/OFF at
-  creation — `disabledPathsFor()` → `create-tenant` `disabledModules`; the server
-  has NO registry copy, so the client must always send the list), Cilësimet →
+  via `ModuleAccessEditor`), `CreateTenantDialog` (super-admin sets the contract's
+  modules at creation — `lockedPathsFor()` → `create-tenant` `lockedModules`, plus the
+  registry default for `disabledModules`; the server has NO registry copy, so the
+  client must always send the lists), Cilësimet →
   **Modulet** (owner self-service via `ModulesSettingsPanel`). Adding a module to
   the registry wires all of them.
 - Firestore rules only let the business **owner** write `businesses/{id}`, so a

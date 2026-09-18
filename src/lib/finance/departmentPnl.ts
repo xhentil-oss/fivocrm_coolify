@@ -26,6 +26,7 @@ import { toAll } from '../utils';
 import { parseDate, monthsElapsedInYear, MONTH_LABELS_SQ, getInvoiceCollectedBetween } from './financialAnalytics';
 import { memberSalaryForMonth } from './salaryHistory';
 import { payrollBetween } from './payroll';
+import { retainerEarningEnd, memberOnPayrollBetween } from './projectPnl';
 
 export interface DepartmentPnlOptions {
   mode?: 'all' | 'completed';
@@ -85,6 +86,8 @@ export interface DepartmentPnlResult {
 
 const CATEGORY_SALARY = 'Salary';
 const NO_DEPT = 'Pa departament';
+/** Label for recorded payroll that no active member can carry (see below). */
+export const PAYROLL_WITHOUT_MEMBER = 'Paga pa anëtar aktiv';
 
 function isCompleted(p: Project): boolean {
   return p.status === 'Completed' || (!!(p as any).isRecurring && !!(p as any).lastCompletedAt);
@@ -159,16 +162,26 @@ export function computeDepartmentPnl(
     // per-month trend. One-time projects count in the period of their date.
     if (billingTypeOf(p) === 'monthly') {
       const start = parseDate(p.createdAt) ?? periodStart;
-      const end = parseDate((p as any).lastCompletedAt) ?? periodEnd; // ongoing → now
+      // Same span as computeProjectPnl (shared helper): ends where the billing
+      // series ended, not at `lastCompletedAt`. A cancelled retainer used to
+      // keep earning its fee in every later month, here and in the trend.
+      const end = retainerEarningEnd(p, periodEnd);
       return start <= periodEnd && end >= periodStart;
     }
     return inPeriod(projectDate(p));
   });
 
-  // ── Members: period salary (history + status aware) and lookup ──
-  const activeMembers = (teamMembers ?? []).filter(m => m.status === 'Active');
+  // ── Members: period salary (history + DATE aware) and lookup ──
+  // Membership is decided by whether the person was on payroll during the
+  // period, not by today's status: filtering on `status === 'Active'` here
+  // erased a leaver's cost from every closed month's labour line the moment
+  // they were marked Inactive — the same retroactive-profit bug
+  // `memberSalaryForMonth` was fixed for, one layer up. See
+  // `memberOnPayrollBetween` (projectPnl.ts), which owns none of the rule
+  // itself and defers to salaryHistory.ts.
+  const payrollMembers = (teamMembers ?? []).filter(m => memberOnPayrollBetween(m, periodStart, periodEnd));
   const memberById = new Map<string, TeamMember>();
-  activeMembers.forEach(m => { if (m.userId) memberById.set(norm(m.userId), m); });
+  payrollMembers.forEach(m => { if (m.userId) memberById.set(norm(m.userId), m); });
 
   /** What the member PROFILES say this member costs over the period. Used as an
    *  allocation weight, not as the amount — see `memberPeriodSalary`. */
@@ -195,12 +208,19 @@ export function computeDepartmentPnl(
   // disagree. It is not read per member because a recorded row identifies its
   // person only when `memberId` is set (most carry just a name in the title),
   // so the plan salaries are used as WEIGHTS and scaled to the real total.
-  // With no plan at all, the payroll is split equally across active members —
+  // With no plan at all, the payroll is split equally across payroll members —
   // otherwise recorded payroll would vanish from every department.
-  const planTotal = activeMembers.reduce((s, m) => s + memberPlanSalary(m), 0);
+  const planTotal = payrollMembers.reduce((s, m) => s + memberPlanSalary(m), 0);
   const actualPayroll = payrollBetween(teamMembers, expenses, periodStart, periodEnd).total;
   const payrollScale = planTotal > 0 ? actualPayroll / planTotal : 0;
-  const equalShare = activeMembers.length > 0 ? actualPayroll / activeMembers.length : 0;
+  const equalShare = payrollMembers.length > 0 ? actualPayroll / payrollMembers.length : 0;
+  // With recorded salary payments but NO member on payroll to carry them (the
+  // payments went to freelancers who were never members), both
+  // weights are 0 and the whole payroll silently vanished from every department
+  // row AND from `unallocatedLabor` — which filters to active members too. A
+  // cost that matches nothing is pooled and REPORTED, exactly like
+  // `unallocatedDirect` and `unmatchedDepartmentFixed`.
+  const unattributablePayroll = payrollMembers.length === 0 && actualPayroll > 0 ? actualPayroll : 0;
 
   const memberPeriodSalary = (m: TeamMember): number => (
     planTotal > 0 ? memberPlanSalary(m) * payrollScale : equalShare
@@ -287,9 +307,11 @@ export function computeDepartmentPnl(
       return (!!done && done >= periodStart && done <= periodEnd) ? fee : 0;
     }
     const s = (parseDate(p.createdAt) ?? periodStart) > periodStart ? (parseDate(p.createdAt) as Date) : periodStart;
-    const eRaw = parseDate((p as any).lastCompletedAt) ?? periodEnd;
+    const eRaw = retainerEarningEnd(p, periodEnd);
     const e = eRaw < periodEnd ? eRaw : periodEnd;
-    const active = e >= s ? Math.min(monthsBetween(s, e), periodMonths) : 1;
+    // Ended before the period opened → nothing earned (it used to fall back to
+    // a full month of the fee).
+    const active = e >= s ? Math.min(monthsBetween(s, e), periodMonths) : 0;
     return fee * active;
   };
   const revenueByProject = new Map<string, number>(periodProjects.map(p => [p.id, revenueOf(p)]));
@@ -363,12 +385,15 @@ export function computeDepartmentPnl(
     projects: r.projects.sort((a, b) => b.profit - a.profit),
   })).sort((a, b) => b.profit - a.profit);
 
-  // ── Unallocated labor: active members on no period-project ──
-  const unallocatedMembers = activeMembers
+  // ── Unallocated labor: payroll members on no period-project ──
+  const unallocatedMembers = payrollMembers
     .filter(m => (projectCountByMember.get(norm(m.userId || '')) || 0) === 0)
     .map(m => ({ name: m.displayName || (m as any).email || 'Pa emër', cost: memberPeriodSalary(m) }))
     .filter(x => x.cost > 0)
     .sort((a, b) => b.cost - a.cost);
+  if (unattributablePayroll > 0) {
+    unallocatedMembers.push({ name: PAYROLL_WITHOUT_MEMBER, cost: unattributablePayroll });
+  }
   const unallocatedTotal = unallocatedMembers.reduce((s, x) => s + x.cost, 0);
 
   const totals = projectLines.reduce((t, l) => ({

@@ -15,6 +15,11 @@
 // `projectBillingBlockReason` in `api/cron/run.ts` — keep the two in sync.
 
 import type { Project } from '../../types';
+// Billing period keys are CALENDAR questions, so they are answered in ONE
+// declared zone. Read with the machine's getters they differed between the
+// browser (Europe/Tirane) and the cron body (Vercel, UTC) — see the note in
+// recurringUtils.ts. Mirrored in `api/cron/run.ts`.
+import { zonedParts, zonedDate, startOfZonedWeek, daysInZonedMonth } from '../recurringUtils';
 
 export type ProjectBillingFrequency = 'weekly' | 'monthly';
 
@@ -55,13 +60,9 @@ function toDate(value: unknown): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
-/** Monday 00:00 (local) of the week `d` falls in — the weekly period anchor. */
+/** Monday 00:00 (business zone) of the week `d` falls in — the weekly anchor. */
 export function startOfBillingWeek(d: Date): Date {
-  const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const dow = out.getDay();              // 0 = Sunday
-  const backToMonday = dow === 0 ? 6 : dow - 1;
-  out.setDate(out.getDate() - backToMonday);
-  return out;
+  return startOfZonedWeek(d);
 }
 
 /** The frequency a project bills on, defaulting to monthly (the legacy behaviour). */
@@ -80,19 +81,21 @@ export function projectBillingFrequency(project: Pick<Project, 'recurringFrequen
  */
 export function projectBillingPeriodKey(frequency: string, at: Date): string {
   if (frequency === 'weekly') {
-    const monday = startOfBillingWeek(at);
-    return `W${monday.getFullYear()}-${pad2(monday.getMonth() + 1)}-${pad2(monday.getDate())}`;
+    const m = zonedParts(startOfBillingWeek(at));
+    return `W${m.year}-${pad2(m.month + 1)}-${pad2(m.day)}`;
   }
-  return `${at.getFullYear()}-${pad2(at.getMonth() + 1)}`;
+  const p = zonedParts(at);
+  return `${p.year}-${pad2(p.month + 1)}`;
 }
 
 /** Last day of the period `at` falls in — the natural due date for that invoice. */
 export function projectBillingPeriodEnd(frequency: string, at: Date): Date {
   if (frequency === 'weekly') {
-    const monday = startOfBillingWeek(at);
-    return new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6, 23, 59, 59, 999);
+    const m = zonedParts(startOfBillingWeek(at));
+    return zonedDate(m.year, m.month, m.day + 6, 23, 59, 59, 999);
   }
-  return new Date(at.getFullYear(), at.getMonth() + 1, 0, 23, 59, 59, 999);
+  const p = zonedParts(at);
+  return zonedDate(p.year, p.month, daysInZonedMonth(p.year, p.month), 23, 59, 59, 999);
 }
 
 /**
@@ -110,7 +113,8 @@ export function periodAlreadyBilledLegacy(frequency: string, lastGeneratedAt: Da
  * rather than slipping into the next one).
  */
 export function billingDayForMonth(day: number, at: Date): number {
-  const lastDay = new Date(at.getFullYear(), at.getMonth() + 1, 0).getDate();
+  const p = zonedParts(at);
+  const lastDay = daysInZonedMonth(p.year, p.month);
   return Math.min(Math.max(1, Math.round(day)), lastDay);
 }
 
@@ -169,7 +173,7 @@ export function projectBillingBlockReason(
   // e.g. bill social-media retainers on the 25th instead of the 1st. Transient —
   // the same period bills normally once the day is reached.
   if (frequency === 'monthly' && project.billingDayOfMonth) {
-    if (now.getDate() < billingDayForMonth(project.billingDayOfMonth, now)) return 'before-billing-day';
+    if (zonedParts(now).day < billingDayForMonth(project.billingDayOfMonth, now)) return 'before-billing-day';
   }
 
   return null;
@@ -195,12 +199,14 @@ export function projectPeriodsSkipped(
 ): number {
   if (!lastPeriodKey) return 0;
   if (projectBillingPeriodKey(frequency, now) === lastPeriodKey) return 0;
-  let cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const start = zonedParts(now);
+  let cursor = zonedDate(start.year, start.month, start.day);
   for (let i = 0; i < maxLookback; i++) {
+    const c = zonedParts(cursor);
     cursor = frequency === 'weekly'
-      ? new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() - 7)
+      ? zonedDate(c.year, c.month, c.day - 7)
       // The 1st, so stepping back from the 31st cannot skip a short month.
-      : new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
+      : zonedDate(c.year, c.month - 1, 1);
     if (projectBillingPeriodKey(frequency, cursor) === lastPeriodKey) return i;
   }
   // Older than the window (or a key from another frequency) — don't invent a number.

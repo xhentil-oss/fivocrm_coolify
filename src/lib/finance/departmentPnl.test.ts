@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Project, TeamMember, Expense } from '../../types';
-import { computeDepartmentPnl, buildDepartmentProfitTrend } from './departmentPnl';
+import { computeProjectPnl } from './projectPnl';
+import { computeDepartmentPnl, buildDepartmentProfitTrend, PAYROLL_WITHOUT_MEMBER } from './departmentPnl';
 
 // Default fixture is a COMPLETED one-time project — the state in which a one-time
 // deal's revenue is recognised (point in time).
@@ -168,5 +169,123 @@ describe('department-tagged expenses (expense.departmentId)', () => {
     expect(res.totals.directCost).toBe(300);
     expect(res.otherFixedPool).toBe(700);
     expect(res.unallocatedDirect).toEqual({ count: 1, amount: 700 });
+  });
+});
+
+// ── Sep 2026 audit ─────────────────────────────────────────────────────────
+describe('a retainer stops earning for its department when its series ends', () => {
+  const now = new Date('2026-09-20');
+  const sep = { range: { start: new Date(2026, 8, 1), end: new Date(2026, 8, 30, 23, 59, 59, 999) }, mode: 'all' as const, now };
+
+  it('books nothing in September for a retainer cancelled in February', () => {
+    const cancelled = mkP({ id: 'r', department: 'Social', budget: 50_000, billingType: 'monthly',
+      status: 'Cancelled', isRecurring: false,
+      createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-02-20') } as any);
+    const res = computeDepartmentPnl([cancelled], [mkM('u1', 0)], [], sep);
+    expect(res.rows).toHaveLength(0);
+    expect(res.totals.revenue).toBe(0);
+  });
+
+  it('keeps a live retainer earning after an all-tasks-done moment', () => {
+    const live = mkP({ id: 'r', department: 'Social', budget: 50_000, billingType: 'monthly',
+      status: 'Active', isRecurring: true, lastCompletedAt: new Date('2026-03-20'),
+      createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-03-20') } as any);
+    const res = computeDepartmentPnl([live], [mkM('u1', 0)], [], sep);
+    expect(res.rows[0].revenue).toBe(50_000);
+  });
+});
+
+describe('recorded payroll with no active member is reported, not lost', () => {
+  it('routes it to unallocated labor instead of dropping it from every row', () => {
+    // With zero Active members both the plan weight and the equal share are 0,
+    // so the whole actual payroll silently disappeared from the department rows
+    // AND from unallocatedLabor (which filters to active members too).
+    const projects = [mkP({ id: 'a', department: 'Social', budget: 100_000 })];
+    const salaries = [
+      mkE({ id: 's1', amount: 62_000, category: 'Salary', date: new Date('2026-03-30') }),
+      mkE({ id: 's2', amount: 8_000, category: 'Salary', date: new Date('2026-03-30') }),
+    ];
+    const res = computeDepartmentPnl(projects, [], salaries, OPTS);
+    expect(res.totals.labor).toBe(0);                      // nobody to charge it to
+    expect(res.unallocatedLabor.total).toBe(70_000);       // …but it still exists
+    expect(res.unallocatedLabor.members[0].name).toBe(PAYROLL_WITHOUT_MEMBER);
+    // The Salary rows are not double-counted as ordinary expenses either.
+    expect(res.otherFixedPool).toBe(0);
+  });
+
+  it('changes nothing when there IS an active member to carry the payroll', () => {
+    const projects = [mkP({ id: 'a', department: 'Social', budget: 100_000, responsibleUserId: 'u1' })];
+    const salaries = [mkE({ id: 's1', amount: 70_000, category: 'Salary', date: new Date('2026-03-30') })];
+    const res = computeDepartmentPnl(projects, [mkM('u1', 50_000)], salaries, OPTS);
+    expect(res.rows[0].labor).toBe(70_000);
+    expect(res.unallocatedLabor.total).toBe(0);
+  });
+});
+
+// ── Sep 2026: leaving payroll is an event with a DATE, not a status ─────────
+describe('a leaver still costs the months they worked', () => {
+  const now = new Date('2026-09-20');
+  const june = { start: new Date(2026, 5, 1), end: new Date(2026, 5, 30, 23, 59, 59, 999) };
+  const JUNE = { range: june, mode: 'all' as const, now };
+
+  // Marked Inactive when they left on 1 September.
+  const leaver = { ...mkM('u1', 60_000), status: 'Inactive', leftAt: new Date('2026-09-01') } as any as TeamMember;
+  const juneProject = (over: Partial<Project> = {}) => mkP({
+    id: 'a', department: 'Social', budget: 100_000, responsibleUserId: 'u1',
+    createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-06-15'),
+    lastCompletedAt: new Date('2026-06-15'), ...over,
+  } as Partial<Project>);
+
+  it('keeps them on the June department labour line', () => {
+    // Filtering on today's status BEFORE calling memberSalaryForMonth erased
+    // this cost the day the dropdown changed — the past year's profit silently
+    // improved, which is the bug salaryHistory.ts was fixed for.
+    const res = computeDepartmentPnl([juneProject()], [leaver], [], JUNE);
+    expect(res.rows[0].labor).toBe(60_000);
+    expect(res.unallocatedLabor.total).toBe(0);
+  });
+
+  it('keeps them in the June project fixed pool, on both payroll paths', () => {
+    const projects = [juneProject()];
+    expect(computeProjectPnl(projects, [leaver], [], { range: june, now }).fixedPool.salaries).toBe(60_000);
+    // …and on the explicit-months override, which had its own status filter.
+    expect(computeProjectPnl(projects, [leaver], [], { months: 1, now }).fixedPool.salaries).toBe(60_000);
+  });
+
+  it('stops costing them once the period is after they left', () => {
+    const sep = { start: new Date(2026, 8, 1), end: new Date(2026, 8, 30, 23, 59, 59, 999) };
+    const res = computeProjectPnl([juneProject({ lastCompletedAt: new Date('2026-09-15'), updatedAt: new Date('2026-09-15') })],
+      [leaver], [], { range: sep, now });
+    expect(res.fixedPool.salaries).toBe(0);
+  });
+
+  it('never charges an invite that was never accepted', () => {
+    const pending = { ...mkM('u2', 90_000), status: 'Pending' } as any as TeamMember;
+    const res = computeDepartmentPnl([juneProject()], [leaver, pending], [], JUNE);
+    expect(res.rows[0].labor).toBe(60_000);          // the leaver only
+    expect(res.unallocatedLabor.total).toBe(0);
+    expect(computeProjectPnl([juneProject()], [leaver, pending], [], { range: june, now })
+      .fixedPool.salaries).toBe(60_000);
+  });
+
+  it('keeps the documented invariant: department labour + unallocated == project fixed pool', () => {
+    const members = [leaver, mkM('u2', 40_000)];     // u2 is on no project
+    const projects = [juneProject()];
+    const dept = computeDepartmentPnl(projects, members, [], JUNE);
+    const proj = computeProjectPnl(projects, members, [], { range: june, now });
+    expect(dept.totals.labor + dept.unallocatedLabor.total).toBe(proj.fixedPool.salaries);
+    expect(proj.fixedPool.salaries).toBe(100_000);
+    expect(dept.totals.labor).toBe(60_000);
+    expect(dept.unallocatedLabor.total).toBe(40_000);
+  });
+
+  it('holds the same invariant when the payroll is RECORDED, not planned', () => {
+    const members = [leaver, mkM('u2', 40_000)];
+    const projects = [juneProject()];
+    const paid = [mkE({ id: 's', amount: 85_000, category: 'Salary', date: new Date(2026, 5, 28) })];
+    const dept = computeDepartmentPnl(projects, members, paid, JUNE);
+    const proj = computeProjectPnl(projects, members, paid, { range: june, now });
+    expect(proj.fixedPool.salaries).toBe(85_000);    // what actually left the bank
+    expect(dept.totals.labor + dept.unallocatedLabor.total).toBeCloseTo(85_000, 6);
   });
 });

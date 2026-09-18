@@ -20,6 +20,14 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
 
+### [2026-09-18] — Audit financash: ~60 gjetje, P0/P1-të e rregulluara (workspace/FINANCE_BUGS_2026_09_18.md)
+- P0 skopimi: `invoice-reminders` / `overdue-reminders` / `recurring-expenses` nuk merrnin `businessId` në nisje manuale, ndërsa `authorizeManual` pranon çdo Admin të çdo ekipi — një klikim te Cilësimet u dërgonte email e WhatsApp klientëve të ÇDO qiraxhiu. Tani `manualScopeId()` në `api/cron/run.ts` + përjashtimi i të pezulluarve; `run-all` manual u kufizua te super-admini (ishte vrima që i anashkalonte të gjitha)
+- P0 zona kohore: çelësat e periudhave llogariteshin me getters të makinës — UI në Europe/Tirane, trupi i cron-it në Vercel/UTC — pra një faturë e datës 1 keyed `2026-08` në shfletues dhe `2026-07` në server: seria ose bllokohej përgjithmonë (`already-generated`) ose e dyfishonte muajin. Ndihmësit `zonedParts/zonedDate/addZonedMonthsClamped/startOfZonedWeek` në `src/lib/recurringUtils.ts`, të pasqyruar fjalë për fjalë në `api/cron/run.ts`; `recurringBilling/recurringInvoices/recurringExpenses` kaluan te ta + teste që kalojnë nën TZ=UTC dhe Europe/Tirane
+- P0 portali: klienti mund të rishkruante çmimin e ofertës së vet dhe të lexonte draftet, dhe porositë e dyqanit vinin me `total`+`paymentStatus` nga shfletuesi. Tani `quotePortalResponse()`/`quoteVisibleToClient()` në `firestore.rules` (+`src/lib/quoteVisibility.ts` si burim i vetëm i statuseve), rillogaritje nga katalogu te `ShopOrdersView.convertToInvoice`, fatura Paguar vetëm me konfirmim stafi
+- P1: `/app/bonus` e hapur për çdo rol dhe shkarkonte çdo rrogë (tani `ModuleGate` + `canAccessExpenses`); `status !== 'Active'` i zeronte rrogat edhe në muajt e shkuar (tani `leftAt`); parashikimi/MRR nuk pyeste `isRecurring` dhe s'normalizonte frekuencën javore; projectPnl/departmentPnl numëronin retainerë të anuluar; `paidAt` humbte kur fatura krijohej e paguar; datat humbnin një ditë në ruajtje; email-i i vonesës kërkonte totalin bruto dhe thoshte "skadon sot"; `payments`/`expenseCategories` mungonin te listat e skopit (query e mohuar)
+- Verifikim mbi 01f9e12: 1449/1449 teste ✅, 123/123 teste rregullash në emulator ✅, build ✅, typecheck:api i pastër, typecheck 214→199. **Mbetet i hapur**: zhvendosja e fushave të pagës jashtë `teamMembers` (rregullat ende ia japin leximin çdo anëtari) — kërkon migrim me backfill; plus deploy i rules/indexes
+
+
 ### [2026-09-18] — Audit Android/UI/UX: 11 bugs të rregulluara (workspace/ANDROID_UI_AUDIT_2026_09.md)
 - P0 `src/index.css`: `@media (pointer: coarse)` vendoste `min-width/height: 44px` mbi çdo `<button>` — Radix i jep Switch/Checkbox/Radio si button, pra çdo checkbox bëhej katror 44×44 dhe track-u i switch-it 44×44 me `translate-x-4` që s'shkonte askund (**on/off dukeshin njësoj në Android**); rolet dalin jashtë rregullit. Rregulli `font-size:16px` humbte ndaj çdo klase `text-sm`, pra s'mbronte nga zoom-i i iOS — u zhvendos te `html.plt-ios` (flamur i ri në `src/index.tsx`), Android/desktop pa ndryshim
 - P0 `AndroidBackButton.tsx` rishkruar: varej nga `location.pathname` + regjistrim async me cleanup sinkron → dëgjues jetimë, një Back kërcente 2-3 ekrane. Tani regjistrim një herë me `ref` + flamur `cancelled`; `registerBackDismiss()` (i lidhur në `App.tsx` dhe `MobileBottomNav.tsx`) e bën Back të mbyllë së pari overlay-t; pa histori shkon në dashboard, nuk mbyll aplikacionin
@@ -27,7 +35,12 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 - P2: `gap-2` te Dialog/AlertDialog footer (butonat ngjiteshin në telefon); X-i i dialogut në shirit `sticky` (rrëshqiste jashtë në formularët e gjatë) + `max-h` me safe-area; `relative` te butoni "Më shumë"; `image/svg+xml` hequr nga RichTextEditor + TaskDetailPanel (XSS i ruajtur); "Demo Mode" te `UserProfileView` vetëm në DEV; `nativeApi.ts` mbulon `URL` + rindërton `Request` (trupi humbte pa `duplex`); `UserProfile` + 5 fusha → 16 gabime typecheck më pak
 - Verifikim: build ✅, 1409/1409 teste ✅, `android-configure.cjs` idempotent ✅. `VERSION_CODE` 30→31 / `1.8.2`→`1.8.3` (ndryshoi manifesti). Mbeten: tregues offline, 8 × `window.confirm`, aria-label
 
-
+### [2026-09-17] — Modules: two layers (platform entitlement vs owner toggle)
+- Problem: super-admin and owner wrote the SAME field (`disabledModules`), so a module the platform switched off at /superadmin could be re-enabled by the owner from Cilësimet → Modulet — the console toggle was a suggestion
+- `businesses.lockedModules` = layer 1 (platform, server-written via `set-modules`/`create-tenant`, rules deny the owner — test 21b, 116/116 rules tests green); `disabledModules` stays layer 2 (owner). `moduleBlockReason()` order: permission → plan → `locked` → `disabled`
+- New `src/views/superadmin/ModuleAccessEditor.tsx`: one switch per module = "in the contract", plan badge, "Fikur nga pronari" + "Ndize" assist, presets Hap të gjitha / Sipas paketës / Kyç të gjitha; used by TenantDetailView (replaces the chips) and CreateTenantDialog
+- Owner side: `ModulesSettingsPanel` shows locked rows as "E menaxhuar nga FivoCRM" (inert switch), `ModuleGate` has a `locked` screen, `useModules().setModuleEnabled` refuses a locked module with a clear message
+- Deploy: `firebase deploy --only firestore:rules` (owner lock protection is rules-enforced)
 
 ### [2026-09-17] — Super-admin: per-module switches when creating a tenant
 - Gap: `CreateTenantDialog` sent no `disabledModules`, so a console-created tenant was born with EVERY module on (shop/hosting/gmb/landing included) while the self-serve `/signup` path honoured `defaultOff`
@@ -270,137 +283,6 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 - Navigation items filtered by: canAccessProjects, canAccessTasks, canAccessCRM, canAccessInvoices, etc.
 - Admin role gets full access; no membership = full access (owner mode)
 
-### [2026-03-07] — Added Demo Mode to User Profile
-- Added Demo Mode toggle in UserProfileView to switch between demo profiles
-- 4 demo profiles: Admin, Manager, Member, Viewer with different roles/permissions
-- Demo mode shows simulated tasks, projects, goals, and role-specific permissions info
-- Albanian language labels throughout the demo mode UI
-- File: `src/views/UserProfileView.tsx`
-
-### [2026-03-07] — User Testing Guidance
-- Explained OAuth authentication flow to user (Google/GitHub required)
-- Clarified that TeamMember links existing OAuth users, doesn't create new accounts
-- Suggested testing approach: login with OAuth, add self to team with specific permissions
-
-### [2026-03-07] — Auth System Analysis
-- Reviewed authentication flow: uses Anima Playground SDK OAuth (Google, GitHub, etc.)
-- TeamMember entity links existing users to teams, does NOT create new loginable users
-- TeamInvite creates invitation records but doesn't send actual emails
-- Users must register through platform OAuth to be able to login
-- Files reviewed: `src/App.tsx`, `src/components/TopNavBar.tsx`, `src/views/TeamsView.tsx`
-
-### [2026-03-07] — Added Direct Member Creation with Role
-- Added "Add Member Directly" option in TeamsView to create team members without invitation flow
-- New AddMemberForm with role selection (Admin, Manager, Member, Viewer) and granular permissions
-- Separated "Invite via Email" and "Add Member Directly" options in team dropdown menu
-- Albanian language labels for the new form (Roli, Lejet e Aksesit, etc.)
-- File: `src/views/TeamsView.tsx`
-
-### [2026-03-07] — Added User Account Switching & Logout
-- Added logout and switch account functionality to TopNavBar user dropdown
-- Shows user profile picture, name, and email in dropdown header
-- "Ndrysho Llogarinë" option logs out and opens login dialog for new account
-- "Dil nga Llogaria" option for simple logout
-- File: `src/components/TopNavBar.tsx`
-
-### [2026-03-07] — Unified Task Detail Dialog Component
-- Created shared `src/components/TaskDetailDialog.tsx` used by both TasksView and ProjectsView
-- Both views now have identical task UI with time tracking, editable dates, comments, subtasks
-- Removed duplicate TaskDetailDialog from ProjectsView, now imports shared component
-- Cleaned up debug logs from ProjectsView
-- Files: `src/components/TaskDetailDialog.tsx`, `src/views/TasksView.tsx`, `src/views/ProjectsView.tsx`
-
-### [2026-03-07] — Fixed Task Detail Dialog UI Layout
-- Made start/end dates editable with calendar picker in task detail dialog
-- Moved comments section out of tabs to always be visible at bottom
-- Removed tabs structure, now shows details, time tracking, and comments in single scrollable view
-- Fixed dialog layout to prevent element overlap with flex-col and overflow-y-auto
-- File: `src/views/TasksView.tsx`
-
-### [2026-03-07] — Created Time Tracking & Pomodoro Timer View
-- Added TimeEntry entity with fields: taskId, projectId, userId, description, startTime, endTime, duration, isBillable, hourlyRate, tags, isPomodoroSession, pomodoroCount
-- Built TimeTrackingView with running timer, Pomodoro timer (25/5 min cycles), manual time entries, billable time tracking
-- Features: start/stop timer, Pomodoro focus/break cycles, time analytics (total, billable, revenue), task/project linking
-- Added route `/app/time-tracking` with Clock icon in sidebar navigation
-- Files: `src/views/TimeTrackingView.tsx`, `src/App.tsx`, `src/components/Sidebar.tsx`
-
-### [2026-03-06] — Fixed Dialog JSX Structure in InvoicesView
-- Corrected misplaced Dialog/DialogTrigger/DialogContent nesting causing build error
-- DialogContent must be inside Dialog wrapper, not a sibling
-- File: `src/views/InvoicesView.tsx` line 107-127
-
-### [2026-03-06] — Added Inline Editing and Export to Teams View
-- Implemented click-to-edit for team name and department fields
-- Added ExportButton component for CSV/JSON export of teams data
-- Included Edit2, Check, X icons for inline editing UI
-- Files: `src/views/TeamsView.tsx`
-
-### [2026-03-06] — Removed Dashboard, Kept Reports Only
-- Deleted DashboardView.tsx as it duplicated Reports functionality
-- Set Reports as default landing page (redirects from "/" to "/app/reports")
-- Removed Dashboard from sidebar navigation
-- Files: `src/App.tsx`, `src/components/Sidebar.tsx`, deleted `src/views/DashboardView.tsx`
-
-### [2026-03-06] — Phase 1: Created Dashboard with KPIs and Charts
-- Built comprehensive DashboardView with real-time KPIs for revenue, projects, tasks, leads, goals
-- Added interactive charts: revenue trend (6 months), task distribution, goals progress, recent activity
-- Calculated metrics: completion rates, conversion rates, profit margins, overdue tasks
-- Financial summary cards showing revenue, expenses, net profit with trend indicators
-- Set dashboard as default landing page, added to sidebar navigation
-- Files: `src/views/DashboardView.tsx`, `src/App.tsx`, `src/components/Sidebar.tsx`
-
-### [2026-03-06] — Fixed Select.Item Empty Value Error in ExpensesView
-- Changed department Select "None" option from empty string value to "none"
-- Radix UI Select.Item requires non-empty value prop to distinguish from placeholder
-- File: `src/views/ExpensesView.tsx` line 394
-
-### [2026-03-06] — Fixed JSX Syntax Error in ServicesView
-- Escaped HTML tag examples in help text that were being parsed as JSX elements
-- Changed `<h1>, <p>, <ul>, <strong>, <em>` to use curly brace escaping `{'<h1>'}` etc.
-- File: `src/views/ServicesView.tsx` line 257
-
-### [2026-03-05] — Enhanced Lead and Customer Forms with All Fields
-- Lead form now includes all fields: phoneNumber, address, company, jobTitle, website, source, notes, estimatedValue
-- Customer form includes all enterprise fields: website, industry, taxId, billing/shipping addresses, contact person, credit limit, payment terms, tags
-- Both forms use scrollable 2-column grid layout with Textarea for address fields
-- Tables display comprehensive information including company details, contact info, and financial data
-- Forms properly handle optional fields with undefined fallbacks
-
-### [2026-03-05] — Added All Lead and Customer Fields
-- Extended Lead form with all fields: phoneNumber, address, company, jobTitle, website, source, notes, estimatedValue
-- Enhanced Lead table to show company info, source, and estimated value columns
-- Extended Customer form with all enterprise fields: website, industry, taxId, billing/shipping addresses, contact person, credit limit, payment terms, tags
-- Converted Customer view from cards to table layout showing all key information
-- Both forms now use scrollable 2-column grid layout for better organization
-
-### [2026-03-05] — Fixed Task Status and Priority Update Bug
-- Fixed Select components in TaskForm not submitting values to FormData
-- Added state management for status, priority, and projectId in TaskForm
-- Enabled inline status/priority editing directly from TaskDetailDialog
-- Added debug logging for status/priority changes to track user interactions
-
-### [2026-03-05] — Enhanced Task Management with Asana-Inspired Features
-- Added collaborators support to tasks via TaskCollaborator entity and collaboratorIds field
-- Implemented subtasks with parentTaskId field for hierarchical task organization
-- Created UserProfile entity with jobTitle, department, bio, skills, phone, location fields
-- Built GoalsView with nested goals, progress tracking, milestones, and team association
-- Created UserProfileView showing user's tasks, projects, goals with editable profile fields
-
-### [2026-03-05] — Implemented Phase 3 Advanced Features
-- Created `src/views/ChatView.tsx` with Message entity for internal chat system
-- Added real-time messaging with channels (general, team, support) and unread badges
-- Enhanced `src/views/ReportsView.tsx` with revenue tracking by department
-- Revenue breakdown shows paid/pending amounts per department with visual progress bars
-- Updated navigation in `src/components/Sidebar.tsx` and `src/App.tsx` to include Chat route
-
-### [2026-03-05] — Verified Teams and Invoices Views Implementation
-- Both `src/views/TeamsView.tsx` and `src/views/InvoicesView.tsx` are fully implemented
-- Teams view includes create/list functionality with department tracking
-- Invoices view includes full CRUD, revenue stats, payment tracking, and project linking
-- Both views use Anima Playground React SDK with proper loading/error states
-
-### [2026-03-05] — Retry: Added Teams and Invoices to Sidebar Navigation
-- Rewrote `src/components/Sidebar.tsx` with complete file content
-- Added Teams (UsersRound icon) and Invoices (Receipt icon) to navItems array
-- Navigation now includes all 7 sections: Projects, CRM, Tasks, Teams, Invoices, Reports, Settings
+<!-- Hyrjet para kesaj date u hoqen per ta mbajtur skedarin nen 300 rreshta
+     (udhezimi ne krye). Historiku i plote eshte ne git. -->
 </changelog>

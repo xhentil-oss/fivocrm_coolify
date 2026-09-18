@@ -1,13 +1,22 @@
 import React, { useState, useMemo } from 'react';
 import { useToast } from '../hooks/use-toast';
 import { useNavigate } from 'react-router-dom';
-import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
-import { getNextInvoiceNumber } from '../lib/firebase';
+import { useCollection, useMutation, useGlobalBusinessId, getGlobalTeamId } from '../hooks/useFirestore';
+import { getNextInvoiceNumber, db } from '../lib/firebase';
+import { doc, runTransaction, Timestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { canSeeFinancials, toAll, fromAll, currencySymbol } from '../lib/utils';
 import { projectBillingPeriodKey, projectBillingPeriodEnd, stopProjectBillingPatch } from '../lib/finance/recurringBilling';
-import { archiveConsequences, archiveProjectPatch, isProjectArchived, restoreProjectPatch } from '../lib/projectArchive';
+import { recurringOccurrenceId } from '../lib/finance/recurringInvoices';
+import {
+  archiveConsequences,
+  archiveProjectPatch,
+  isProjectArchived,
+  isTerminalProjectStatus,
+  restoreProjectPatch,
+  resumeRecurringBillingPatch,
+} from '../lib/projectArchive';
 import { deleteProjectCascade, projectCascadeToastParts } from '../lib/deleteCascade';
 import { projectTaskProgress } from '../lib/projectProgress';
 import {
@@ -42,6 +51,66 @@ import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useFilteredProjects, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import type { Project, Task, Team, TeamMember, Customer, Invoice, Service, InvoiceItem } from '../types';
+
+/** Thrown inside the occurrence transaction when the period is already invoiced. */
+const OCCURRENCE_EXISTS = '__invoice_occurrence_exists__';
+
+/**
+ * Write a retainer's FIRST invoice at the deterministic occurrence id, failing
+ * (instead of overwriting) when that period is already invoiced.
+ *
+ * Why not `invoiceMutation.create(data, id)`: that path is a blind `setDoc`, and a
+ * blind set at a deterministic id is worse than a random one — it would silently
+ * rewrite an occurrence the cron had already issued (and possibly emailed, or that
+ * the client had already paid).
+ *
+ * Why the id at all: the cron writes this same period's invoice at
+ * `auto_<projectId>_<periodKey>` with `ref.create()` (api/cron/run.ts, Part 2). As
+ * long as the UI used a random id the two could not collide, so the ONLY thing
+ * stopping a second invoice for the period was the separate claim write below — a
+ * rules denial, a closed tab or a dropped connection after the invoice and before
+ * the claim meant the next hourly run billed the same period again AND emailed it
+ * to the client. With the key in the id the database refuses the duplicate:
+ * "the occurrence's document id IS the idempotency guarantee" (CLAUDE.md).
+ *
+ * The web SDK has no `create()`, so the transaction is the atomic equivalent:
+ * read-then-set inside one transaction aborts if anything wrote the id meanwhile.
+ * Returns true when this call created the invoice, false when it already existed.
+ */
+async function createInvoiceOccurrence(
+  occurrenceId: string,
+  data: Record<string, unknown>,
+  scope: { teamId?: string; businessId?: string; createdByUserId?: string | null },
+): Promise<boolean> {
+  const ref = doc(db, 'invoices', occurrenceId);
+  // The mutation layer stamps these for us; writing directly means doing it here.
+  // `businessId` is not cosmetic — `canCreateBusinessDoc()` in firestore.rules
+  // refuses a create without the caller's own tenant id.
+  const payload: Record<string, unknown> = {
+    ...data,
+    teamId: scope.teamId,
+    businessId: scope.businessId,
+    createdAt: Timestamp.now(),
+    updatedAt: Timestamp.now(),
+    createdByUserId: scope.createdByUserId ?? null,
+  };
+  // The SDK rejects `undefined` values outright — same reason the write layer runs
+  // removeUndefined() on every document.
+  for (const key of Object.keys(payload)) {
+    if (payload[key] === undefined) delete payload[key];
+  }
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (snap.exists()) throw new Error(OCCURRENCE_EXISTS);
+      tx.set(ref, payload);
+    });
+    return true;
+  } catch (err) {
+    if (err instanceof Error && err.message === OCCURRENCE_EXISTS) return false;
+    throw err;
+  }
+}
 
 const ProjectsView: React.FC = () => {
   const navigate = useNavigate();
@@ -349,10 +418,13 @@ const ProjectsView: React.FC = () => {
       const billingFrequency = recurringFrequency || 'monthly';
       const periodKey = projectBillingPeriodKey(billingFrequency, now);
       const periodEnd = projectBillingPeriodEnd(billingFrequency, now);
+      // Same id the cron computes for this (project, period) — see
+      // createInvoiceOccurrence above and api/cron/run.ts Part 2.
+      const occurrenceId = recurringOccurrenceId('auto', newProject.id, periodKey);
       const invoiceLabel = invoiceScopeId
         ? await getNextInvoiceNumber(invoiceScopeId, maxInvNum)
         : `AUTO-${periodKey}-${newProject.id.slice(0, 6).toUpperCase()}`;
-      const newInvoice = await invoiceMutation.create({
+      const occurrenceCreated = await createInvoiceOccurrence(occurrenceId, {
         invoiceNumber: invoiceLabel,
         projectId: newProject.id,
         customerId: resolvedCustomerId,
@@ -383,14 +455,29 @@ const ProjectsView: React.FC = () => {
         reminderSent: false,
         reminder25Sent: false,
         reminderLastDaySent: false,
-      } as any);
+      }, {
+        // What the mutation layer's autoScope would have stamped.
+        teamId: resolvedTeamId || getGlobalTeamId() || undefined,
+        businessId: activeBusinessId || resolvedTeamId || getGlobalTeamId() || undefined,
+        createdByUserId: user?.uid ?? null,
+      });
 
-      // Claim the period on the project (same token the cron writes).
+      // Claim the period on the project (same token the cron writes) — ALSO when
+      // the occurrence already existed: "already exists" means this period is
+      // covered, so the honest record is the claim, not a second invoice.
       await projectMutation.update(newProject.id, {
         lastInvoicePeriodKey: periodKey,
         lastInvoiceGeneratedAt: now,
       } as any);
 
+      if (!occurrenceCreated) {
+        // Nothing left to do: the period's invoice (and its lines) already exist,
+        // and re-sending the email would dun the client twice.
+        toast({
+          title: 'Fatura e periudhës ekzistonte',
+          description: 'Kjo periudhë ishte faturuar tashmë — nuk u krijua faturë e dytë.',
+        });
+      } else {
       // Create invoiceItems for selected services. When the project is priced by
       // BUDGET (no services picked) we still write one line — otherwise the invoice
       // carries a total with nothing itemised and the detail/PDF renders empty.
@@ -400,7 +487,7 @@ const ProjectsView: React.FC = () => {
       if (pickedServices && pickedServices.length > 0) {
         for (const service of pickedServices) {
           await invoiceItemMutation.create({
-            invoiceId: (newInvoice as any).id,
+            invoiceId: occurrenceId,
             serviceId: service.id,
             quantity: 1,
             unitPrice: service.price || 0,
@@ -409,7 +496,7 @@ const ProjectsView: React.FC = () => {
         }
       } else {
         await invoiceItemMutation.create({
-          invoiceId: (newInvoice as any).id,
+          invoiceId: occurrenceId,
           description: name,
           quantity: 1,
           unitPrice: billableTotal,
@@ -427,12 +514,13 @@ const ProjectsView: React.FC = () => {
               'Content-Type': 'application/json',
               ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
             },
-            body: JSON.stringify({ invoiceId: (newInvoice as any).id }),
+            body: JSON.stringify({ invoiceId: occurrenceId }),
           });
         } catch {
           // email failure is non-blocking
         }
       }
+      } // end: only when THIS call created the period's occurrence
     } else {
       // Non-recurring project: create a plain Draft invoice
       const invoiceLabel = invoiceScopeId
@@ -675,12 +763,58 @@ const ProjectsView: React.FC = () => {
     // else on an archived project must restore it the same way. Otherwise the two
     // paths disagree and a hand-archived retainer keeps `isRecurring` until the
     // cron notices and switches it off for good.
+    const editedAt = new Date();
+
+    // A frequency change must RE-EXPRESS the period claim, never keep it: a weekly
+    // key ('W2026-09-14') can never equal a monthly one ('2026-09'), so the stale
+    // claim stops blocking anything and `already-billed` goes dead — the cron then
+    // bills a period that was already invoiced and emails it to the client. Same
+    // law the invoice form obeys (InvoicesView, `resolvedPeriodClaim`). The last
+    // occurrence's DATE is what gets re-expressed; with no date recorded we fall
+    // back to now, which is the conservative end (it blocks the current period
+    // rather than risking a second invoice for it).
+    const previousFrequency = projectToEdit.recurringFrequency || 'monthly';
+    const nextFrequency = (recurringFrequency || 'monthly') as NonNullable<Project['recurringFrequency']>;
+    const rawLastGenerated: any = (projectToEdit as any).lastInvoiceGeneratedAt;
+    const lastGeneratedAt: Date | null = rawLastGenerated
+      ? (rawLastGenerated?.toDate ? rawLastGenerated.toDate() : new Date(rawLastGenerated))
+      : null;
+    const reExpressedClaim =
+      isRecurring
+        && projectToEdit.lastInvoicePeriodKey
+        && previousFrequency !== nextFrequency
+        ? {
+            lastInvoicePeriodKey: projectBillingPeriodKey(
+              nextFrequency,
+              lastGeneratedAt && !isNaN(lastGeneratedAt.getTime()) ? lastGeneratedAt : editedAt,
+            ),
+          }
+        : {};
+
+    // What archive/restore must reason about is the project AS SAVED — restoring
+    // and switching the cycle in the same save has to re-point the claim in the
+    // NEW frequency, not the one being replaced.
+    const billingSubject = {
+      ...projectToEdit,
+      recurringFrequency: isRecurring ? nextFrequency : projectToEdit.recurringFrequency,
+      ...reExpressedClaim,
+    } as Project;
+
     const archiveTransition =
       status === 'Archived' && oldStatus !== 'Archived'
-        ? archiveProjectPatch({ ...projectToEdit, isRecurring }, { at: new Date(), byUserId: user?.uid ?? null })
+        ? archiveProjectPatch({ ...billingSubject, isRecurring }, { at: editedAt, byUserId: user?.uid ?? null })
         : oldStatus === 'Archived' && status !== 'Archived'
-          ? { ...restoreProjectPatch(projectToEdit), status }
-          : {};
+          ? { ...restoreProjectPatch(billingSubject, { at: editedAt }), status }
+          // REOPENING a Cancelled project is the same event as un-archiving one:
+          // the cron marks BOTH with `wasRecurringBeforeArchive` when it stops a
+          // terminal-status retainer for good (api/cron/run.ts,
+          // PERMANENT_BILLING_BLOCKS). Honouring the token only on the archive
+          // path meant a cancelled-then-reopened client came back as a project
+          // that silently never billed again — the form's own "Projekt Periodik"
+          // switch is OFF by then, because the cron switched it off.
+          : isTerminalProjectStatus(oldStatus) && !isTerminalProjectStatus(status as Project['status'])
+            ? resumeRecurringBillingPatch(billingSubject, { at: editedAt })
+            : {};
 
     await projectMutation.update(projectToEdit.id, {
       name,
@@ -722,7 +856,12 @@ const ProjectsView: React.FC = () => {
       // Write [] (not undefined) so clearing a manual split resets to the default
       // "100% to responsible" instead of leaving the old split in place.
       profitSplit: profitSplit && profitSplit.length > 0 ? profitSplit : [],
-      // Last, so the archive rules win over the plain form fields above.
+      // The claim re-expressed in the frequency being saved (no-op unless the
+      // frequency actually changed).
+      ...reExpressedClaim,
+      // Last, so the archive rules win over the plain form fields above — and so a
+      // restore's own claim re-point wins over the frequency one (it was computed
+      // from it).
       ...archiveTransition,
     } as any);
 

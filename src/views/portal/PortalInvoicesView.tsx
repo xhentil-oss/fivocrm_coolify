@@ -362,7 +362,9 @@ const PortalInvoicesView: React.FC = () => {
                         {invoice.paymentMethod === 'Bank' ? 'Transfer' : invoice.paymentMethod}
                       </Badge>
                     )}
-                    {(invoice.status === 'Pending' || invoice.status === 'Overdue') && (invoice.paymentMethod === 'Stripe' || !invoice.paymentMethod) && (
+                    {/* `Partial` is payable too — create-checkout-session charges the
+                        remainder, and the staff table has always offered it. */}
+                    {(invoice.status === 'Pending' || invoice.status === 'Overdue' || invoice.status === 'Partial') && (invoice.paymentMethod === 'Stripe' || !invoice.paymentMethod) && (
                       <Button
                         size="sm"
                         className="bg-[#635BFF] hover:bg-[#5851ea] text-white"

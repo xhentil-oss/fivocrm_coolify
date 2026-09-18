@@ -602,6 +602,19 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
   const overBudget = () => Date.now() - startedAt > SYNC_BUDGET_MS;
 
   const teamId = await resolveTeamId();
+
+  // The tenant's own switch in Cilësimet → Automatizime. It was written to
+  // `teamSettings.cronSettings` and read by nobody, so turning the sync off
+  // changed nothing at all. Absent means on, matching the UI's default.
+  if (teamId) {
+    try {
+      const tsSnap = await db.collection('teamSettings').doc(teamId).get();
+      if ((tsSnap.data() as any)?.cronSettings?.whmcs_sync?.enabled === false) {
+        return { skipped: 'Sinkronizimi WHMCS është çaktivizuar te Cilësimet' };
+      }
+    } catch { /* a failed lookup must not stop the sync */ }
+  }
+
   const clientCache = new Map<string, MappedClient | null>();
   // whmcsClientId → FivoCRM customerId, resolved from Firestore (no WHMCS call)
   // since clients are synced to customers in the first phase. Falls back to a

@@ -129,6 +129,26 @@ describe('applyStockToProduct', () => {
     expect(balanceAfter).toBe(15);
     expect(patch.stockQty).toBe(15);
   });
+
+  it('a return puts a sale back exactly — the compensation for a cancelled order', () => {
+    // Cancelling/refunding an order writes the mirror movement rather than editing
+    // stock, so the ledger stays the only story and the balance comes home.
+    const product = base({ trackInventory: true, stockQty: 10 });
+    const sale = applyStockToProduct(product, null, 'sale', 3);
+    expect(sale.balanceAfter).toBe(7);
+    const back = applyStockToProduct({ ...product, ...sale.patch } as Product, null, 'return', 3);
+    expect(back.balanceAfter).toBe(10);
+  });
+
+  it('chained patches accumulate — two lines of one product must not overwrite each other', () => {
+    // Applying both movements against the SAME stale snapshot made the second
+    // patch silently undo the first; callers must fold through the result.
+    const product = withVariants(); // v1: 3, v2: 8
+    const first = applyStockToProduct(product, 'v1', 'sale', 2);
+    const second = applyStockToProduct({ ...product, ...first.patch } as Product, 'v2', 'sale', 5);
+    expect(second.patch.variants!.find(v => v.id === 'v1')!.stockQty).toBe(1);
+    expect(second.patch.variants!.find(v => v.id === 'v2')!.stockQty).toBe(3);
+  });
 });
 
 describe('lowStockProducts', () => {

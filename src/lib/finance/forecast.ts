@@ -1,8 +1,9 @@
 // Next-month profit forecast for the owner dashboard.
 //
 // Revenue is projected from the PROJECT PIPELINE (not a trailing average):
-//   recurring  = budget of monthly/recurring projects still active (each is a
-//                monthly fee that will bill again next month)
+//   recurring  = fee of every project the BILLING ENGINE will bill again
+//                (`projectBillingBlockReason`), normalised to /month by its
+//                cycle — a weekly retainer is ~4.33 fees a month, not one
 //   new        = budget of one-time projects whose startDate falls in the
 //                forecast month (a project kicking off next month)
 // Costs stay grounded, and are split by how KNOWABLE they are:
@@ -26,7 +27,7 @@ import {
   monthlyRecurringExpenseRate,
   belongsToRecurringSeries,
 } from './recurringExpenses';
-import { TERMINAL_PROJECT_STATUSES } from './recurringBilling';
+import { projectBillingBlockReason, type ProjectBillingBlock } from './recurringBilling';
 import { hostingMonthlyRecurringRevenue } from '../hosting/finance';
 import { toAll } from '../utils';
 
@@ -64,25 +65,65 @@ function billingTypeOf(p: Project): 'one-time' | 'monthly' {
 const ALIVE = new Set(['Active', 'Planning', 'In Review', 'On Hold']);
 
 /**
+ * Block reasons that mean "the series is alive, it just is not due at the exact
+ * instant we asked about". Everything else the engine returns — `not-recurring`,
+ * `one-time`, `unsupported-frequency`, `paused`, `terminal-status`,
+ * `series-ended` — means no money is coming, so the forecast must not count it.
+ */
+const TRANSIENT_BILLING_BLOCKS: ReadonlyArray<ProjectBillingBlock> = [
+  'already-billed',       // this period's invoice is out; the next one still comes
+  'before-billing-day',   // e.g. bills on the 25th, we asked on the 1st
+];
+
+/**
  * Will this project bill its retainer again next month?
  *
- * Answered against the BILLING ENGINE's rules (`recurringBilling.ts`), not a
- * hand-written status allow-list, because the two disagreed in both directions:
- *   · the allow-list omitted `Completed` — but a completed retainer still bills
- *     ("this cycle's work is done"), so real MRR was under-reported;
- *   · it ignored `isRecurringPaused` and `recurringEndDate` — so a paused or
- *     expired retainer kept counting as predictable income, propping up the
- *     cash-flow gap alarm with money that will never arrive.
- * A gap alarm that under-reports is worse than no alarm: it is the one number
- * meant to warn the owner BEFORE the money runs out.
+ * Answered by DELEGATING to the billing engine (`projectBillingBlockReason`),
+ * not by a hand-written allow-list, because the hand-written one disagreed with
+ * the engine in both directions:
+ *   · it omitted `Completed` — but a completed retainer still bills ("this
+ *     cycle's work is done"), so real MRR was under-reported;
+ *   · it never asked `isRecurring`. `stopProjectBillingPatch()` deliberately
+ *     leaves `billingType` alone, so switching "Projekt Periodik" off on a
+ *     200 000 L/month retainer stopped the invoices while the MRR, the forecast
+ *     and the cash-flow gap kept counting the money forever.
+ * Delegating also picks up `one-time` and `unsupported-frequency` for free.
+ *
+ * A gap alarm that over- or under-reports is worse than no alarm: it is the one
+ * number meant to warn the owner BEFORE the money runs out.
  */
 function projectBillsNextMonth(p: Project, forecastMonthStart: Date): boolean {
-  if (billingTypeOf(p) !== 'monthly') return false;
-  if ((p as any).isRecurringPaused) return false;
-  if (p.status && TERMINAL_PROJECT_STATUSES.includes(p.status)) return false;
-  const end = parseDate((p as any).recurringEndDate);
-  if (end && end < forecastMonthStart) return false;
-  return true;
+  const reason = projectBillingBlockReason(p as any, forecastMonthStart);
+  return reason === null || TRANSIENT_BILLING_BLOCKS.includes(reason);
+}
+
+/**
+ * Recurring expense rows whose series has NOT already ended.
+ *
+ * `monthlyRecurringExpenseRate` is the shared commitment figure, but its
+ * `isActiveRecurringParent` has no "repeat until" guard, while the generation
+ * engine refuses exactly that case with `series-ended`. So a series that stopped
+ * generating months ago kept inflating the fixed outflow, the cash-flow gap and
+ * this forecast with money that will never leave the account.
+ *
+ * The filter lives here, at the CONSUMERS, because `recurringExpenses.ts` is
+ * being edited elsewhere in this pass. TODO: fold this predicate into
+ * `isActiveRecurringParent()` in `src/lib/finance/recurringExpenses.ts` (and its
+ * mirror in `api/cron/run.ts`) and delete this helper — the rate function is the
+ * right home for it, and every other consumer would get the fix for free.
+ */
+export function withoutEndedRecurringSeries<T extends Partial<Expense>>(
+  expenses: T[] | undefined | null,
+  at: Date = new Date(),
+): T[] {
+  return (expenses || []).filter(e => {
+    const end = parseDate((e as any).recurringEndDate);
+    if (!end) return true;
+    // Mirrors `expenseGenerationBlockReason`: the series is over once the NEXT
+    // occurrence would fall past the end date (no next date → judge by `at`).
+    const next = parseDate((e as any).nextRecurringDate) ?? at;
+    return next <= end;
+  });
 }
 
 /**
@@ -105,7 +146,12 @@ export function monthlyRecurringRevenue(
     const budget = toAll(p.budget || 0, (p as any).currency);
     if (budget <= 0) continue;
     if (projectBillsNextMonth(p, forecastMonthStart)) {
-      total += budget;
+      // Normalised to /month exactly like the invoice loop below: the project
+      // loop used to add the fee once per month whatever the cycle, so a
+      // 50 000 L/WEEK retainer read as 50 000 MRR instead of ~216 500.
+      const perMonth = FREQ_TO_MONTHLY[(p as any).recurringFrequency || 'monthly'];
+      if (!perMonth) continue; // unknown cycle invents no money (see below)
+      total += budget * perMonth;
       countedProjectIds.add(p.id);
     }
   }
@@ -117,7 +163,12 @@ export function monthlyRecurringRevenue(
     const seriesEnd = parseDate((i as any).recurringEndDate);
     if (seriesEnd && seriesEnd < forecastMonthStart) continue;
     if (i.projectId && countedProjectIds.has(i.projectId)) continue;
-    total += getInvoiceTotalAll(i) * (FREQ_TO_MONTHLY[(i as any).recurringFrequency || 'monthly'] ?? 1);
+    // An UNKNOWN frequency contributes nothing, never a default full month —
+    // the same safe direction the expense side takes. `?? 1` let a junk cycle
+    // invent a whole month of revenue out of a typo.
+    const perMonth = FREQ_TO_MONTHLY[(i as any).recurringFrequency || 'monthly'];
+    if (!perMonth) continue;
+    total += getInvoiceTotalAll(i) * perMonth;
   }
   // Third engine: hosting subscriptions we bill ourselves (`source: 'fivocrm'`).
   // Their renewal invoices are `autoGenerated` and never `isRecurring`, so the loop
@@ -160,7 +211,7 @@ export function forecastNextMonth(
   // rate the cash-flow gap alarm uses. Only genuinely irregular spending is
   // averaged — and those rows are excluded from the average, or a retainer would
   // be counted twice (once as commitment, once inside its own trailing months).
-  const recurringExpenseCommitment = monthlyRecurringExpenseRate(exp);
+  const recurringExpenseCommitment = monthlyRecurringExpenseRate(withoutEndedRecurringSeries(exp, now));
   const oneOffs = exp.filter(e => !belongsToRecurringSeries(e));
 
   const OFFSETS = [-1, -2, -3];

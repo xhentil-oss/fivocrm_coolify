@@ -1,6 +1,7 @@
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from './firebase';
 import type { User } from 'firebase/auth';
+import { isTenantProvisioning } from './tenantProvisioning';
 
 /**
  * "Is this signed-in person STAFF (or on their way to being staff)?"
@@ -73,6 +74,10 @@ async function resolve(email: string): Promise<StaffIdentity> {
 export async function getStaffIdentity(user: Pick<User, 'uid' | 'email'> | null): Promise<StaffIdentity> {
   const email = user?.email?.toLowerCase() || '';
   if (!user?.uid || !email) return NONE;
+  // /signup is still writing this person's own tenant: they are its OWNER, not a
+  // client. Deliberately not cached — once provisioning ends the membership row
+  // answers for itself, and a cached "staff" here would hide a failed signup.
+  if (isTenantProvisioning()) return { isStaff: true, pendingInviteToken: null, isStaffOrInvited: true };
 
   const cached = _cache.get(user.uid);
   if (cached) return cached;

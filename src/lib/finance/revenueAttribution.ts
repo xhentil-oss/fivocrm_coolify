@@ -24,7 +24,7 @@ export interface CollectionWindow { start: Date; end: Date }
 export interface CollectedAttribution {
   /** department label → collected cash (ALL) */
   byDepartment: Map<string, number>;
-  /** responsibleUserId → collected cash (ALL) */
+  /** responsibleUserId (or, failing that, createdByUserId) → collected cash (ALL) */
   byUser: Map<string, number>;
   /**
    * Cash no project could absorb: the invoice carries no `projectId`, or one
@@ -101,7 +101,12 @@ export function attributeCollectedRevenue(
     const dept = departmentOf(project);
     result.byDepartment.set(dept, (result.byDepartment.get(dept) || 0) + collected);
 
-    const uid = project.responsibleUserId;
+    // Same fallback as the ACCRUAL row this column is read next to
+    // (`computeProjectPnl` → `responsibleUserId || createdByUserId`). Reading
+    // only `responsibleUserId` here made a legacy project — one with a creator
+    // but no responsible — show revenue with zero collected, so the per-person
+    // column did not add up to the cash actually banked.
+    const uid = project.responsibleUserId || project.createdByUserId || '';
     if (uid) {
       result.byUser.set(uid, (result.byUser.get(uid) || 0) + collected);
     } else {

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { addDoc, collection, Timestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, Timestamp } from 'firebase/firestore';
 import {
   CheckCircle2, ChevronRight, Image as ImageIcon, Loader2, Minus, Package,
   PackageX, Plus, Search, ShoppingBag, ShoppingCart, Trash2, X,
@@ -22,7 +22,7 @@ import { formatCurrency, getTimestampMs, sanitizeHtml } from '../../lib/utils';
 import { buildOrderItem, computeOrderTotals, discountPercent, grossUnitPrice } from '../../lib/shop/pricing';
 import { canFulfill, stockState } from '../../lib/shop/inventory';
 import { activeVariants, variantLabel } from '../../lib/shop/variants';
-import { isPortalVisible, nextOrderNumber, primaryImage } from '../../lib/shop/product';
+import { isPortalVisible, primaryImage } from '../../lib/shop/product';
 import type {
   Product, ProductCategory, ProductVariant, ShopOrder, ShopOrderItem,
 } from '../../types';
@@ -36,6 +36,26 @@ interface CartLine {
 }
 
 const cartKey = (customerId: string | null) => `portal_cart_${customerId || 'anon'}`;
+
+/**
+ * Human-facing reference for a portal order, e.g. `POR-20260918-x7Kq2M`.
+ *
+ * It deliberately does NOT use `nextOrderNumber()`: a portal client can only read
+ * their OWN orders (and must not be able to read anyone else's), so a sequence
+ * derived from that list restarts at 0001 for every client — two clients ordering
+ * in the same year produced the same number, which is also the stock movement's
+ * `reference`. The Firestore document id is the uniqueness guarantee here; its
+ * last six base62 characters are carried into the label, CASE INCLUDED — lower-
+ * casing them would throw away half the entropy the id provides.
+ *
+ * Back-office numbering is untouched: `POR-<year>-<seq>` still parses, this shape
+ * does not, so the staff sequence stays contiguous.
+ */
+function portalOrderNumber(docId: string, now: Date): string {
+  const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+  const suffix = (docId || '').slice(-6) || String(now.getTime()).slice(-6);
+  return `POR-${stamp}-${suffix}`;
+}
 
 const STATUS_LABELS: Record<string, string> = {
   Pending: 'Në pritje',
@@ -52,9 +72,15 @@ const STATUS_LABELS: Record<string, string> = {
  * (`businessId == mine && visibleInPortal`), then filters to Active client-side —
  * a Draft product can never reach a client even if the flag was left on.
  *
- * Orders are written with a direct addDoc (not useMutation) because portal users
+ * Orders are written with a direct setDoc (not useMutation) because portal users
  * have no global teamId; the tenant keys are resolved the same way
  * useStartInquiry does.
+ *
+ * The money this file writes is the CLIENT'S OWN ARITHMETIC and is therefore a
+ * quote, not a price: the browser is not a trust boundary. ShopOrdersView
+ * re-prices a `source: 'portal'` order from the live catalog before it bills it,
+ * and never reads `paymentStatus` from here. Keep it that way — nothing in this
+ * file may be the only thing standing between a client and a 0 L settled invoice.
  */
 const PortalShopView: React.FC = () => {
   const { user } = useAuth();
@@ -186,7 +212,10 @@ const PortalShopView: React.FC = () => {
     }
     setPlacing(true);
     try {
-      const orderNumber = nextOrderNumber((myOrders || []).map(o => o.orderNumber), new Date().getFullYear());
+      // Reserve the id BEFORE building the payload: the order number is derived
+      // from it, so the reference can never collide with another client's.
+      const orderRef = doc(collection(db, 'shopOrders'));
+      const orderNumber = portalOrderNumber(orderRef.id, new Date());
       const payload = {
         orderNumber,
         customerId,
@@ -221,7 +250,7 @@ const PortalShopView: React.FC = () => {
         createdByUserId: user?.uid || null,
       };
       const clean = Object.fromEntries(Object.entries(payload).filter(([, v]) => v !== undefined));
-      await addDoc(collection(db, 'shopOrders'), clean);
+      await setDoc(orderRef, clean);
       setCart([]);
       setNotes('');
       setPlacedNumber(orderNumber);

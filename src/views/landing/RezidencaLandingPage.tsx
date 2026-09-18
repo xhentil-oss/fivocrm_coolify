@@ -54,7 +54,7 @@ const PACKAGES: Pkg[] = [
   {
     id: 'starter',
     name: 'Starter',
-    price: '1.200 €',
+    price: '120.000 Lekë',
     priceNote: '/ muaj + buxheti i reklamave',
     audience: ['Projekte në fazë ndërtimi', 'Profile pa aktivitet të rregullt', 'Shitje që ecin me rekomandime'],
     groups: [
@@ -93,7 +93,7 @@ const PACKAGES: Pkg[] = [
   {
     id: 'growth',
     name: 'Growth',
-    price: '1.900 €',
+    price: '190.000 Lekë',
     priceNote: '/ muaj + buxheti i reklamave',
     badge: 'Popullor',
     audience: ['Projekte në shitje aktive', 'Shitje ndaj Shqipërisë, Kosovës dhe diasporës', 'Ekipe shitjeje që kërkojnë kontakte të vazhdueshme'],
@@ -138,7 +138,7 @@ const PACKAGES: Pkg[] = [
   {
     id: 'pro',
     name: 'Pro',
-    price: '3.200 €',
+    price: '320.000 Lekë',
     priceNote: '/ muaj + buxheti i reklamave',
     popular: true,
     badge: 'Më i zgjedhuri',
@@ -185,7 +185,7 @@ const PACKAGES: Pkg[] = [
   {
     id: 'agency',
     name: 'Agency',
-    price: '4.900 €',
+    price: '490.000 Lekë',
     priceNote: '/ muaj + buxheti i reklamave',
     badge: 'Shërbim i plotë',
     audience: ['Zhvillime me disa faza ose projekte', 'Shitje në tregje të jashtme', 'Kompani që duan ekip të dedikuar'],
@@ -249,12 +249,12 @@ const COMPARE: { label: string; values: [string, string, string, string] }[] = [
 ];
 
 const ADDONS: { name: string; price: string }[] = [
-  { name: 'Ditë shtesë xhirimi', price: '250 € – 400 €' },
-  { name: 'Xhirim me dron, jashtë paketës', price: '120 € – 180 €' },
-  { name: 'Video prezantuese për një tipologji', price: '350 € – 600 €' },
-  { name: 'Katalog tipologjish ose prezantim për investitorin (PDF)', price: '400 € – 700 €' },
-  { name: 'Bashkëpunim me krijues përmbajtjeje', price: '300 € – 800 €' },
-  { name: 'Gjuhë shtesë e përmbajtjes', price: '150 € / muaj' },
+  { name: 'Ditë shtesë xhirimi', price: '25.000 – 40.000 Lekë' },
+  { name: 'Xhirim me dron, jashtë paketës', price: '12.000 – 18.000 Lekë' },
+  { name: 'Video prezantuese për një tipologji', price: '35.000 – 60.000 Lekë' },
+  { name: 'Katalog tipologjish ose prezantim për investitorin (PDF)', price: '40.000 – 70.000 Lekë' },
+  { name: 'Bashkëpunim me krijues përmbajtjeje', price: '30.000 – 80.000 Lekë' },
+  { name: 'Gjuhë shtesë e përmbajtjes', price: '15.000 Lekë / muaj' },
   { name: 'Render 3D dhe animacion arkitekturor', price: 'Me preventiv' },
 ];
 
@@ -407,7 +407,7 @@ export default function RezidencaLandingPage() {
               <p className="text-sm font-semibold uppercase tracking-widest text-emerald-600 mb-3">Çmimet</p>
               <h2 className="text-3xl sm:text-4xl font-bold">Paketat dhe çmimet</h2>
               <p className="mt-4 text-gray-600 max-w-2xl mx-auto">
-                Nga 1.200 € deri në 4.900 € në muaj. Pa kontratë afatgjatë — mund të ndryshoni paketë kur dëshironi. Buxheti i reklamave paguhet drejtpërdrejt platformave (Meta, Google, TikTok) dhe nuk përfshihet; për projekte rezidenciale rekomandojmë 1.200 € – 3.000 € në muaj. Çmimet pa TVSH, sipas rastit.
+                Nga 120.000 Lekë deri në 490.000 Lekë në muaj. Pa kontratë afatgjatë — mund të ndryshoni paketë kur dëshironi. Buxheti i reklamave paguhet drejtpërdrejt platformave (Meta, Google, TikTok) dhe nuk përfshihet; për projekte rezidenciale rekomandojmë 120.000 – 300.000 Lekë në muaj. Çmimet pa TVSH, sipas rastit.
               </p>
             </div>
           </FadeIn>

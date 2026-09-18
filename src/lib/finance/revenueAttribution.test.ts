@@ -118,6 +118,30 @@ describe('attributeCollectedRevenue', () => {
     expect(r.unlinked.count).toBe(0);
   });
 
+  it('falls back to the creator when a project has no responsible user', () => {
+    // The accrual row this column sits next to uses
+    // `responsibleUserId || createdByUserId` (computeProjectPnl), so reading
+    // only `responsibleUserId` here showed a legacy project with revenue and
+    // zero cash collected, and the per-person column stopped adding up.
+    const legacy = [proj({ id: 'old', department: 'Social', createdByUserId: 'creator' } as any)];
+    const r = attributeCollectedRevenue(
+      [inv({ id: 'a', projectId: 'old', total: 600, paidAt: new Date(2026, 2, 10) })],
+      legacy, WINDOW,
+    );
+    expect(r.byUser.get('creator')).toBe(600);
+    expect(r.withoutResponsible).toBe(0);
+  });
+
+  it('still reports cash from a project with neither responsible nor creator', () => {
+    const orphan = [proj({ id: 'o', department: 'SEO', createdByUserId: null } as any)];
+    const r = attributeCollectedRevenue(
+      [inv({ id: 'a', projectId: 'o', total: 300, paidAt: new Date(2026, 2, 10) })],
+      orphan, WINDOW,
+    );
+    expect(r.withoutResponsible).toBe(300);
+    expect(r.byUser.size).toBe(0);
+  });
+
   it('buckets a project with no department under the shared fallback label', () => {
     const r = attributeCollectedRevenue([
       inv({ id: 'a', projectId: 'p5', total: 200, paidAt: '2026-03-10' }),

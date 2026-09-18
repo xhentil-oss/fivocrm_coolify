@@ -19,7 +19,7 @@ import {
   assertFails,
   assertSucceeds,
 } from '@firebase/rules-unit-testing';
-import { doc, setDoc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, collection, query, where } from 'firebase/firestore';
 
 const PROJECT_ID = 'fivocrm-rules-test';
 const VICTIM_BIZ = 'bizVictim';
@@ -131,6 +131,63 @@ before(async () => {
       businessId: MY_BIZ, teamId: MY_TEAM, orderNumber: 'POR-2026-0002',
       customerId: 'cust1', items: [], currency: 'ALL', subtotal: 0, total: 100,
       status: 'Pending', source: 'portal',
+    });
+
+    // -- seed for the quote/preventive boundary (52+) --
+    // A Sent quote the client may answer, a second one so the update test does not
+    // depend on the read test's ordering, an internal DRAFT (pricing the client must
+    // never see) and another tenant's quote.
+    await setDoc(doc(db, 'quotes', 'quoteMineSent'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', label: 'Paketa Pro',
+      currency: 'EUR', status: 'Sent', result: { grandTotal: 1200, totalMonthly: 100 },
+      createdByUserId: 'alice',
+    });
+    await setDoc(doc(db, 'quotes', 'quoteMineSent2'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', label: 'Paketa Pro (2)',
+      currency: 'EUR', status: 'Sent', result: { grandTotal: 1200, totalMonthly: 100 },
+      createdByUserId: 'alice',
+    });
+    await setDoc(doc(db, 'quotes', 'quoteMineDraft'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', label: 'Draft i brendshem',
+      currency: 'EUR', status: 'Draft', result: { grandTotal: 400, totalMonthly: 30 },
+      createdByUserId: 'alice',
+    });
+    await setDoc(doc(db, 'quotes', 'quoteVictim'), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, customerId: 'custVictim', label: 'Victim quote',
+      currency: 'EUR', status: 'Sent', result: { grandTotal: 9999 }, createdByUserId: 'vstaff',
+    });
+    // The other half of quoteAccessibleByPortal(): a quote attached to a LEAD of
+    // the client's customer, carrying no customerId of its own.
+    await setDoc(doc(db, 'leads', 'leadMine'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', name: 'Carol', status: 'Contacted',
+    });
+    await setDoc(doc(db, 'quotes', 'quoteMineByLead'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, leadId: 'leadMine', label: 'Oferta nga lead-i',
+      currency: 'EUR', status: 'Sent', result: { grandTotal: 700 }, createdByUserId: 'alice',
+    });
+
+    // -- seed for the tenant scoping of payments / expenseCategories (53) --
+    await setDoc(doc(db, 'payments', 'payMine'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, invoiceId: 'invMine', customerId: 'cust1',
+      amount: 100, currency: 'ALL', method: 'Bank', source: 'manual',
+    });
+    await setDoc(doc(db, 'payments', 'payVictim'), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, invoiceId: 'invVictim', customerId: 'custVictim',
+      amount: 999, currency: 'ALL', method: 'Stripe', source: 'stripe',
+    });
+    await setDoc(doc(db, 'expenseCategories', 'catMineExp'), { businessId: MY_BIZ, teamId: MY_TEAM, label: 'Marketing' });
+    await setDoc(doc(db, 'expenseCategories', 'catVictimExp'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, label: 'Victim cat' });
+
+    // -- seed for the compensation vault (54): pay lives OUTSIDE teamMembers --
+    await setDoc(doc(db, 'teamMemberComp', `${MY_TEAM}_bob`), {
+      businessId: MY_BIZ, teamId: MY_TEAM, userId: 'bob', monthlySalary: 80000,
+      salaryHistory: [{ monthlySalary: 80000, effectiveFrom: new Date('2026-01-01') }],
+    });
+    await setDoc(doc(db, 'teamMemberComp', `${MY_TEAM}_carol`), {
+      businessId: MY_BIZ, teamId: MY_TEAM, userId: 'carol', monthlySalary: 120000,
+    });
+    await setDoc(doc(db, 'teamMemberComp', `${VICTIM_TEAM}_victim`), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, userId: 'victim', monthlySalary: 999999,
     });
 
     // ── seed for the hosting & domains module (51+) ──
@@ -381,6 +438,23 @@ test('17d. the invitee can read their own invite', async () => {
   const invitee = testEnv.authenticatedContext('newguy', { email: 'someone@victim.com' }).firestore();
   await assertSucceeds(getDoc(doc(invitee, 'teamInvites', 'invVictim')));
 });
+// The LIST shapes the app actually issues: TeamsView reads a tenant's invites by
+// `businessId ==` (staff), PendingInvitesBanner reads the caller's own by `email ==`
+// (any signed-in person, across tenants). Both used to be denied — the former outright,
+// because no clause of the rule was provable from a businessId-only query.
+test('17e. staff list their own tenant invites by businessId; another tenant cannot', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(getDocs(query(collection(alice, 'teamInvites'), where('businessId', '==', MY_BIZ))));
+  await assertFails(getDocs(query(collection(alice, 'teamInvites'), where('businessId', '==', VICTIM_BIZ))));
+  await assertFails(getDocs(query(collection(outsider(), 'teamInvites'), where('businessId', '==', MY_BIZ))));
+});
+test('17f. an invitee with no membership lists their own invites by email only', async () => {
+  const invitee = testEnv.authenticatedContext('newguy', { email: 'someone@victim.com' }).firestore();
+  await assertSucceeds(getDocs(query(collection(invitee, 'teamInvites'),
+    where('email', '==', 'someone@victim.com'), where('status', '==', 'Pending'))));
+  await assertFails(getDocs(query(collection(invitee, 'teamInvites'), where('email', '==', 'other@victim.com'))));
+  await assertFails(getDocs(query(collection(invitee, 'teamInvites'), where('businessId', '==', VICTIM_BIZ))));
+});
 
 // 18. A team must live inside a business, and can never be moved between tenants.
 test('18a. creating a team outside your business is denied', async () => {
@@ -425,6 +499,28 @@ test('20. cannot inject a notification for a user outside your tenant', async ()
 test('21. tenant cannot lift its own suspension', async () => {
   const late = testEnv.authenticatedContext('late', { email: 'late@x.com', bid: 'bizSuspended', tid: 'teamSuspended', roles: ['owner', 'admin'] }).firestore();
   await assertFails(setDoc(doc(late, 'businesses', 'bizSuspended'), { status: 'active' }, { merge: true }));
+});
+
+// 21b. Two module layers: the owner may switch their own modules off/on
+// (`disabledModules`), but `lockedModules` is the platform's entitlement — an owner
+// who could edit it would simply re-enable whatever the super-admin withheld.
+test('21b. the owner manages disabledModules but cannot touch lockedModules; the platform can', async () => {
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  await assertSucceeds(setDoc(doc(sa, 'businesses', MY_BIZ), { lockedModules: ['/app/hosting'] }, { merge: true }));
+
+  const owner = testEnv.authenticatedContext('aliceOwner', { email: 'alice@mine.com', bid: MY_BIZ, tid: MY_TEAM, roles: ['owner', 'admin'] }).firestore();
+  // Their own layer: fine.
+  await assertSucceeds(setDoc(doc(owner, 'businesses', MY_BIZ), { disabledModules: ['/app/products'] }, { merge: true }));
+  // Lifting the lock, or widening it, in any shape: denied.
+  await assertFails(setDoc(doc(owner, 'businesses', MY_BIZ), { lockedModules: [] }, { merge: true }));
+  await assertFails(setDoc(doc(owner, 'businesses', MY_BIZ), { lockedModules: ['/app/hosting', '/app/products'] }, { merge: true }));
+  await assertFails(updateDoc(doc(owner, 'businesses', MY_BIZ), { lockedModules: ['/app/products'], disabledModules: [] }));
+  // Writing the identical value is not a change — still allowed (merge-writes from
+  // the module manager may echo the field back).
+  await assertSucceeds(setDoc(doc(owner, 'businesses', MY_BIZ), { lockedModules: ['/app/hosting'], disabledModules: [] }, { merge: true }));
+
+  // Another tenant's admin: no business update at all.
+  await assertFails(setDoc(doc(outsider(), 'businesses', MY_BIZ), { lockedModules: [] }, { merge: true }));
 });
 
 // 22. The audit trail can never be rewritten or erased.
@@ -552,6 +648,27 @@ test('29d. portal client reads their own order but not another tenant order', as
 test('29e. cross-tenant staff cannot read another tenant orders', async () => {
   const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
   await assertFails(getDoc(doc(alice, 'shopOrders', 'orderVictim')));
+});
+// 29f. A portal order carries the client's own arithmetic. Prices are re-priced
+//      server-side, but the MONEY STATE is pinned by the rules: an order that
+//      arrives `paymentStatus: 'Paid'` makes ShopOrdersView issue an invoice
+//      already marked paid, and `stockApplied: true` makes the back office skip
+//      the stock decrement -- a client-authored fact about our own books.
+test('29f. portal client cannot place an order that is already paid or already stocked', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  const base = {
+    businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', items: [], currency: 'ALL',
+    subtotal: 0, total: 0, status: 'Pending', source: 'portal', createdByUserId: 'carol',
+  };
+  await assertFails(setDoc(doc(carol, 'shopOrders', 'orderPrepaid'),
+    { ...base, orderNumber: 'POR-2026-0005', paymentStatus: 'Paid' }));
+  await assertFails(setDoc(doc(carol, 'shopOrders', 'orderPartPaid'),
+    { ...base, orderNumber: 'POR-2026-0006', paymentStatus: 'Partial' }));
+  await assertFails(setDoc(doc(carol, 'shopOrders', 'orderStocked'),
+    { ...base, orderNumber: 'POR-2026-0007', stockApplied: true }));
+  // The legitimate shape still works, with the payment state stated explicitly.
+  await assertSucceeds(setDoc(doc(carol, 'shopOrders', 'orderUnpaid'),
+    { ...base, orderNumber: 'POR-2026-0008', paymentStatus: 'Unpaid', stockApplied: false }));
 });
 
 // ── platformMetrics: platform history is operator-only (console improvement #2) ──
@@ -1584,4 +1701,135 @@ test('51g. coupons are staff-only and tenant-bound; the backups ledger is read-o
   await assertFails(getDoc(doc(carol, 'hostingBackups', 'bkVictim')));
   await assertFails(getDoc(doc(alice, 'hostingBackups', 'bkVictim')));
   await assertFails(setDoc(doc(alice, 'hostingBackups', 'bkForged'), { businessId: MY_BIZ, customerId: 'cust1', subscriptionId: 'subMine', kind: 'manual', ok: true }));
+});
+
+// 52. Preventiva boundary. A quote holds the tenant's pricing AND is the document a
+//     contract's packageSummary is copied from, so the portal clause must be a
+//     keyhole, not ownership: the client answers a quote that was SENT to them and
+//     writes nothing else. Same shape as the customers rule (50a/50b).
+test('52a. portal client cannot read a DRAFT quote, nor another tenant quote', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertSucceeds(getDoc(doc(carol, 'quotes', 'quoteMineSent')));
+  // Internal pricing: it used to be fetched and hidden in React, i.e. in devtools.
+  await assertFails(getDoc(doc(carol, 'quotes', 'quoteMineDraft')));
+  await assertFails(getDoc(doc(carol, 'quotes', 'quoteVictim')));
+});
+test('52b. the portal LIST query must constrain status, or it is denied outright', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  // Rules are not filters: ownership alone no longer proves the read clause.
+  await assertFails(getDocs(query(collection(carol, 'quotes'), where('customerId', '==', 'cust1'))));
+  // The shape PortalQuotesView actually issues (CLIENT_VISIBLE_STATUSES).
+  await assertSucceeds(getDocs(query(
+    collection(carol, 'quotes'),
+    where('customerId', '==', 'cust1'),
+    where('status', 'in', ['Sent', 'Accepted', 'Rejected']),
+  )));
+  // The lead-linked half of the same view. Two `in` filters expand to at most
+  // 10 x 3 = 30 disjunctions, which is Firestore's limit -- hence the slice(0, 10)
+  // on leadIdList in PortalQuotesView.
+  await assertFails(getDocs(query(collection(carol, 'quotes'), where('leadId', 'in', ['leadMine']))));
+  await assertSucceeds(getDocs(query(
+    collection(carol, 'quotes'),
+    where('leadId', 'in', ['leadMine']),
+    where('status', 'in', ['Sent', 'Accepted', 'Rejected']),
+  )));
+});
+test('52c. portal client cannot rewrite a quote price, nor accept a Draft', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  // The whole point: `result` is the money (and what ContractsView copies verbatim).
+  await assertFails(updateDoc(doc(carol, 'quotes', 'quoteMineSent2'), {
+    result: { grandTotal: 1, totalMonthly: 0 },
+  }));
+  await assertFails(updateDoc(doc(carol, 'quotes', 'quoteMineSent2'), {
+    status: 'Accepted', result: { grandTotal: 1, totalMonthly: 0 },
+  }));
+  await assertFails(updateDoc(doc(carol, 'quotes', 'quoteMineSent2'), { label: 'Falas' }));
+  await assertFails(updateDoc(doc(carol, 'quotes', 'quoteMineSent2'), { businessId: VICTIM_BIZ }));
+  // Not a terminal answer, so not the client's to write.
+  await assertFails(updateDoc(doc(carol, 'quotes', 'quoteMineSent2'), { status: 'Draft' }));
+  await assertFails(updateDoc(doc(carol, 'quotes', 'quoteMineSent2'), { status: 'Sent' }));
+  // A Draft was never sent to them, so it cannot be accepted either.
+  await assertFails(updateDoc(doc(carol, 'quotes', 'quoteMineDraft'), { status: 'Accepted' }));
+  await assertFails(updateDoc(doc(carol, 'quotes', 'quoteVictim'), { status: 'Rejected' }));
+  await assertFails(deleteDoc(doc(carol, 'quotes', 'quoteMineSent2')));
+  // The one thing they MAY do -- exactly what PortalQuotesView writes.
+  await assertSucceeds(updateDoc(doc(carol, 'quotes', 'quoteMineSent2'), {
+    status: 'Accepted', updatedAt: new Date(),
+  }));
+});
+test('52d. staff keep full control of their own tenant quotes', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(getDoc(doc(alice, 'quotes', 'quoteMineDraft')));
+  await assertSucceeds(updateDoc(doc(alice, 'quotes', 'quoteMineDraft'), {
+    status: 'Sent', result: { grandTotal: 450, totalMonthly: 30 },
+  }));
+  await assertFails(getDoc(doc(alice, 'quotes', 'quoteVictim')));
+  await assertFails(updateDoc(doc(alice, 'quotes', 'quoteVictim'), { status: 'Rejected' }));
+});
+
+// 53. payments (Arketimet) and expenseCategories are business-scoped; their LIST
+//     queries must carry the tenant predicate (useFirestore registers both now), so
+//     an unscoped list -- the shape that made the Arketimet page render empty -- is
+//     denied outright.
+test('53a. payments: own tenant reads, other tenant does not, unscoped list is denied', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(getDoc(doc(alice, 'payments', 'payMine')));
+  await assertFails(getDoc(doc(alice, 'payments', 'payVictim')));
+  await assertFails(getDocs(collection(alice, 'payments')));
+  await assertSucceeds(getDocs(query(collection(alice, 'payments'), where('businessId', '==', MY_BIZ))));
+  await assertFails(getDocs(query(collection(alice, 'payments'), where('businessId', '==', VICTIM_BIZ))));
+});
+// 54. The compensation vault. Salary used to live on `teamMembers`, which every
+// member of the business can read — so a Viewer could pull every colleague's pay
+// with one query. It now lives here, readable only by the person it describes and
+// by an admin/manager of that business.
+test('54a. a plain member reads only their own pay row', async () => {
+  const bob = staffOf('bob', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(getDoc(doc(bob, 'teamMemberComp', `${MY_TEAM}_bob`)));
+  // The colleague sitting next to them — the whole point of the collection.
+  await assertFails(getDoc(doc(bob, 'teamMemberComp', `${MY_TEAM}_carol`)));
+  // And a list would hand them the lot, so it must not be provable.
+  await assertFails(getDocs(collection(bob, 'teamMemberComp')));
+  await assertFails(getDocs(query(collection(bob, 'teamMemberComp'), where('businessId', '==', MY_BIZ))));
+});
+test('54b. an admin of the business reads the whole tenant, scoped', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(getDoc(doc(alice, 'teamMemberComp', `${MY_TEAM}_carol`)));
+  await assertSucceeds(getDocs(query(collection(alice, 'teamMemberComp'), where('businessId', '==', MY_BIZ))));
+  // An unscoped list is denied even for them — rules are not filters.
+  await assertFails(getDocs(collection(alice, 'teamMemberComp')));
+});
+test('54c. another tenant sees nothing, however privileged there', async () => {
+  const mallory = outsider(); // admin of VICTIM_BIZ
+  await assertFails(getDoc(doc(mallory, 'teamMemberComp', `${MY_TEAM}_bob`)));
+  await assertFails(getDocs(query(collection(mallory, 'teamMemberComp'), where('businessId', '==', MY_BIZ))));
+  await assertFails(setDoc(doc(mallory, 'teamMemberComp', `${MY_TEAM}_bob`), {
+    businessId: MY_BIZ, teamId: MY_TEAM, userId: 'bob', monthlySalary: 1,
+  }));
+});
+test('54d. nobody writes their own pay, and a row cannot be re-pointed', async () => {
+  const bob = staffOf('bob', MY_BIZ, MY_TEAM, ['member']);
+  // Reading your own salary is fine; awarding yourself one is not.
+  await assertFails(updateDoc(doc(bob, 'teamMemberComp', `${MY_TEAM}_bob`), { monthlySalary: 500000 }));
+
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(updateDoc(doc(alice, 'teamMemberComp', `${MY_TEAM}_bob`), { monthlySalary: 90000 }));
+  // The id IS the data model here: a row whose key names one person while its
+  // data names another would write pay under somebody else's key.
+  await assertFails(setDoc(doc(alice, 'teamMemberComp', 'forged'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, userId: 'bob', monthlySalary: 1,
+  }));
+  // And an edit may never move a record to another tenant, team or person.
+  await assertFails(updateDoc(doc(alice, 'teamMemberComp', `${MY_TEAM}_bob`), { businessId: VICTIM_BIZ }));
+  await assertFails(updateDoc(doc(alice, 'teamMemberComp', `${MY_TEAM}_bob`), { userId: 'carol' }));
+});
+
+test('53b. expenseCategories: tenant taxonomy, not a shared one', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(getDocs(query(collection(alice, 'expenseCategories'), where('businessId', '==', MY_BIZ))));
+  await assertFails(getDocs(collection(alice, 'expenseCategories')));
+  await assertFails(getDoc(doc(alice, 'expenseCategories', 'catVictimExp')));
+  // A create must stamp the writer's OWN business (useFirestore does it now).
+  await assertSucceeds(setDoc(doc(alice, 'expenseCategories', 'catNew'), { businessId: MY_BIZ, teamId: MY_TEAM, label: 'Transport' }));
+  await assertFails(setDoc(doc(alice, 'expenseCategories', 'catForged'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, label: 'Forged' }));
 });

@@ -70,14 +70,14 @@ const PAIN_STYLE = [
 const ADDON_ICONS = [Video, Globe, MessageSquare, Award, Camera, Shield];
 const TESTI_COLORS = ['bg-pink-500', 'bg-violet-500', 'bg-indigo-500'];
 const PERK_ICONS = [CheckCircle2, Target, TrendingUp, Zap];
-// Add-on monthly prices (€), by add-on order. Selectable on the page.
-const ADDON_PRICES = [200, 350, 150, 300, 180, 150];
+// Add-on monthly prices (ALL), by add-on order. Selectable on the page.
+const ADDON_PRICES = [20000, 35000, 15000, 30000, 18000, 15000];
 const ANNUAL_DISCOUNT = 0.15;
 const priceNum = (p: string) => parseInt(String(p).replace(/[^\d]/g, ''), 10) || 0;
-const BILLING_T: Record<string, { monthly: string; annual: string; save: string; annualNote: string; add: string; added: string; estTitle: string; perMonth: string }> = {
-  sq: { monthly: 'Mujore', annual: 'Vjetore', save: 'Kurse 15%', annualNote: 'faturuar vjetore', add: 'Shto', added: 'Shtuar ✓', estTitle: 'Vlera e përafërt', perMonth: '/muaj' },
-  en: { monthly: 'Monthly', annual: 'Annual', save: 'Save 15%', annualNote: 'billed annually', add: 'Add', added: 'Added ✓', estTitle: 'Estimated value', perMonth: '/mo' },
-  it: { monthly: 'Mensile', annual: 'Annuale', save: 'Risparmia 15%', annualNote: 'fatturato annualmente', add: 'Aggiungi', added: 'Aggiunto ✓', estTitle: 'Valore stimato', perMonth: '/mese' },
+const BILLING_T: Record<string, { monthly: string; annual: string; save: string; annualNote: string; add: string; added: string; estTitle: string; perMonth: string; cur: string }> = {
+  sq: { monthly: 'Mujore', annual: 'Vjetore', save: 'Kurse 15%', annualNote: 'faturuar vjetore', add: 'Shto', added: 'Shtuar ✓', estTitle: 'Vlera e përafërt', perMonth: '/muaj', cur: 'Lekë' },
+  en: { monthly: 'Monthly', annual: 'Annual', save: 'Save 15%', annualNote: 'billed annually', add: 'Add', added: 'Added ✓', estTitle: 'Estimated value', perMonth: '/mo', cur: 'ALL' },
+  it: { monthly: 'Mensile', annual: 'Annuale', save: 'Risparmia 15%', annualNote: 'fatturato annualmente', add: 'Aggiungi', added: 'Aggiunto ✓', estTitle: 'Valore stimato', perMonth: '/mese', cur: 'ALL' },
 };
 
 interface Pkg { title: string; subtitle: string; price: string; priceNote: string; badge: string; cta: string; targetAudience: string[]; features: { category: string; items: string[] }[]; notIncluded: string[]; }
@@ -107,15 +107,15 @@ const SQ: Copy = {
       { title: 'Reklamat po konsumojnë buxhetin tuaj?', body: 'Keni investuar në Meta Ads, por rezultatet nuk kanë përmbushur pritshmëritë? Pa një strategji të mirëfilltë, optimizim të vazhdueshëm dhe targetim të saktë, reklamat mund të shpenzojnë buxhetin pa sjellë rezultatet e dëshiruara. Investoni me strategji, jo thjesht me buxhet.' },
       { title: 'Konkurrenti është kudo', body: 'Kompetitorët tuaj janë aktiv, postojnë çdo ditë dhe marrin klientët tuaj potencialë. Çdo ditë pa prezencë është mundësi e humbur.' },
     ] },
-  packages: { kicker: 'Çmimet', title: '3 paketa — 1 zgjidhje e duhur për ju', sub: 'Nga 700€/muaj deri në 2,800€/muaj. Pa kontratë — ndryshoni kur dëshironi.', idealFor: 'Ideal për', notIncluded: 'Nuk përfshihet', note: '* Buxheti i reklamave paguhet direkt te platformat (Meta/Google/TikTok) — nuk përfshihet në çmim.', compareChoose: 'Zgjidh',
+  packages: { kicker: 'Çmimet', title: '3 paketa — 1 zgjidhje e duhur për ju', sub: 'Nga 70.000 Lekë/muaj deri në 280.000 Lekë/muaj. Pa kontratë — ndryshoni kur dëshironi.', idealFor: 'Ideal për', notIncluded: 'Nuk përfshihet', note: '* Buxheti i reklamave paguhet direkt te platformat (Meta/Google/TikTok) — nuk përfshihet në çmim.', compareChoose: 'Zgjidh',
     pkgs: [
-      { title: 'Growth', subtitle: 'Rritje e audiencës dhe gjenerim i klientëve', price: '700€', priceNote: '/ muaj + ad spend', badge: 'Popullor', cta: 'Zgjidh Growth', targetAudience: ['Biznese në rritje që duan followers', 'E-commerce & shitje online', 'Brand-e që duan lead generation'],
+      { title: 'Growth', subtitle: 'Rritje e audiencës dhe gjenerim i klientëve', price: '70.000', priceNote: 'Lekë / muaj + ad spend', badge: 'Popullor', cta: 'Zgjidh Growth', targetAudience: ['Biznese në rritje që duan followers', 'E-commerce & shitje online', 'Brand-e që duan lead generation'],
         features: [{ category: 'Platformat & Kontent', items: ['Menaxhim 3 platformash (FB + IG + TikTok)', '16 postime / muaj', '14 reels / muaj', '1 ditë xhirimi kontent / muaj', 'Design grafik & branding', 'Copywriting storytelling', 'Stories / Highlights optimizim', 'Kalendar strategjik kontent'] }, { category: 'Reklama', items: ['Menaxhim i plotë Meta Ads', '2–3 fushata aktive', 'Audience targeting i avancuar', 'Optimizim javor i reklamave', 'Raportim javor performancës'] }, { category: 'Community & Raportim', items: ['Community management bazë', 'Monitorim komentesh & mentions', 'Raport mujor i detajuar'] }],
         notIncluded: ['Buxheti i reklamave', 'LinkedIn / YouTube', 'Google Ads', 'Influencer management', 'Email marketing'] },
-      { title: 'Pro', subtitle: 'Dominim dixhital dhe rezultate të matshme', price: '1,400€', priceNote: '/ muaj + ad spend', badge: 'Më i Zgjedhuri', cta: 'Zgjidh Pro', targetAudience: ['Biznese serioze me objektiva të qarta', 'Brand-e që duan rritje agresive', 'Kompani me produkte/shërbime të shumta'],
+      { title: 'Pro', subtitle: 'Dominim dixhital dhe rezultate të matshme', price: '140.000', priceNote: 'Lekë / muaj + ad spend', badge: 'Më i Zgjedhuri', cta: 'Zgjidh Pro', targetAudience: ['Biznese serioze me objektiva të qarta', 'Brand-e që duan rritje agresive', 'Kompani me produkte/shërbime të shumta'],
         features: [{ category: 'Platformat & Kontent', items: ['Menaxhim 4 platformash (FB + IG + TikTok + LinkedIn)', '24 postime / muaj', '20 reels / muaj', '2 ditë xhirimi / muaj', 'Design grafik premium', 'Copywriting i avancuar + SEO copy', 'Video editing & subtitle', 'Stories + Reels + Carousel strategy', 'Kalendar strategjik 3-mujor'] }, { category: 'Reklama', items: ['Menaxhim i plotë Meta Ads', 'Google Search & Display Ads', '4–6 fushata aktive', 'Remarketing & retargeting', 'Lookalike audiences', 'A/B testing kreativësh', 'Optimizim i vazhdueshëm'] }, { category: 'Community & Strategji', items: ['Community management aktiv', 'Inbox management (komente + DM)', 'Brand monitoring', 'Raport javor + mujor i plotë', 'Strategji rritje 6-mujore'] }],
         notIncluded: ['Buxheti i reklamave', 'YouTube Ads', 'Influencer management', 'Email marketing automation'] },
-      { title: 'Agency', subtitle: 'Zgjidhja e plotë — ekip i dedikuar për brand-in tuaj', price: '2,800€', priceNote: '/ muaj + ad spend', badge: 'Full Service', cta: 'Zgjidh Agency', targetAudience: ['Kompani të mëdha & korporata', 'Brand-e me prania multi-platformë', 'Biznese që duan ekip të dedikuar'],
+      { title: 'Agency', subtitle: 'Zgjidhja e plotë — ekip i dedikuar për brand-in tuaj', price: '280.000', priceNote: 'Lekë / muaj + ad spend', badge: 'Full Service', cta: 'Zgjidh Agency', targetAudience: ['Kompani të mëdha & korporata', 'Brand-e me prania multi-platformë', 'Biznese që duan ekip të dedikuar'],
         features: [{ category: 'Platformat & Kontent', items: ['Menaxhim 5 platformash (FB + IG + TikTok + LinkedIn + YouTube)', '32+ postime / muaj', '28+ reels / muaj', '3+ ditë xhirimi / muaj', 'Mini-dokumentarë & brand films', 'Podcast / Audio content', 'Design system i plotë brand', 'Copywriting multiplatformë', 'Kampanja sezonale & promovuese'] }, { category: 'Reklama Full-Funnel', items: ['Meta Ads + Google Ads + TikTok Ads', 'YouTube Ads', 'Fushata pa limit', 'Full funnel strategy (Awareness → Conversion)', 'Email marketing automation', 'CRM integration & follow-up', 'Buxhet i optimizuar cross-platform'] }, { category: 'Ekip & Strategji', items: ['Account manager i dedikuar', 'Menaxher kontent i dedikuar', 'Community management i plotë 7/7', 'Inbox + DM management', 'Influencer marketing & koordinim', 'Brand reputation management', 'Raport javor + mujor + kuartal', 'Strategji vjetore growth'] }],
         notIncluded: ['Buxheti i reklamave'] },
     ] },
@@ -147,7 +147,7 @@ const SQ: Copy = {
     items: [
       { q: 'Cila paketë është e duhura për mua?', a: 'Varet nga qëllimet dhe buxheti juaj. Growth është ideal për rritje audiencës dhe prezencë të rregullt, Pro për lead generation agresive, Agency për kompani të mëdha me nevojë për ekip të dedikuar. Gjatë konsultimit falas, ju rekomandojmë paketën e duhur.' },
       { q: 'Sa kohë duhet për të parë rezultate?', a: 'Rezultate të para (rritje engagement, followers) shfaqen brenda 30 ditëve. Lead-et dhe konvertimet fillojnë pas 4–8 javësh, ndërsa rritja e qëndrueshme ndjehet pas 3 muajsh bashkëpunimi.' },
-      { q: 'Çfarë buxheti reklamash duhet?', a: 'Për paketën Growth rekomandojmë 200–400€/muaj. Pro: 400–800€/muaj. Agency: sipas strategjisë. Buxheti menaxhohet direkt nga ne dhe paguhet te platformat (Meta/Google).' },
+      { q: 'Çfarë buxheti reklamash duhet?', a: 'Për paketën Growth rekomandojmë 200–40.000 Lekë/muaj. Pro: 400–80.000 Lekë/muaj. Agency: sipas strategjisë. Buxheti menaxhohet direkt nga ne dhe paguhet te platformat (Meta/Google).' },
       { q: 'A mund të ndryshoj paketën pas fillimit?', a: 'Po, mund të upgradoni ose downgradoni çdo muaj. Nuk kemi kontratë afatgjatë — punojmë muaj pas muaji me rezultate.' },
       { q: 'Kush prodhon materialin vizual (foto/video)?', a: 'Ne prodhojmë çdo material. Në paketat Growth e lart, përfshihet 1–3 ditë xhirimi/muaj. Mund të shtoni edhe "Foto Profesionale" si add-on nëse keni nevojë për sesion të dedikuar.' },
       { q: 'A punoni me çdo lloj biznesi?', a: 'Po. Kemi eksperiencë në: e-commerce, restorante, hotele, bukuri & estetikë, fashion, fitness, arsim, imobiliare, teknologji, shërbime profesionale dhe shumë të tjera. Strategjia personalizohet sipas industrisë.' },
@@ -169,15 +169,15 @@ const EN: Copy = {
       { title: 'Are ads consuming your budget?', body: 'You invested in Meta Ads, but the results fell short of expectations? Without a sound strategy, continuous optimisation and precise targeting, ads can spend the budget without delivering the results you want. Invest with strategy, not with budget alone.' },
       { title: 'Competitors are everywhere', body: 'Your competitors are active, posting daily and taking your potential clients. Every day without presence is a lost opportunity.' },
     ] },
-  packages: { kicker: 'Pricing', title: '3 packages — 1 right solution for you', sub: 'From €700/month up to €2,800/month. No contract — change whenever you want.', idealFor: 'Ideal for', notIncluded: 'Not included', note: '* Ad budget is paid directly to the platforms (Meta/Google/TikTok) — not included in the price.', compareChoose: 'Choose',
+  packages: { kicker: 'Pricing', title: '3 packages — 1 right solution for you', sub: 'From 70,000 ALL/month up to 280,000 ALL/month. No contract — change whenever you want.', idealFor: 'Ideal for', notIncluded: 'Not included', note: '* Ad budget is paid directly to the platforms (Meta/Google/TikTok) — not included in the price.', compareChoose: 'Choose',
     pkgs: [
-      { title: 'Growth', subtitle: 'Audience growth and client generation', price: '€700', priceNote: '/ month + ad spend', badge: 'Popular', cta: 'Choose Growth', targetAudience: ['Growing businesses wanting followers', 'E-commerce & online sales', 'Brands wanting lead generation'],
+      { title: 'Growth', subtitle: 'Audience growth and client generation', price: '70,000', priceNote: 'ALL / month + ad spend', badge: 'Popular', cta: 'Choose Growth', targetAudience: ['Growing businesses wanting followers', 'E-commerce & online sales', 'Brands wanting lead generation'],
         features: [{ category: 'Platforms & Content', items: ['Management of 3 platforms (FB + IG + TikTok)', '16 posts / month', '14 reels / month', '1 content shoot day / month', 'Graphic design & branding', 'Storytelling copywriting', 'Stories / Highlights optimization', 'Strategic content calendar'] }, { category: 'Ads', items: ['Full Meta Ads management', '2–3 active campaigns', 'Advanced audience targeting', 'Weekly ad optimization', 'Weekly performance reporting'] }, { category: 'Community & Reporting', items: ['Basic community management', 'Comment & mention monitoring', 'Detailed monthly report'] }],
         notIncluded: ['Ad budget', 'LinkedIn / YouTube', 'Google Ads', 'Influencer management', 'Email marketing'] },
-      { title: 'Pro', subtitle: 'Digital dominance and measurable results', price: '€1,400', priceNote: '/ month + ad spend', badge: 'Most Chosen', cta: 'Choose Pro', targetAudience: ['Serious businesses with clear goals', 'Brands wanting aggressive growth', 'Companies with multiple products/services'],
+      { title: 'Pro', subtitle: 'Digital dominance and measurable results', price: '140,000', priceNote: 'ALL / month + ad spend', badge: 'Most Chosen', cta: 'Choose Pro', targetAudience: ['Serious businesses with clear goals', 'Brands wanting aggressive growth', 'Companies with multiple products/services'],
         features: [{ category: 'Platforms & Content', items: ['Management of 4 platforms (FB + IG + TikTok + LinkedIn)', '24 posts / month', '20 reels / month', '2 shoot days / month', 'Premium graphic design', 'Advanced copywriting + SEO copy', 'Video editing & subtitles', 'Stories + Reels + Carousel strategy', '3-month strategic calendar'] }, { category: 'Ads', items: ['Full Meta Ads management', 'Google Search & Display Ads', '4–6 active campaigns', 'Remarketing & retargeting', 'Lookalike audiences', 'Creative A/B testing', 'Continuous optimization'] }, { category: 'Community & Strategy', items: ['Active community management', 'Inbox management (comments + DM)', 'Brand monitoring', 'Full weekly + monthly report', '6-month growth strategy'] }],
         notIncluded: ['Ad budget', 'YouTube Ads', 'Influencer management', 'Email marketing automation'] },
-      { title: 'Agency', subtitle: 'The complete solution — a dedicated team for your brand', price: '€2,800', priceNote: '/ month + ad spend', badge: 'Full Service', cta: 'Choose Agency', targetAudience: ['Large companies & corporations', 'Brands with multi-platform presence', 'Businesses wanting a dedicated team'],
+      { title: 'Agency', subtitle: 'The complete solution — a dedicated team for your brand', price: '280,000', priceNote: 'ALL / month + ad spend', badge: 'Full Service', cta: 'Choose Agency', targetAudience: ['Large companies & corporations', 'Brands with multi-platform presence', 'Businesses wanting a dedicated team'],
         features: [{ category: 'Platforms & Content', items: ['Management of 5 platforms (FB + IG + TikTok + LinkedIn + YouTube)', '32+ posts / month', '28+ reels / month', '3+ shoot days / month', 'Mini-documentaries & brand films', 'Podcast / Audio content', 'Full brand design system', 'Multi-platform copywriting', 'Seasonal & promotional campaigns'] }, { category: 'Full-Funnel Ads', items: ['Meta Ads + Google Ads + TikTok Ads', 'YouTube Ads', 'Unlimited campaigns', 'Full funnel strategy (Awareness → Conversion)', 'Email marketing automation', 'CRM integration & follow-up', 'Optimized cross-platform budget'] }, { category: 'Team & Strategy', items: ['Dedicated account manager', 'Dedicated content manager', 'Full community management 7/7', 'Inbox + DM management', 'Influencer marketing & coordination', 'Brand reputation management', 'Weekly + monthly + quarterly report', 'Annual growth strategy'] }],
         notIncluded: ['Ad budget'] },
     ] },
@@ -209,7 +209,7 @@ const EN: Copy = {
     items: [
       { q: 'Which package is right for me?', a: 'It depends on your goals and budget. Growth is ideal for audience growth and a steady presence, Pro for aggressive lead generation, Agency for large companies needing a dedicated team. During the free consultation we recommend the right package.' },
       { q: 'How long until I see results?', a: 'First results (engagement and follower growth) appear within 30 days. Leads and conversions start after 4–8 weeks, while steady growth is felt after 3 months of collaboration.' },
-      { q: 'What ad budget is needed?', a: 'For Growth we recommend €200–400/month. Pro: €400–800/month. Agency: per strategy. The budget is managed directly by us and paid to the platforms (Meta/Google).' },
+      { q: 'What ad budget is needed?', a: 'For Growth we recommend 20,000 ALL–400/month. Pro: 40,000 ALL–800/month. Agency: per strategy. The budget is managed directly by us and paid to the platforms (Meta/Google).' },
       { q: 'Can I change the package after starting?', a: 'Yes, you can upgrade or downgrade every month. We have no long-term contract — we work month by month with results.' },
       { q: 'Who produces the visual material (photo/video)?', a: 'We produce all material. In Growth and up, 1–3 shoot days/month are included. You can also add "Professional Photos" as an add-on if you need a dedicated session.' },
       { q: 'Do you work with any kind of business?', a: 'Yes. We have experience in: e-commerce, restaurants, hotels, beauty & aesthetics, fashion, fitness, education, real estate, technology, professional services and many more. The strategy is tailored to the industry.' },
@@ -231,15 +231,15 @@ const IT: Copy = {
       { title: 'Le ads stanno consumando il tuo budget?', body: 'Hai investito in Meta Ads, ma i risultati non hanno soddisfatto le aspettative? Senza una strategia solida, ottimizzazione continua e targeting preciso, le ads possono spendere il budget senza portare i risultati desiderati. Investi con strategia, non solo con budget.' },
       { title: 'I concorrenti sono ovunque', body: 'I tuoi concorrenti sono attivi, pubblicano ogni giorno e si prendono i tuoi clienti potenziali. Ogni giorno senza presenza è un\'opportunità persa.' },
     ] },
-  packages: { kicker: 'Prezzi', title: '3 pacchetti — 1 soluzione giusta per te', sub: 'Da 700€/mese fino a 2.800€/mese. Nessun contratto — cambia quando vuoi.', idealFor: 'Ideale per', notIncluded: 'Non incluso', note: '* Il budget pubblicitario si paga direttamente alle piattaforme (Meta/Google/TikTok) — non incluso nel prezzo.', compareChoose: 'Scegli',
+  packages: { kicker: 'Prezzi', title: '3 pacchetti — 1 soluzione giusta per te', sub: 'Da 70.000 ALL/mese fino a 280.000 ALL/mese. Nessun contratto — cambia quando vuoi.', idealFor: 'Ideale per', notIncluded: 'Non incluso', note: '* Il budget pubblicitario si paga direttamente alle piattaforme (Meta/Google/TikTok) — non incluso nel prezzo.', compareChoose: 'Scegli',
     pkgs: [
-      { title: 'Growth', subtitle: 'Crescita del pubblico e generazione di clienti', price: '700€', priceNote: '/ mese + ad spend', badge: 'Popolare', cta: 'Scegli Growth', targetAudience: ['Attività in crescita che vogliono follower', 'E-commerce & vendite online', 'Brand che vogliono lead generation'],
+      { title: 'Growth', subtitle: 'Crescita del pubblico e generazione di clienti', price: '70.000', priceNote: 'ALL / mese + ad spend', badge: 'Popolare', cta: 'Scegli Growth', targetAudience: ['Attività in crescita che vogliono follower', 'E-commerce & vendite online', 'Brand che vogliono lead generation'],
         features: [{ category: 'Piattaforme & Contenuti', items: ['Gestione di 3 piattaforme (FB + IG + TikTok)', '16 post / mese', '14 reels / mese', '1 giorno di riprese / mese', 'Grafica & branding', 'Copywriting storytelling', 'Ottimizzazione Stories / Highlights', 'Calendario contenuti strategico'] }, { category: 'Pubblicità', items: ['Gestione completa Meta Ads', '2–3 campagne attive', 'Targeting avanzato del pubblico', 'Ottimizzazione settimanale', 'Report settimanale delle performance'] }, { category: 'Community & Report', items: ['Community management base', 'Monitoraggio commenti & menzioni', 'Report mensile dettagliato'] }],
         notIncluded: ['Budget pubblicitario', 'LinkedIn / YouTube', 'Google Ads', 'Influencer management', 'Email marketing'] },
-      { title: 'Pro', subtitle: 'Dominio digitale e risultati misurabili', price: '1.400€', priceNote: '/ mese + ad spend', badge: 'Il Più Scelto', cta: 'Scegli Pro', targetAudience: ['Attività serie con obiettivi chiari', 'Brand che vogliono crescita aggressiva', 'Aziende con più prodotti/servizi'],
+      { title: 'Pro', subtitle: 'Dominio digitale e risultati misurabili', price: '140.000', priceNote: 'ALL / mese + ad spend', badge: 'Il Più Scelto', cta: 'Scegli Pro', targetAudience: ['Attività serie con obiettivi chiari', 'Brand che vogliono crescita aggressiva', 'Aziende con più prodotti/servizi'],
         features: [{ category: 'Piattaforme & Contenuti', items: ['Gestione di 4 piattaforme (FB + IG + TikTok + LinkedIn)', '24 post / mese', '20 reels / mese', '2 giorni di riprese / mese', 'Grafica premium', 'Copywriting avanzato + SEO copy', 'Video editing & sottotitoli', 'Strategia Stories + Reels + Carousel', 'Calendario strategico trimestrale'] }, { category: 'Pubblicità', items: ['Gestione completa Meta Ads', 'Google Search & Display Ads', '4–6 campagne attive', 'Remarketing & retargeting', 'Lookalike audiences', 'A/B testing dei creativi', 'Ottimizzazione continua'] }, { category: 'Community & Strategia', items: ['Community management attivo', 'Gestione inbox (commenti + DM)', 'Brand monitoring', 'Report settimanale + mensile completo', 'Strategia di crescita semestrale'] }],
         notIncluded: ['Budget pubblicitario', 'YouTube Ads', 'Influencer management', 'Email marketing automation'] },
-      { title: 'Agency', subtitle: 'La soluzione completa — un team dedicato al tuo brand', price: '2.800€', priceNote: '/ mese + ad spend', badge: 'Full Service', cta: 'Scegli Agency', targetAudience: ['Grandi aziende & corporation', 'Brand con presenza multi-piattaforma', 'Attività che vogliono un team dedicato'],
+      { title: 'Agency', subtitle: 'La soluzione completa — un team dedicato al tuo brand', price: '280.000', priceNote: 'ALL / mese + ad spend', badge: 'Full Service', cta: 'Scegli Agency', targetAudience: ['Grandi aziende & corporation', 'Brand con presenza multi-piattaforma', 'Attività che vogliono un team dedicato'],
         features: [{ category: 'Piattaforme & Contenuti', items: ['Gestione di 5 piattaforme (FB + IG + TikTok + LinkedIn + YouTube)', '32+ post / mese', '28+ reels / mese', '3+ giorni di riprese / mese', 'Mini-documentari & brand film', 'Podcast / Contenuti audio', 'Brand design system completo', 'Copywriting multi-piattaforma', 'Campagne stagionali & promozionali'] }, { category: 'Pubblicità Full-Funnel', items: ['Meta Ads + Google Ads + TikTok Ads', 'YouTube Ads', 'Campagne illimitate', 'Strategia full funnel (Awareness → Conversione)', 'Email marketing automation', 'Integrazione CRM & follow-up', 'Budget cross-platform ottimizzato'] }, { category: 'Team & Strategia', items: ['Account manager dedicato', 'Content manager dedicato', 'Community management completo 7/7', 'Gestione Inbox + DM', 'Influencer marketing & coordinamento', 'Brand reputation management', 'Report settimanale + mensile + trimestrale', 'Strategia di crescita annuale'] }],
         notIncluded: ['Budget pubblicitario'] },
     ] },
@@ -271,7 +271,7 @@ const IT: Copy = {
     items: [
       { q: 'Quale pacchetto fa per me?', a: 'Dipende dai tuoi obiettivi e dal budget. Growth è ideale per la crescita del pubblico e una presenza costante, Pro per la lead generation aggressiva, Agency per grandi aziende che necessitano di un team dedicato. Durante la consulenza gratuita ti consigliamo il pacchetto giusto.' },
       { q: 'Quanto tempo per vedere risultati?', a: 'I primi risultati (crescita di engagement e follower) appaiono entro 30 giorni. Lead e conversioni iniziano dopo 4–8 settimane, mentre la crescita stabile si sente dopo 3 mesi di collaborazione.' },
-      { q: 'Che budget pubblicitario serve?', a: 'Per Growth consigliamo 200–400€/mese. Pro: 400–800€/mese. Agency: in base alla strategia. Il budget è gestito direttamente da noi e pagato alle piattaforme (Meta/Google).' },
+      { q: 'Che budget pubblicitario serve?', a: 'Per Growth consigliamo 200–40.000 ALL/mese. Pro: 400–80.000 ALL/mese. Agency: in base alla strategia. Il budget è gestito direttamente da noi e pagato alle piattaforme (Meta/Google).' },
       { q: 'Posso cambiare pacchetto dopo l\'inizio?', a: 'Sì, puoi fare upgrade o downgrade ogni mese. Non abbiamo contratti a lungo termine — lavoriamo mese per mese con risultati.' },
       { q: 'Chi produce il materiale visivo (foto/video)?', a: 'Produciamo tutto il materiale. Da Growth in su sono inclusi 1–3 giorni di riprese/mese. Puoi anche aggiungere "Foto Professionali" come extra se ti serve una sessione dedicata.' },
       { q: 'Lavorate con qualsiasi tipo di attività?', a: 'Sì. Abbiamo esperienza in: e-commerce, ristoranti, hotel, bellezza & estetica, moda, fitness, istruzione, immobiliare, tecnologia, servizi professionali e molto altro. La strategia è personalizzata per il settore.' },
@@ -297,6 +297,7 @@ const SocialMediaLandingPage: React.FC = () => {
   const [billing, setBilling] = useState<'monthly' | 'annual'>('monthly');
   const [selectedAddons, setSelectedAddons] = useState<number[]>([]);
   const bt = BILLING_T[lang] || BILLING_T.sq;
+  const money = (n: number) => n.toLocaleString(lang === 'en' ? 'en-US' : 'de-DE');
   const toggleAddon = (i: number) => setSelectedAddons(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]);
   // Monthly value: selected package (annual = −15%) + selected add-ons.
   const pkgMonthly = priceNum(t.packages.pkgs.find(x => x.title === selectedPkg)?.price || '');
@@ -455,8 +456,8 @@ const SocialMediaLandingPage: React.FC = () => {
                       return billing === 'annual' ? (
                         <>
                           <div className="flex items-end gap-2">
-                            <span className="text-3xl font-extrabold text-gray-900">{annual.toLocaleString()}€</span>
-                            <span className="text-sm text-gray-400 line-through mb-1">{m.toLocaleString()}€</span>
+                            <span className="text-3xl font-extrabold text-gray-900">{money(annual)} {bt.cur}</span>
+                            <span className="text-sm text-gray-400 line-through mb-1">{money(m)} {bt.cur}</span>
                           </div>
                           <p className="text-[11px] text-gray-400 mt-0.5 mb-4">{bt.perMonth} · {bt.annualNote}</p>
                         </>
@@ -528,7 +529,7 @@ const SocialMediaLandingPage: React.FC = () => {
                 <button type="button" onClick={() => toggleAddon(i)} className={`w-full text-left rounded-2xl p-6 border transition-all ${on ? 'bg-purple-500/20 border-purple-400 ring-1 ring-purple-400' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
                   <div className="flex items-start justify-between mb-4">
                     <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center"><Icon className="w-5 h-5 text-purple-300" /></div>
-                    {price ? <span className="text-sm font-extrabold text-white">+{price}€<span className="text-[10px] text-gray-400 font-normal">{bt.perMonth}</span></span> : null}
+                    {price ? <span className="text-sm font-extrabold text-white">+{money(price)} {bt.cur}<span className="text-[10px] text-gray-400 font-normal">{bt.perMonth}</span></span> : null}
                   </div>
                   <h3 className="font-bold mb-2">{a.title}</h3>
                   <p className="text-sm text-gray-400 leading-relaxed mb-3">{a.desc}</p>
@@ -541,7 +542,7 @@ const SocialMediaLandingPage: React.FC = () => {
               <div className="mt-10 max-w-2xl mx-auto bg-white/5 border border-purple-400/30 rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
                 <div>
                   <p className="text-xs text-purple-300 uppercase tracking-wider font-bold">{bt.estTitle}</p>
-                  <p className="text-2xl font-extrabold text-white">{estMonthly.toLocaleString()}€<span className="text-sm text-gray-400 font-normal">{bt.perMonth}</span></p>
+                  <p className="text-2xl font-extrabold text-white">{money(estMonthly)} {bt.cur}<span className="text-sm text-gray-400 font-normal">{bt.perMonth}</span></p>
                   <p className="text-[11px] text-gray-400 mt-0.5">
                     {selectedPkg ? `${selectedPkg} (${billing === 'annual' ? bt.annual : bt.monthly})` : ''}
                     {selectedAddons.length > 0 ? ` + ${selectedAddons.length} add-on${selectedAddons.length > 1 ? 's' : ''}` : ''}

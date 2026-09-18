@@ -3,6 +3,7 @@ import { db } from './firebase';
 import { setGlobalTeamId, setGlobalBusinessId } from '../hooks/useFirestore';
 import { defaultDisabledModulePaths } from './modules';
 import { syncTenantClaims } from './tenantClaims';
+import { beginTenantProvisioning, endTenantProvisioning } from './tenantProvisioning';
 
 /**
  * Creates a brand-new, isolated SaaS tenant for a freshly registered owner.
@@ -24,7 +25,19 @@ export interface CreateTenantInput {
 
 const TRIAL_DAYS = 14;
 
-export async function createTenant({ uid, companyName, ownerName, ownerEmail }: CreateTenantInput): Promise<string> {
+export async function createTenant(input: CreateTenantInput): Promise<string> {
+  // The registrant is already signed in (createUserWithEmailAndPassword did that) but
+  // has no membership until step 3 below — see lib/tenantProvisioning.ts for what
+  // the identity code would otherwise make of that window.
+  beginTenantProvisioning();
+  try {
+    return await provisionTenant(input);
+  } finally {
+    endTenantProvisioning();
+  }
+}
+
+async function provisionTenant({ uid, companyName, ownerName, ownerEmail }: CreateTenantInput): Promise<string> {
   const name = companyName.trim();
   const email = ownerEmail.trim().toLowerCase();
   const now = Timestamp.now();

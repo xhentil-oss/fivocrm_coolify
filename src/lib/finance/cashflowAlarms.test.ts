@@ -36,15 +36,43 @@ describe('computeCashflowHealth', () => {
   });
 
   it('counts monthly-billing projects as recurring inflow (no false gap alarm)', () => {
-    // Retainer modelled as a monthly PROJECT (no recurring invoice).
+    // Retainer modelled as a monthly PROJECT (no recurring invoice). `isRecurring`
+    // is what makes it a series — the inflow asks the billing engine.
     const projects = [
-      { id: 'p1', name: 'Retainer', status: 'Active', budget: 120_000, billingType: 'monthly' } as any,
+      { id: 'p1', name: 'Retainer', status: 'Active', budget: 120_000, billingType: 'monthly', isRecurring: true } as any,
     ];
     const members = [mkMember({ monthlySalary: 80_000 })];
     const res = computeCashflowHealth([], [], members, projects, NOW);
     expect(res.monthlyInflow).toBe(120_000);
     expect(res.gap).toBe(40_000);
     expect(res.alarms.find(a => a.id === 'cashflow-gap')).toBeUndefined();
+  });
+
+  it('stops counting a retainer whose billing series was switched off', () => {
+    // The gap alarm is the one number meant to warn BEFORE the money runs out.
+    // With `isRecurring` never checked, a stopped 120k retainer kept covering
+    // the payroll on paper and the red alarm never fired.
+    const projects = [
+      { id: 'p1', name: 'Retainer', status: 'Active', budget: 120_000,
+        billingType: 'monthly', isRecurring: false } as any,
+    ];
+    const members = [mkMember({ monthlySalary: 80_000 })];
+    const res = computeCashflowHealth([], [], members, projects, NOW);
+    expect(res.monthlyInflow).toBe(0);
+    expect(res.gap).toBe(-80_000);
+    expect(res.alarms.find(a => a.id === 'cashflow-gap')?.severity).toBe('red');
+  });
+
+  it('drops a recurring expense series that is past its end date', () => {
+    const expenses = [
+      mkExpense({ id: 'ended', amount: 60_000, category: 'Software', isRecurring: true,
+        recurringFrequency: 'monthly', nextRecurringDate: new Date('2026-08-01'),
+        recurringEndDate: new Date('2026-06-30') } as any),
+      mkExpense({ id: 'live', amount: 20_000, category: 'Rent', isRecurring: true,
+        recurringFrequency: 'monthly' } as any),
+    ];
+    const res = computeCashflowHealth([], expenses, [], [], NOW);
+    expect(res.recurringExpenses).toBe(20_000);
   });
 
   it('raises a red alarm when fixed costs exceed recurring income', () => {
@@ -87,5 +115,20 @@ describe('computeCashflowHealth', () => {
     const res = computeCashflowHealth(invoices, [], [], [], NOW);
     const c = res.alarms.find(a => a.id === 'concentration');
     expect(c?.customerId).toBe('big');
+  });
+
+  it('measures concentration over the THREE months its copy promises', () => {
+    // NOW = 15 Jul 2026 → the window opens 1 May (May, Jun, Jul). Cash banked in
+    // April is a FOURTH month: with the old `monthStart(now, -3)` window the
+    // 90 000 below made 'big' the concentration risk, contradicting the copy.
+    const invoices = [
+      mkInvoice({ id: 'apr', total: 90_000, status: 'Paid', customerId: 'big', paidAt: new Date('2026-04-10') }),
+      mkInvoice({ id: 'jun1', total: 10_000, status: 'Paid', customerId: 'big', paidAt: new Date('2026-06-10') }),
+      mkInvoice({ id: 'jun2', total: 40_000, status: 'Paid', customerId: 'small', paidAt: new Date('2026-06-12') }),
+    ];
+    const res = computeCashflowHealth(invoices, [], [], [], NOW);
+    const c = res.alarms.find(a => a.id === 'concentration');
+    expect(c?.customerId).toBe('small');   // 40k of the 50k collected in May–Jul
+    expect(c?.amount).toBe(40_000);
   });
 });

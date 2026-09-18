@@ -14,6 +14,11 @@ vi.mock('../contexts/PermissionsContext', () => ({
   usePermissions: () => permissions,
 }));
 
+// The view reads the signed-in user because compensation is now loaded through
+// `useMemberCompensation`, which only reads a member's own pay row when they are
+// not an admin. An owner here, matching `permissions` above.
+vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'owner-1' } }) }));
+
 const navigate = vi.fn();
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
 // Hosting module off in these tests: the MRR card and the extra listeners stay out of the way.
@@ -43,8 +48,17 @@ const CUR_MONTH = MONTHS[now.getMonth()];
 const PREV_MONTH = MONTHS[(now.getMonth() + 11) % 12];
 
 const collections: Record<string, any[]> = {};
+const documents: Record<string, any> = {};
 vi.mock('../hooks/useFirestore', () => ({
   useCollection: (name: string) => ({ data: collections[name] ?? [], loading: false }),
+  // `useMemberCompensation` reads a single `teamMemberComp` row for a
+  // non-privileged viewer. Nothing is seeded here, which is the pre-backfill
+  // state: the legacy `teamMembers` fields keep answering, and the payroll
+  // figures these tests assert on must be identical either way.
+  useDocument: (name: string, id?: string) => ({
+    data: id ? (documents[`${name}/${id}`] ?? null) : null,
+    loading: false,
+  }),
 }));
 
 import FinancesView from './FinancesView';

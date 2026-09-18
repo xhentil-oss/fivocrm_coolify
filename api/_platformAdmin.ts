@@ -167,15 +167,44 @@ async function updatePlan(_req: VercelRequest, res: VercelResponse, ctx: Ctx) {
   return res.status(200).json({ success: true, stripeManaged });
 }
 
-/** Per-tenant module toggles (the plan still gates what a toggle can unlock). */
+/**
+ * A list of module paths from the body, normalised: strings starting with `/app/`,
+ * trimmed, deduplicated, capped. `undefined` when the field was not sent; a string
+ * error when it was sent malformed. The registry itself (which paths exist) lives
+ * only in `src/lib/modules.ts` — the server validates shape, the console meaning.
+ */
+function parseModulePaths(value: unknown, field: string): string[] | undefined | { error: string } {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((p: any) => typeof p !== 'string' || !p.trim().startsWith('/app/'))) {
+    return { error: `${field} duhet të jetë listë rrugësh (/app/…).` };
+  }
+  return Array.from(new Set((value as string[]).map(p => p.trim()))).slice(0, 200);
+}
+const isParseError = (v: unknown): v is { error: string } => !!v && typeof v === 'object' && 'error' in (v as any);
+
+/**
+ * Per-tenant module access — two layers, either or both in one call:
+ *   - `lockedModules`   — what the PLATFORM withholds (entitlement). Rules let only a
+ *                         super-admin write it, so this endpoint is its only path.
+ *   - `disabledModules` — what the OWNER switched off. The console may write it as a
+ *                         support assist ("ndize për pronarin").
+ * The plan still gates what either layer can unlock.
+ */
 async function setModules(res: VercelResponse, ctx: Ctx) {
   const { ref, before, businessId, body, decoded } = ctx;
-  if (!Array.isArray(body.disabledModules) || body.disabledModules.some((p: any) => typeof p !== 'string')) {
-    return res.status(400).json({ error: 'disabledModules duhet të jetë listë tekstesh.' });
-  }
-  const next = Array.from(new Set(body.disabledModules as string[])).slice(0, 200);
 
-  await ref.update({ disabledModules: next, updatedAt: admin.firestore.Timestamp.now() });
+  const lockedModules = parseModulePaths(body.lockedModules, 'lockedModules');
+  if (isParseError(lockedModules)) return res.status(400).json(lockedModules);
+  const disabledModules = parseModulePaths(body.disabledModules, 'disabledModules');
+  if (isParseError(disabledModules)) return res.status(400).json(disabledModules);
+  if (lockedModules === undefined && disabledModules === undefined) {
+    return res.status(400).json({ error: 'Asgjë për të ndryshuar: dërgo lockedModules dhe/ose disabledModules.' });
+  }
+
+  const patch: Record<string, any> = { updatedAt: admin.firestore.Timestamp.now() };
+  if (lockedModules !== undefined) patch.lockedModules = lockedModules;
+  if (disabledModules !== undefined) patch.disabledModules = disabledModules;
+  await ref.update(patch);
 
   await writeAudit({
     businessId,
@@ -183,7 +212,13 @@ async function setModules(res: VercelResponse, ctx: Ctx) {
     actorEmail: decoded.email || null,
     action: 'platform.modules_change',
     target: `business:${businessId}`,
-    meta: { before: before.disabledModules || [], after: next },
+    meta: {
+      before: { lockedModules: before.lockedModules || [], disabledModules: before.disabledModules || [] },
+      after: {
+        lockedModules: lockedModules ?? before.lockedModules ?? [],
+        disabledModules: disabledModules ?? before.disabledModules ?? [],
+      },
+    },
   });
 
   return res.status(200).json({ success: true });
@@ -217,17 +252,17 @@ async function createTenantAction(
     return res.status(400).json({ error: 'Email-i i pronarit është i pavlefshëm.' });
   }
 
-  // Per-tenant module switches, chosen by the operator at creation. Same shape and
+  // Module access chosen by the operator at creation — both layers, same shape and
   // limits as `set-modules`. The registry (which modules exist, which are off by
   // default) lives in `src/lib/modules.ts` and has no server copy, so the console
-  // computes the list and the server only validates it. Omitted → every module on,
-  // the same as toggling them all in the console afterwards.
-  if (body.disabledModules !== undefined) {
-    if (!Array.isArray(body.disabledModules) || body.disabledModules.some((p: any) => typeof p !== 'string' || !p.startsWith('/app/'))) {
-      return res.status(400).json({ error: 'disabledModules duhet të jetë listë rrugësh (/app/…).' });
-    }
-  }
-  const disabledModules = Array.from(new Set(((body.disabledModules as string[] | undefined) || []).map(p => p.trim()))).slice(0, 200);
+  // computes the lists and the server only validates them. Omitted → nothing locked
+  // and nothing off, the same as toggling everything in the console afterwards.
+  const lockedParsed = parseModulePaths(body.lockedModules, 'lockedModules');
+  if (isParseError(lockedParsed)) return res.status(400).json(lockedParsed);
+  const disabledParsed = parseModulePaths(body.disabledModules, 'disabledModules');
+  if (isParseError(disabledParsed)) return res.status(400).json(disabledParsed);
+  const lockedModules = lockedParsed ?? [];
+  const disabledModules = disabledParsed ?? [];
 
   // Refuse a second tenant for the same owner email unless explicitly forced — the
   // common mistake is creating a duplicate for a customer who already signed up.
@@ -257,6 +292,7 @@ async function createTenantAction(
       ? { trialEndsAt: admin.firestore.Timestamp.fromMillis(Date.now() + trialDays * 86_400_000) }
       : {}),
     seats: seatsForPlan(plan),
+    lockedModules,
     disabledModules,
     memberCount: 0,
     teamCount: 1,
@@ -318,7 +354,7 @@ async function createTenantAction(
     actorEmail: decoded.email || null,
     action: 'platform.tenant_created',
     target: `business:${bizRef.id}`,
-    meta: { name, ownerEmail, plan, trialDays, disabledModules },
+    meta: { name, ownerEmail, plan, trialDays, lockedModules, disabledModules },
   });
 
   return res.status(200).json({

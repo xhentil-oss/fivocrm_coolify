@@ -4,10 +4,15 @@ import { forecastNextMonth } from './forecast';
 
 const NOW = new Date('2026-07-15T12:00:00'); // forecast month = August 2026
 
+// A retainer is a project whose billing SERIES is on. `billingType: 'monthly'`
+// alone is only a price shape — the forecast asks the billing engine, and the
+// engine refuses a project with `isRecurring` off ('not-recurring'). The old
+// fixtures never set it, which is exactly why the missing check went unnoticed.
 function mkProject(p: Partial<Project>): Project {
   return {
     id: p.id || 'p', name: p.name || 'P', status: p.status || 'Active',
     budget: p.budget, billingType: p.billingType, startDate: p.startDate,
+    isRecurring: p.billingType === 'monthly' ? true : p.isRecurring,
     createdAt: p.createdAt ?? new Date('2026-01-01'), updatedAt: new Date('2026-01-01'),
     createdByUserId: null, ...p,
   } as Project;
@@ -48,6 +53,49 @@ describe('forecastNextMonth (project-based revenue)', () => {
     expect(f.recurringRevenue).toBe(30_000);
   });
 
+  it('counts nothing for a project whose billing series was switched OFF', () => {
+    // `stopProjectBillingPatch()` writes isRecurring:false and deliberately
+    // LEAVES billingType alone. The forecast used to read billingType only, so
+    // a retainer the owner had switched off kept producing monthly recurring
+    // revenue, forecast revenue and cash-flow inflow forever.
+    const stopped = mkProject({
+      id: 'stopped', budget: 200_000, billingType: 'monthly', status: 'Active',
+      isRecurring: false, recurringBillingStoppedReason: 'manual',
+      recurringBillingStoppedAt: new Date('2026-06-30'),
+    } as any);
+    const f = forecastNextMonth([stopped], [], [], [], NOW);
+    expect(f.recurringRevenue).toBe(0);
+    expect(f.predictedRevenue).toBe(0);
+  });
+
+  it('refuses a contradictory one-time + isRecurring project, like the engine does', () => {
+    const p = mkProject({ id: 'x', budget: 80_000, billingType: 'one-time', isRecurring: true } as any);
+    expect(forecastNextMonth([p], [], [], [], NOW).recurringRevenue).toBe(0);
+  });
+
+  it('refuses an unsupported billing cycle instead of inventing a month', () => {
+    const p = mkProject({ id: 'x', budget: 80_000, billingType: 'monthly', recurringFrequency: 'daily' } as any);
+    expect(forecastNextMonth([p], [], [], [], NOW).recurringRevenue).toBe(0);
+  });
+
+  it('still counts a retainer that has already billed this period, or bills later in the month', () => {
+    const billed = mkProject({ id: 'billed', budget: 10_000, billingType: 'monthly',
+      lastInvoicePeriodKey: '2026-08' } as any);
+    const late = mkProject({ id: 'late', budget: 20_000, billingType: 'monthly',
+      billingDayOfMonth: 25 } as any);
+    const f = forecastNextMonth([billed, late], [], [], [], NOW);
+    expect(f.recurringRevenue).toBe(30_000);
+  });
+
+  it('normalises a WEEKLY retainer to a month, like the invoice loop', () => {
+    // It used to add the fee once per month whatever the cycle, so a weekly
+    // retainer read at roughly a quarter of its real value.
+    const weekly = mkProject({ id: 'w', budget: 50_000, billingType: 'monthly',
+      recurringFrequency: 'weekly' } as any);
+    const f = forecastNextMonth([weekly], [], [], [], NOW);
+    expect(f.recurringRevenue).toBeCloseTo(50_000 * 52 / 12, 5); // ≈216 667
+  });
+
   it('drops a recurring invoice series past its end date', () => {
     const invoices: Invoice[] = [
       { id: 'live', total: 10_000, status: 'Pending', isRecurring: true, recurringFrequency: 'monthly', createdAt: new Date('2026-01-01') } as Invoice,
@@ -84,6 +132,16 @@ describe('forecastNextMonth (project-based revenue)', () => {
     const f = forecastNextMonth(projects, invoices, [], [], NOW);
     // 30k project + 50k + 10k = 90k.
     expect(f.recurringRevenue).toBe(90_000);
+  });
+
+  it('contributes 0 for an invoice with an unknown frequency (never a full month)', () => {
+    const invoices: Invoice[] = [
+      { id: 'junk', total: 500_000, status: 'Pending', isRecurring: true,
+        recurringFrequency: 'fortnightly', createdAt: new Date('2026-01-01') } as any,
+    ];
+    // `?? 1` used to read a typo as a whole month of revenue; the expense side
+    // has always failed to 0, the safe direction.
+    expect(forecastNextMonth([], invoices, [], [], NOW).recurringRevenue).toBe(0);
   });
 
   it('computes profit = project revenue − next-month salary − avg other expenses', () => {
@@ -147,6 +205,33 @@ describe('expense forecast: commitment + one-offs, never both from an average', 
     expect(f.recurringExpenseCommitment).toBe(10_000);
     expect(f.predictedOneOffExpenses).toBe(0);
     expect(f.predictedOtherExpenses).toBe(10_000);   // not 10k + 20k/3
+  });
+
+  it('a series past its "repeat until" date is no longer a commitment', () => {
+    // `expenseGenerationBlockReason` answers `series-ended` for exactly this row,
+    // so nothing will ever be generated again — but the commitment rate kept
+    // charging it into the forecast and the cash-flow gap.
+    const ended = {
+      id: 'e', title: 'Licencë', amount: 70_000, category: 'Software', currency: 'ALL',
+      isRecurring: true, recurringFrequency: 'monthly',
+      date: new Date('2026-01-01'),
+      nextRecurringDate: new Date('2026-08-01'),
+      recurringEndDate: new Date('2026-06-30'),
+    } as any;
+    const f = forecastNextMonth([], [], [ended], [], NOW);
+    expect(f.recurringExpenseCommitment).toBe(0);
+    expect(f.predictedOtherExpenses).toBe(0);
+  });
+
+  it('keeps a series whose end date is still ahead', () => {
+    const live = {
+      id: 'e', title: 'Licencë', amount: 70_000, category: 'Software', currency: 'ALL',
+      isRecurring: true, recurringFrequency: 'monthly',
+      date: new Date('2026-01-01'),
+      nextRecurringDate: new Date('2026-08-01'),
+      recurringEndDate: new Date('2026-12-31'),
+    } as any;
+    expect(forecastNextMonth([], [], [live], [], NOW).recurringExpenseCommitment).toBe(70_000);
   });
 
   it('a paused series is no longer a commitment', () => {

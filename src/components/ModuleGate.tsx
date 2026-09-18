@@ -93,6 +93,17 @@ const ModuleGate: React.FC<ModuleGateProps> = ({ moduleId, children }) => {
     );
   }
 
+  if (reason === 'locked') {
+    // Withheld by the platform: the owner's own switch cannot help here, so do not
+    // send them to Cilësimet → Modulet like the `disabled` case does.
+    return (
+      <Shell icon={Lock} tone="muted" title={`${mod.label} nuk përfshihet në kontratën tuaj`}>
+        {mod.description} Ky modul menaxhohet nga FivoCRM dhe nuk është aktiv për këtë workspace.
+        Kontaktoni FivoCRM për ta shtuar.
+      </Shell>
+    );
+  }
+
   if (reason === 'disabled') {
     return (
       <Shell

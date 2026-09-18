@@ -8,8 +8,11 @@ import {
   getExpenseDate,
   expenseIsCountable,
   isProjectDirectExpense,
+  EXPENSE_CATEGORY_SALARY,
 } from '../lib/finance/financialAnalytics';
-import { Award, TrendingUp, DollarSign, Users, ChevronDown, ChevronUp, Info } from 'lucide-react';
+import { memberSalaryForMonth } from '../lib/finance/salaryHistory';
+import { useMemberCompensation } from '../hooks/useMemberCompensation';
+import { Award, TrendingUp, DollarSign, Users, ChevronDown, ChevronUp, Info, ShieldAlert } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -128,17 +131,40 @@ const BonusView: React.FC = () => {
   const [expandedMember, setExpandedMember] = useState<string | null>(null);
   const [showExplainer, setShowExplainer] = useState(false);
 
-  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
+  // ── The page is admin/manager-only DATA, not just an admin-only VIEW ───────
+  //
+  // Every figure here is derived from the whole tenant: all `teamMembers` (with
+  // `monthlySalary` and `salaryHistory`), all `projects`, all `expenses` — and
+  // salary payments ARE expenses (`category: 'Salary'`, `memberId` set). The
+  // per-member filtering used to happen in React AFTER the fetch, so any signed-in
+  // employee — a Viewer included — had every colleague's salary sitting in their
+  // browser. Filtering in the UI is not access control.
+  //
+  // There is no narrower query that still produces a correct bonus: the office
+  // overhead split needs every project of the period and every general expense of
+  // the month. So a non-privileged viewer fetches NOTHING and is told where the
+  // number comes from, instead of being served a tenant-wide dump or a figure
+  // computed from data they may not read. Serving per-member figures from a
+  // server endpoint is the follow-up (workspace/FINANCE_BUGS_2026_09_18.md #4).
+  const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
     skipTeamFilter: true,
+    skip: !isAdmin,
   });
+  // Salary now lives in `teamMemberComp`, readable only by the member themselves
+  // and the tenant's admins/managers — the rules half of the fix above. Dual
+  // read: the comp document wins where it exists, the legacy `teamMembers`
+  // fields are the fallback until the backfill has run.
+  const { members: teamMembers } = useMemberCompensation(rawTeamMembers, { skip: !isAdmin });
 
   const { getName, getInitials } = useUserNames(teamMembers || []);
   const { data: projects } = useCollection<Project>('projects', {
     skipTeamFilter: true,
+    skip: !isAdmin,
   });
   const { data: expenses } = useCollection<Expense>('expenses', {
     skipTeamFilter: true,
+    skip: !isAdmin,
   });
 
   // Filter projects completed in the selected month/year
@@ -178,36 +204,68 @@ const BonusView: React.FC = () => {
     // wrote `date` at all, every manually-entered expense was silently skipped:
     // this map stayed empty and `totalOfficeExpenses` below stayed 0, so bonus
     // maths saw only cron-generated rows.
+    // Last instant of the selected month — the shape `memberSalaryForMonth` wants.
+    const monthEnd = new Date(year, month + 1, 0, 23, 59, 59, 999);
+    /** Is this expense booked inside the bonus period? */
+    const inPeriod = (d: Date | null | undefined): boolean =>
+      !!d && d.getMonth() === month && d.getFullYear() === year;
+
     const salaryFromExpenses = new Map<string, number>();
     (expenses || []).forEach(e => {
-      if (e.category !== 'Salary') return;
+      if (e.category !== EXPENSE_CATEGORY_SALARY) return;
       if (!expenseIsCountable(e)) return;
       const memberId = e.memberId;
       if (!memberId) return;
-      const d = getExpenseDate(e);
-      if (!d) return;
-      if (d.getMonth() !== month || d.getFullYear() !== year) return;
+      if (!inPeriod(getExpenseDate(e))) return;
       salaryFromExpenses.set(memberId, (salaryFromExpenses.get(memberId) || 0) + toAll(e.amount || 0, e.currency));
     });
 
-    const effectiveSalary = (uid: string, monthlySalary?: number): number =>
-      salaryFromExpenses.get(uid) ?? monthlySalary ?? 0;
+    /** What the plan says this person's salary was in this month — effective-dated
+     *  (`salaryHistory`), start/termination aware. Never read `monthlySalary` raw:
+     *  it is today's figure, and would re-price closed months. */
+    const planSalary = (tm?: TeamMember): number => (tm ? memberSalaryForMonth(tm, monthEnd) : 0);
+    const recordedSalary = (uid: string): number => salaryFromExpenses.get(uid) ?? 0;
+
+    /** What the month actually COST: a recorded payment wins over the plan —
+     *  it is what left the bank (payroll law, src/lib/finance/payroll.ts). */
+    const chargedSalary = (uid: string, tm?: TeamMember): number =>
+      salaryFromExpenses.has(uid) ? recordedSalary(uid) : planSalary(tm);
+
+    /** What the bonus THRESHOLD is sized on. Deliberately NOT the recorded amount:
+     *  a 30 000 advance against an 80 000 salary is still an 80 000 salary, and
+     *  preferring the recorded row dropped the bar from 240 000 to 90 000 and
+     *  shrank every tier band with it. */
+    const thresholdSalary = (uid: string, tm?: TeamMember): number =>
+      Math.max(recordedSalary(uid), planSalary(tm));
 
     // ── 1. Office / general expenses for the selected period ─────────────────
     // Exclude Salary-category and project-specific expenses from office overhead.
     const totalOfficeExpenses = (expenses || []).reduce((sum, e) => {
-      if (e.projectId) return sum;             // project-specific → skip
-      if (e.category === 'Salary') return sum; // salary is tracked separately
-      if (!expenseIsCountable(e)) return sum;  // rejected rows never hit the books
-      const d = getExpenseDate(e);
-      if (!d) return sum;
-      if (d.getMonth() !== month || d.getFullYear() !== year) return sum;
+      if (e.projectId) return sum;                            // project-specific → skip
+      if (e.category === EXPENSE_CATEGORY_SALARY) return sum; // salary is tracked separately
+      if (!expenseIsCountable(e)) return sum;                 // rejected rows never hit the books
+      if (!inPeriod(getExpenseDate(e))) return sum;
       return sum + toAll(e.amount || 0, e.currency);
     }, 0);
 
+    /** Everyone whose salary this project consumes: the assigned members AND the
+     *  person responsible for it. One set, used for BOTH the charge and the
+     *  denominator that prorates it — they used to disagree (the charge looked at
+     *  `memberUserIds`, the denominator also at `responsibleUserId`), so part of
+     *  the salary was never charged and every bonus came out too high. */
+    const participantsOf = (p: Project): string[] => {
+      const s = new Set<string>();
+      ((p.memberUserIds as string[] | undefined) || []).forEach(u => { if (u) s.add(u); });
+      if (p.responsibleUserId) s.add(p.responsibleUserId);
+      return Array.from(s);
+    };
+
     return teamMembers
       .map(member => {
-        const salary = effectiveSalary(member.userId, member.monthlySalary);
+        // The tier ladder is sized on the FULL salary (see `thresholdSalary`);
+        // `recordedThisMonth` is what we still report to the user.
+        const salary = thresholdSalary(member.userId, member);
+        const recordedThisMonth = recordedSalary(member.userId);
         const salarySource = salaryFromExpenses.has(member.userId) ? 'expenses' : 'profile';
 
         // Match owner by uid OR email — member docs may store either, and
@@ -228,8 +286,11 @@ const BonusView: React.FC = () => {
           // ── direct project expenses ─────────────────────────────────────
           // Shared predicate: rejected rows and Salary-category rows are not
           // project-direct cost anywhere else, and were counted here.
+          // Period-filtered, the way staffRevenue does it: an all-time sum let a
+          // cost booked three months LATER retroactively lower an already-paid
+          // bonus, and the completion month's net was never final.
           const directExpenses = (expenses || [])
-            .filter(e => e.projectId === p.id && isProjectDirectExpense(e))
+            .filter(e => e.projectId === p.id && isProjectDirectExpense(e) && inPeriod(getExpenseDate(e)))
             .reduce((sum, e) => sum + toAll(e.amount || 0, e.currency), 0);
 
           // ── office expenses split EQUALLY across the period's projects ──
@@ -238,17 +299,13 @@ const BonusView: React.FC = () => {
             ? totalOfficeExpenses / periodProjects.length
             : 0;
 
-          // ── salary cost of each assigned member (prorated by project budget) ─
-          // Uses salary from Expenses if linked, else falls back to monthlySalary.
-          const memberIds: string[] = (p.memberUserIds as string[] | undefined) || [];
-          const salaryCosts = memberIds.reduce((sum, uid) => {
+          // ── salary cost of every PARTICIPANT (prorated by project budget) ───
+          // Uses the salary recorded in the month if there is one, else the plan.
+          const salaryCosts = participantsOf(p).reduce((sum, uid) => {
             const tm = teamMembers.find(m => m.userId === uid);
-            const tmSalary = effectiveSalary(uid, tm?.monthlySalary);
+            const tmSalary = chargedSalary(uid, tm);
             if (!tmSalary) return sum;
-            const assignedProjects = periodProjects.filter(pp =>
-              ((pp.memberUserIds as string[] | undefined) || []).includes(uid) ||
-              pp.responsibleUserId === uid
-            );
+            const assignedProjects = periodProjects.filter(pp => participantsOf(pp).includes(uid));
             const totalAssignedBudget = assignedProjects.reduce((s, pp) => s + toAll(pp.budget || 0, pp.currency), 0);
             const fraction = totalAssignedBudget > 0
               ? toAll(p.budget || 0, p.currency) / totalAssignedBudget
@@ -282,10 +339,18 @@ const BonusView: React.FC = () => {
           member,
           salarySource,
           hasSalary: salary > 0,
+          salary,
+          recordedThisMonth,
           ...bonus,
           netContribution,
           projects: projectDetails,
-        } as BonusResult & { member: TeamMember; salarySource: 'expenses' | 'profile'; hasSalary: boolean };
+        } as BonusResult & {
+          member: TeamMember;
+          salarySource: 'expenses' | 'profile';
+          hasSalary: boolean;
+          salary: number;
+          recordedThisMonth: number;
+        };
       })
       // Keep members who are paid OR who actually worked on projects this period;
       // drop only the ones with neither (they'd be empty rows).
@@ -312,6 +377,33 @@ const BonusView: React.FC = () => {
 
   const membersWithSalary = teamMembers?.filter(m => m.monthlySalary && m.monthlySalary > 0).length || 0;
   const membersEarningBonus = allMemberResults.filter(r => r.totalBonus > 0).length;
+
+  // Everything above is memoised, so every hook has already run — a guarded
+  // return here is safe. Nothing tenant-wide was fetched for this viewer
+  // (`skip: !isAdmin` on all three collections), so there is nothing to show.
+  if (!isAdmin) {
+    return (
+      <div className="max-w-2xl mx-auto py-10">
+        <Card className="border-dashed border-2 p-8 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-muted text-muted-foreground flex items-center justify-center mx-auto mb-4">
+            {permissions.isLoading
+              ? <Award className="w-7 h-7 animate-pulse" />
+              : <ShieldAlert className="w-7 h-7" />}
+          </div>
+          <p className="font-medium text-foreground/80">
+            {permissions.isLoading ? 'Duke ngarkuar…' : 'Bonuset shihen nga menaxhimi'}
+          </p>
+          {!permissions.isLoading && (
+            <p className="text-sm text-muted-foreground mt-2">
+              Llogaritja e bonusit bazohet në buxhetet, shpenzimet dhe rrogat e gjithë ekipit —
+              të dhëna që i sheh vetëm administratori ose menaxheri. Për bonusin tënd të këtij
+              muaji, pyet menaxherin tënd.
+            </p>
+          )}
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -552,9 +644,16 @@ const BonusView: React.FC = () => {
                     <div className="min-w-0">
                       <p className="font-medium text-sm truncate">{getName(result.member.userId, result.member.displayName || result.member.email?.split('@')[0])}</p>
                       <p className="text-xs text-muted-foreground">
-                        {result.member.role} · Rroga: {result.threshold ? Math.round(result.threshold / 3).toLocaleString() : '—'} L/muaj
+                        {result.member.role} · Rroga: {(result as any).salary ? (result as any).salary.toLocaleString() : '—'} L/muaj
                         {(result as any).salarySource === 'expenses' && (
                           <span className="ml-1 text-blue-500" title="Rroga e marrë nga shpenzimet e muajit">· nga shpenzimet</span>
+                        )}
+                        {/* A part-payment must not shrink the bar — we show it, we don't
+                            size the threshold on it. */}
+                        {(result as any).recordedThisMonth > 0 && (result as any).recordedThisMonth < (result as any).salary && (
+                          <span className="ml-1 text-amber-600 dark:text-amber-400" title="Shuma e regjistruar këtë muaj është më e vogël se rroga — pragu llogaritet mbi rrogën e plotë">
+                            · paguar {(result as any).recordedThisMonth.toLocaleString()} L
+                          </span>
                         )}
                         {!(result as any).hasSalary && (
                           <span className="ml-1 text-amber-600 dark:text-amber-400" title="Vendos pagën te profili i punonjësit që të llogaritet bonusi">· vendos pagën për bonus</span>

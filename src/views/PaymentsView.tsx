@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Wallet, RefreshCw, Search, Banknote, Landmark, CreditCard } from 'lucide-react';
 import { formatALL, toAll, currencySymbol } from '../lib/utils';
 import { parseDate } from '../lib/finance/financialAnalytics';
-import { missingPayments, totalsByMethod } from '../lib/finance/payments';
+import { missingPayments, totalsByMethod, refundState, isFullyRefunded } from '../lib/finance/payments';
 import type { Payment, Invoice, Customer } from '../types';
 
 const METHOD_ICON: Record<string, React.ComponentType<any>> = {
@@ -59,8 +59,14 @@ const PaymentsView: React.FC = () => {
       .sort((a, b) => (b._date?.getTime() || 0) - (a._date?.getTime() || 0));
   }, [payments, method, from, to, search, customerName]);
 
+  // A fully refunded receipt is money the business gave back: it stays VISIBLE in
+  // the list (with a badge) but counts in no total. The Stripe webhook has always
+  // stamped `refunded`/`refundedCents` here "so arkëtime reports can exclude
+  // refunded receipts" — nothing read them until now.
   const methodTotals = useMemo(() => totalsByMethod(filtered), [filtered]);
-  const grandTotal = useMemo(() => filtered.reduce((s, p) => s + toAll(p.amount || 0, p.currency), 0), [filtered]);
+  const counted = useMemo(() => filtered.filter(p => !isFullyRefunded(p)), [filtered]);
+  const grandTotal = useMemo(() => counted.reduce((s, p) => s + toAll(p.amount || 0, p.currency), 0), [counted]);
+  const refundedCount = filtered.length - counted.length;
 
   const methods = useMemo(() => {
     const set = new Set<string>();
@@ -74,8 +80,10 @@ const PaymentsView: React.FC = () => {
     try {
       // A content signature so rows created without a sourceKey (legacy / Stripe
       // webhook / manual) are not duplicated by the derived backfill.
-      const sig = (p: { invoiceId: string; amount: number; method?: string; paidAt?: any }) =>
-        `${p.invoiceId}|${Math.round(p.amount || 0)}|${p.method || ''}|${(parseDate(p.paidAt) || new Date(0)).toISOString().slice(0, 10)}`;
+      // The currency is part of the signature: without it 100 EUR and 100 ALL on the
+      // same invoice and day collapsed into one row and the second was never created.
+      const sig = (p: { invoiceId: string; amount: number; currency?: string; method?: string; paidAt?: any }) =>
+        `${p.invoiceId}|${Math.round(p.amount || 0)}|${p.currency || ''}|${p.method || ''}|${(parseDate(p.paidAt) || new Date(0)).toISOString().slice(0, 10)}`;
       const existing = new Set((payments || []).map(p => p.sourceKey).filter(Boolean));
       const existingSigs = new Set((payments || []).map(sig));
       const missing = missingPayments(invoices, existing).filter(m => !existingSigs.has(sig(m)));
@@ -120,7 +128,9 @@ const PaymentsView: React.FC = () => {
         <Card className="p-4">
           <p className="text-xs text-muted-foreground">Total (periudha)</p>
           <p className="text-xl font-bold tabular-nums text-emerald-600">{formatALL(grandTotal)}</p>
-          <p className="text-[11px] text-muted-foreground mt-0.5">{filtered.length} arkëtime</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            {counted.length} arkëtime{refundedCount > 0 ? ` · ${refundedCount} të rimbursuara (pa u numëruar)` : ''}
+          </p>
         </Card>
         {methodTotals.slice(0, 3).map(m => {
           const Icon = METHOD_ICON[m.method] || Wallet;
@@ -174,17 +184,29 @@ const PaymentsView: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(p => (
+                {filtered.map(p => {
+                  const refund = refundState(p);
+                  return (
                   <tr key={p.id} className="border-b border-border/50 last:border-0 hover:bg-muted/20">
                     <td className="py-2.5 px-3 whitespace-nowrap">{p._date ? p._date.toLocaleDateString('sq-AL') : '—'}</td>
                     <td className="py-2.5 px-3 font-medium">{p.invoiceNumber || p.invoiceId.slice(0, 8)}</td>
                     <td className="py-2.5 px-3 truncate max-w-[160px]">{p.customerId ? (customerName.get(p.customerId) || 'Pa klient') : 'Pa klient'}</td>
-                    <td className="py-2.5 px-3">{p.method || 'Tjetër'}</td>
-                    <td className="py-2.5 px-3 text-right tabular-nums font-semibold">
+                    <td className="py-2.5 px-3">
+                      <span className="inline-flex items-center gap-1.5 flex-wrap">
+                        {p.method || 'Tjetër'}
+                        {refund !== 'none' && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 whitespace-nowrap">
+                            {refund === 'full' ? 'Rimbursuar' : 'Rimbursim i pjesshëm'}
+                          </span>
+                        )}
+                      </span>
+                    </td>
+                    <td className={`py-2.5 px-3 text-right tabular-nums font-semibold ${refund === 'full' ? 'text-muted-foreground line-through' : ''}`}>
                       {(p.amount || 0).toLocaleString()} {currencySymbol(p.currency)}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
