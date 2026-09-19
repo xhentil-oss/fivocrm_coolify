@@ -809,6 +809,57 @@ permission `canAccessHosting`.
   use `senderHeader()` or nodemailer's `{ name, address }` form. Adding a new
   sender? → read `SMTP_USER` through `safeSenderAddress()` like the others.
 
+### Chat read/unread model (one predicate set, four surfaces)
+
+- **`src/lib/chat/unread.ts` is the ONLY definition of "unread for me"** (unit-tested) and
+  `useUnreadChat()` (`src/hooks/useUnreadChat.ts`) is the only place the three listeners
+  live: DMs `receiverId == me && isRead == false` (cap 200), client
+  `senderType == 'client' && isRead == false` (newest 300, tenant-scoped) and the tenant
+  `isRead == false` window (newest 200, the GROUP source). ChatView list badges + header
+  total, Sidebar and MobileBottomNav all read that hook — before, each had its own
+  filter and the DM badge in ChatView was counted from a DIFFERENT window (the 100
+  newest received rows of any state) than the one the mark-as-read pass wrote to, so a
+  row could be counted, read in the thread and never marked. **Counted == marked** is
+  now structural: the mark pass unions every DM source it holds (`unionById`) and
+  filters with the same predicates.
+- **Three read models, do not mix them**: DM → `isRead` (receiver flips it); client
+  thread → a CLIENT row is unread for staff until `isRead`, a STAFF row is read by the
+  client via `readAt` (portal only — staff never write `readAt`, it is the "✓✓ Parë"
+  receipt and used to be forged by a colleague opening the thread); group → PER MEMBER
+  via `readBy`, and `isRead` flips only when every other member has read
+  (`groupFullyReadAfter`) so the row can leave the shared window. Staff→client rows are
+  created `isRead: true`; a soft delete sets `isRead: true` (a deleted row is never
+  unread) and clears `editHistory`.
+- **A failed read-mark is surfaced, not looped.** `commitReadMarks` chunks the batch,
+  retries per document on failure, toasts once with the error code and leaves the ids
+  in `markedAsReadRef` until the next conversation switch. The old catch removed them
+  and the effect re-fired on every snapshot forever, silently.
+- **Group message lists are provable ONLY through `isGroupChannelMember()`**
+  (`firestore.rules`, one `get()` on the channel doc): ChatView lists `messages` by
+  `channelId` alone, and `isBusinessMember(resource.data.businessId)` is unconstrained
+  in that query, so every group thread was DENIED for anyone who was not a super-admin
+  (rules test 10d). Typing indicators are read tenant-scoped (`teamScopedWhere`) at a
+  deterministic id `<conversationKey>__<uid>` (test 10e); the old channelId-only read was
+  denied too, so every keystroke created a new doc nothing deleted —
+  `scripts/cleanup-typing-indicators.mjs` (dry-run by default) removes the leak.
+- **Group management is rules-enforced** (tests 10f/10g): only `admins` / the creator
+  edit a group or delete it; a member may write the last-message denormalisation
+  (`lastMessageAt/Preview/SenderId`) or LEAVE; only members may post into it. A group
+  is created with its creator in `members` AND `admins`.
+- **DM thread heads live in `dmThreads/{uidA__uidB}`** (participants only, test 10h),
+  written by the sender on every DM and by the `chat-scheduled` cron — the list
+  preview / recency. The open thread loads the PAIR (`senderId == me AND receiverId ==
+  peer` and the reverse), newest `DM_THREAD_LIMIT` each, index
+  `messages(senderId, receiverId, createdAt DESC)`; it used to download every message
+  the user ever sent anywhere.
+- **Scheduled messages ("Programo") are sent by `?job=chat-scheduled`**
+  (`api/_chatScheduled.ts`, every 5 min from `vps/server.ts`, NOT in `run-all`): the
+  row is claimed in a transaction (`sent: true`) before the send — the browser poll
+  claims first too, so the two can never both send. Recipients are notified exactly as
+  a live send does (DM / group fan-out / portal client).
+- `useCollection(..., { live: true })` bypasses the static 5-min cache for a listed
+  collection — ChatView reads `userProfiles` that way for the online dots.
+
 ### Chat notifications (the three surfaces + presence)
 
 Full audit: `workspace/CHAT_NOTIFICATIONS_AUDIT_2026_08.md`.

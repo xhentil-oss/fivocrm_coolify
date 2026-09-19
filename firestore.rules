@@ -253,6 +253,29 @@ service cloud.firestore {
     // staff are authorized via the message's businessId in the messages rule, with
     // a get(customer) fallback here for legacy messages that predate businessId
     // stamping. Only evaluated when the cheaper businessId clause already failed.
+    // Member of a group chat (`channels/{id}` with a `members` array). Evaluable for a
+    // LIST query too, because ChatView constrains `channelId` to one literal — which is
+    // what makes a group's message list provable: `isBusinessMember(resource.data.
+    // businessId)` is unconstrained in that query, so before this every group thread
+    // was denied outright for anyone who was not a super-admin (rules test 10d).
+    function isGroupChannelMember(channelId) {
+      return isAuth()
+        && channelId is string
+        && channelId != ''
+        && exists(/databases/$(database)/documents/channels/$(channelId))
+        && get(/databases/$(database)/documents/channels/$(channelId)).data.get('members', []).hasAny([request.auth.uid]);
+    }
+
+    function isGroupMemberOf(res) {
+      return isAuth() && res.data.get('members', []).hasAny([request.auth.uid]);
+    }
+    function isGroupAdmin() {
+      return isAuth() && (
+        resource.data.get('admins', []).hasAny([request.auth.uid])
+        || resource.data.get('createdByUserId', '') == request.auth.uid
+      );
+    }
+
     function canAccessClientChannel(channelId) {
       return isAuth()
         && channelId is string
@@ -983,9 +1006,53 @@ service cloud.firestore {
       // Now tenant-scoped: `businessId` is stamped on create and backfilled by the
       // `backfill-tenant-keys` job, and ChatView reads channels business-scoped.
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateBusinessDoc();
-      allow update: if canManageBusinessDoc() && keepsBusinessId();
-      allow delete: if canManageBusinessDoc();
+      // A group is born with its creator as member AND admin — otherwise nobody
+      // could ever manage it under the admin-only update rule below.
+      allow create: if canCreateBusinessDoc() && (
+        request.resource.data.get('isGroup', false) != true
+        || (request.resource.data.get('admins', []).hasAny([request.auth.uid])
+            && request.resource.data.get('members', []).hasAny([request.auth.uid]))
+      );
+      // Group management was enforced ONLY in the UI: any business member could add
+      // themselves to a private group, drop its admins, rename or delete it.
+      //   - an admin (or the creator) edits anything;
+      //   - a member may write the last-message denormalisation on send;
+      //   - a member may LEAVE (write members/admins only, and only to a list that no
+      //     longer contains them);
+      //   - a non-group (legacy fixed channel) keeps the business-member rule.
+      allow update: if keepsBusinessId() && (
+        resource.data.get('isGroup', false) != true
+          ? canManageBusinessDoc()
+          : (
+            isGroupAdmin()
+            || (isGroupMemberOf(resource)
+                && request.resource.data.diff(resource.data).affectedKeys()
+                  .hasOnly(['lastMessageAt', 'lastMessagePreview', 'lastMessageSenderId', 'updatedAt']))
+            || (isGroupMemberOf(resource)
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'admins', 'updatedAt'])
+                && !request.resource.data.get('members', []).hasAny([request.auth.uid])
+                && !request.resource.data.get('admins', []).hasAny([request.auth.uid]))
+            || isSuperAdmin()
+          )
+      );
+      allow delete: if resource.data.get('isGroup', false) != true
+        ? canManageBusinessDoc()
+        : (isGroupAdmin() || isSuperAdmin());
+    }
+
+
+    // Denormalised 1:1 thread heads (WhatsApp-style list previews): one doc per pair,
+    // id = the two uids sorted and joined with '__'. Written by the sender on every DM
+    // (and by the chat-scheduled cron). Readable only by the two participants.
+    match /dmThreads/{docId} {
+      allow read: if isAuth() && resource.data.get('participants', []).hasAny([request.auth.uid]);
+      allow create: if isAuth()
+        && request.resource.data.get('participants', []).hasAny([request.auth.uid])
+        && request.resource.data.get('participants', []).size() == 2;
+      allow update: if isAuth()
+        && resource.data.get('participants', []).hasAny([request.auth.uid])
+        && request.resource.data.get('participants', []) == resource.data.get('participants', []);
+      allow delete: if false;
     }
 
     // Persistent client conversation threads (Request 1: owner + watchers routing).
@@ -1030,6 +1097,7 @@ service cloud.firestore {
         || resource.data.senderId == request.auth.uid
         || resource.data.receiverId == request.auth.uid
         || canAccessClientChannel(resource.data.channelId)
+        || isGroupChannelMember(resource.data.channelId)
         || isSuperAdmin();
       // HARDENED create: a portal client may only post into their OWN client channel;
       // staff may post into a channel of a team/business they belong to (or a client
@@ -1043,6 +1111,16 @@ service cloud.firestore {
               || isBusinessMember(request.resource.data.businessId)
               || canAccessClientChannel(request.resource.data.channelId)
               || isSuperAdmin()
+           )
+           // A group channel accepts posts from its MEMBERS only (the UI already hid
+           // the composer; the rule did not). Client threads, DMs (no channelId) and
+           // legacy fixed channels (no `channels` doc) are unaffected.
+           && (
+             request.resource.data.get('channelId', '') == ''
+             || !exists(/databases/$(database)/documents/channels/$(request.resource.data.channelId))
+             || get(/databases/$(database)/documents/channels/$(request.resource.data.channelId)).data.get('isGroup', false) != true
+             || isGroupChannelMember(request.resource.data.channelId)
+             || isSuperAdmin()
            ))
       );
       // Sender edits/deletes their own messages. Collaborative actions (read/reactions/

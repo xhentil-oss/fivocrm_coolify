@@ -34,6 +34,7 @@ import {
 } from '../_invoiceWaReminders.js';
 // One delivery path for every notification — see the header of api/_push.ts.
 import { notifyUser, getUserPrefs, isDndActive, isSilenced, escapeHtml, BASE_URL } from '../_push.js';
+import { runChatScheduled } from '../_chatScheduled.js';
 import { isTypeMutedByPrefs } from '../_notificationTypes.js';
 // `.js` is NOT optional here: package.json declares "type": "module", so the
 // deployed function runs as native ESM, where a relative specifier without an
@@ -5987,6 +5988,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'task-reminders':
         result = await runTaskReminders();
+        break;
+      case 'chat-scheduled':
+        // Scheduled chat messages ("Programo") — a wall-clock promise, every 5 min
+        // from the VPS, never in run-all. Claims each row in a transaction so the
+        // browser poll and this job can never both send it.
+        result = await runChatScheduled();
         break;
       case 'invoice-reminders': {
         // Any job that SENDS something to a customer runs inside ONE tenant when

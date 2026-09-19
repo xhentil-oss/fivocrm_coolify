@@ -42,6 +42,12 @@ interface QueryOptions {
   // usePermissions' identity queries (teamMembers by userId/email) which must read
   // the user's memberships unscoped to RESOLVE which business they belong to.
   skipBusinessFilter?: boolean;
+  // Opt OUT of the static (getDocs + 5-min TTL) path for a collection listed in
+  // staticCollections — a real onSnapshot instead. For surfaces whose whole point is
+  // freshness: ChatView's online dots read `userProfiles.lastSeen`, heartbeat 60 s,
+  // window 3 min — through the static cache a dot stayed green up to 3 minutes after
+  // someone left and grey up to 5 minutes after they arrived.
+  live?: boolean;
 }
 
 // ---- Reactive global teamId for data isolation ----
@@ -366,8 +372,8 @@ export function useCollection<T = DocumentData>(
     // can trip consumers that react to `error` (e.g. ChatView clearing the channel).
     setError(null);
 
-    const cacheKey = buildCacheKey(collectionName, whereKey, orderKey, limitVal, skipTeamFilter, scopeId);
-    const isStatic = staticCollections.has(collectionName);
+    const cacheKey = buildCacheKey(collectionName, whereKey, orderKey, limitVal, skipTeamFilter, scopeId) + (options?.live ? '|live' : '');
+    const isStatic = staticCollections.has(collectionName) && !options?.live;
 
     // Build the Firestore query identically for the live and static paths.
     const buildQuery = () => {
@@ -564,7 +570,7 @@ export function useCollection<T = DocumentData>(
         }
       }
     };
-  }, [collectionName, whereKey, orderKey, skipTeamFilter, limitVal, scopeId, options?.skip, user?.uid]);
+  }, [collectionName, whereKey, orderKey, skipTeamFilter, limitVal, scopeId, options?.skip, options?.live, user?.uid]);
 
   return { data, loading, error };
 }

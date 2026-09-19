@@ -1301,6 +1301,11 @@ function startCronSchedulers(): void {
   // index) and marks each one reminderSentAt, so a 5-minute cadence costs a few
   // reads per run and a restart can never double-notify.
   setInterval(() => { void triggerCronJob('task-reminders'); }, 5 * MIN);
+  // Scheduled chat messages ("Programo"): until Sep 2026 they were sent only by a
+  // poll inside an OPEN chat tab, so closing the app delayed them to the next
+  // visit. One single-field range read of a tiny collection; rows are claimed in
+  // a transaction, so a restart can never double-send.
+  setInterval(() => { void triggerCronJob('chat-scheduled'); }, 5 * MIN);
   // Unanswered WhatsApp threads past the tenant's response SLA (default 120 min).
   // The job reads ONLY conversations that are due (awaitingReply + slaBreachNotified
   // + slaFirstResponseDueAt, one composite index) and marks each breach once, so a

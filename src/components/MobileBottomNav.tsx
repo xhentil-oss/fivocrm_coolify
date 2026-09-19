@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -23,8 +23,7 @@ import {
   Server as ServerIcon,
 } from 'lucide-react';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { useAuth } from '../contexts/AuthContext';
-import { useCollection, useGlobalBusinessId } from '../hooks/useFirestore';
+import { useUnreadChat } from '../hooks/useUnreadChat';
 import { useModules } from '../hooks/useModules';
 import { registerBackDismiss } from './AndroidBackButton';
 
@@ -37,44 +36,14 @@ const MobileBottomNav: React.FC = () => {
     if (!showMore) return;
     return registerBackDismiss(() => setShowMore(false));
   }, [showMore]);
-  const { user } = useAuth();
   const permissions = usePermissions();
   // Mobile nav previously ignored per-tenant module toggles, so a disabled module
   // stayed reachable from the "Më shumë" drawer. Same registry as the sidebar now.
   const { isEnabled } = useModules();
 
-  // ── Unread chat badge (mirrors Sidebar logic — including the businessId scoping
-  // and the capped/teamScopedWhere query shapes; the mirror had dropped both, so
-  // mobile showed counts the scoped chat couldn't display and streamed the whole
-  // tenant message history to draw a badge) ──
-  const businessId = useGlobalBusinessId();
-  const unreadDmQuery = useMemo(() => !user ? undefined : {
-    where: [
-      { field: 'receiverId', operator: '==', value: user.uid },
-      { field: 'isRead', operator: '==', value: false },
-    ],
-    skipTeamFilter: true,
-    limit: 200,
-  }, [user]);
-  const { data: unreadDms } = useCollection<any>('messages', unreadDmQuery);
-
-  // Same shape as Sidebar/ChatView → shared listener + existing composite index
-  // messages(businessId, isRead, createdAt DESC). senderType filtered client-side.
-  const unreadClientQuery = useMemo(() => !user ? undefined : {
-    where: [{ field: 'isRead', operator: '==', value: false }],
-    orderBy: { field: 'createdAt', direction: 'desc' as const },
-    limit: 200,
-    teamScopedWhere: true,
-  }, [user]);
-  const { data: unreadClientMsgs } = useCollection<any>('messages', unreadClientQuery);
-
-  const unreadChatCount = useMemo(() => {
-    let c = 0;
-    const inBusiness = (m: any) => !businessId || m.businessId === businessId;
-    if (unreadDms && user) c += unreadDms.filter((m: any) => m.senderId !== user.uid && !m.channelId && inBusiness(m)).length;
-    if (unreadClientMsgs && user) c += unreadClientMsgs.filter((m: any) => m.senderType === 'client' && m.senderId !== user.uid && inBusiness(m)).length;
-    return c;
-  }, [unreadDms, unreadClientMsgs, user, businessId]);
+  // Unread chat badge — the same hook as the Sidebar and ChatView, so the number
+  // is the same on every viewport (the mobile mirror had dropped group messages).
+  const unreadChatCount = useUnreadChat().total;
 
   const canAccess = (key: string) =>
     !permissions.isLoading && permissions[key as keyof typeof permissions] === true;

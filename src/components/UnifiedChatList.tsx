@@ -165,9 +165,11 @@ const UnifiedChatList: React.FC<Props> = ({ conversations, canCreateGroups, onCr
     else if (filter === 'groups') list = list.filter(c => c.type === 'group');
     else if (filter === 'staff') list = list.filter(c => c.type === 'staff');
     else if (filter === 'all' && !q) {
-      // In the main list, hide never-messaged staff (no convo, no unread). They
-      // still appear under the "Staf" filter / search so you can start a new DM.
-      list = list.filter(c => !(c.type === 'staff' && c.time === 0 && c.unread === 0));
+      // In the main list, hide never-messaged staff AND clients (no convo, no
+      // unread). They still appear under the "Staf" / "Klientë" filters and in
+      // search so you can start a conversation — but a tenant with thousands of
+      // CRM customers no longer renders every one of them as a chat row.
+      list = list.filter(c => !((c.type === 'staff' || c.type === 'client') && c.time === 0 && c.unread === 0));
     }
     if (q) list = list.filter(c => c.name.toLowerCase().includes(q) || c.preview.toLowerCase().includes(q));
     // Recency sort (pinned handled separately in the 'all' view).

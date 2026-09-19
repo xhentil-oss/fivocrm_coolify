@@ -173,8 +173,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   });
 }
 
-/** Max recipients per fan-out call — mirrors MAX_CHANNEL_NOTIFY in ChatView. */
-const MAX_FANOUT = 25;
+/** Max recipients per fan-out call — mirrors MAX_CHANNEL_NOTIFY in ChatView. The
+ *  fan-out is ONE server call, so this only bounds that call's work; at 25, members
+ *  26+ of a group silently got no bell/push/email. */
+const MAX_FANOUT = 200;
 
 /**
  * Notify the members of a chat channel about one message.

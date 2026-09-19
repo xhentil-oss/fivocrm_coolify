@@ -122,6 +122,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const {
     type, title, message, actionUrl, actionLabel, linkTo, projectId, responsibleUserId,
+    // Chat only: lets delivery skip push+email while the recipient is reading this
+    // very thread, and lets the reader dismiss the row when the message is deleted.
+    conversationKey, messageId,
     // Optional: also upsert the persistent conversation thread (owner + watchers).
     conversation,
     // Optional: create a follow-up task for the tenant's sales staff (portal
@@ -262,6 +265,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } catch { /* never block on task creation */ }
   }
 
+  // Thread routing: when the conversation already has an OWNER, route to the owner
+  // and its watchers instead of every lead in the business (the watchers list was
+  // computed above by upsertConversation and already contains the managers/admins
+  // who should see it). Threads without an owner keep the broad audience.
+  if (conversation && typeof conversation.channelId === 'string' && conversation.channelId) {
+    try {
+      const conv = await db.collection('conversations').doc(conversation.channelId).get();
+      const cd = conv.exists ? (conv.data() as any) : null;
+      const memberIds = new Set(members.filter((m) => m.status !== 'Inactive' && m.userId).map((m) => m.userId));
+      if (cd?.ownerId && memberIds.has(cd.ownerId)) {
+        const routed = new Set<string>([cd.ownerId]);
+        (Array.isArray(cd.watchers) ? cd.watchers : []).forEach((w: any) => { if (typeof w === 'string' && memberIds.has(w)) routed.add(w); });
+        recipients.clear();
+        routed.forEach((uid) => recipients.add(uid));
+      }
+    } catch { /* keep the broad audience */ }
+  }
+
   if (recipients.size === 0) return res.status(200).json({ success: true, notified: 0, taskId });
 
   // Doc + push + email per recipient. This was a plain batched write, so the single
@@ -289,6 +310,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     teamId: teamId || null,
     customerId,
     actorUserId: decoded.uid,
+    conversationKey: typeof conversationKey === 'string' ? conversationKey.slice(0, 200) : undefined,
+    messageId: typeof messageId === 'string' ? messageId.slice(0, 200) : undefined,
   })));
   const notified = results.filter(r => r.status === 'fulfilled' && (r.value as any)?.written).length;
 

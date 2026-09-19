@@ -275,7 +275,7 @@ const PortalChatView: React.FC = () => {
   // Notify the responsible person about a client message (in-app → also emails
   // them via the notification choke point). Falls back to the project team /
   // admins when no responsible person is set.
-  const notifyStaffOfClientMessage = React.useCallback(async (content: string, channelLabel: string) => {
+  const notifyStaffOfClientMessage = React.useCallback(async (content: string, channelLabel: string, messageId?: string) => {
     const preview = content.length > 100 ? content.slice(0, 100) + '...' : content;
     const proj = selectedProjectId ? customerProjects?.find(x => x.id === selectedProjectId) : null;
     // Recipients (responsible person → project team → tenant admins) are resolved
@@ -288,6 +288,11 @@ const PortalChatView: React.FC = () => {
       actionUrl: '/app/chat',
       actionLabel: 'Hap Chat',
       linkTo: channelId,
+      // Same keys the staff side stamps: no push/email while the recipient is reading
+      // this thread (was never suppressed for client messages), and the row can be
+      // dismissed when the message is deleted.
+      conversationKey: `ch:${channelId}`,
+      ...(messageId ? { messageId } : {}),
       projectId: selectedProjectId || undefined,
       responsibleUserId: responsibleUserId || null,
       conversation: {
@@ -380,7 +385,7 @@ const PortalChatView: React.FC = () => {
       // Use addDoc directly — portal users have getGlobalTeamId()=null which makes
       // useMutation.create() throw before reaching Firestore. The Firestore rule
       // allows create when senderType == 'client' (no teamId needed).
-      await addDoc(collection(db, 'messages'), {
+      const createdRef = await addDoc(collection(db, 'messages'), {
         content: msgContent,
         senderId: user.uid,
         channelId,
@@ -410,7 +415,7 @@ const PortalChatView: React.FC = () => {
       const channelLabel = selectedProjectId
         ? customerProjects?.find(p => p.id === selectedProjectId)?.name || 'Projekt'
         : 'Bisedë e përgjithshme';
-      await notifyStaffOfClientMessage(msgContent, channelLabel);
+      await notifyStaffOfClientMessage(msgContent, channelLabel, createdRef.id);
 
       setMessageText('');
       setAttachmentUrl('');
@@ -433,7 +438,7 @@ const PortalChatView: React.FC = () => {
     if (!url || !user || !customerId) return;
     // Post a join link so the responsible person sees it (and gets notified).
     try {
-      await addDoc(collection(db, 'messages'), {
+      const callRef = await addDoc(collection(db, 'messages'), {
         content: `📹 Thirrje video u nis. Bashkohu: ${url}`,
         senderId: user.uid,
         channelId,
@@ -447,7 +452,7 @@ const PortalChatView: React.FC = () => {
       });
       await notifyStaffOfClientMessage('📹 Thirrje video', selectedProjectId
         ? customerProjects?.find(p => p.id === selectedProjectId)?.name || 'Projekt'
-        : 'Bisedë e përgjithshme');
+        : 'Bisedë e përgjithshme', callRef.id);
     } catch { /* non-blocking */ }
   };
 
@@ -551,7 +556,7 @@ const PortalChatView: React.FC = () => {
   const sendQuickMessage = async (msg: string) => {
     if (!user || !customerId) return;
     try {
-      await addDoc(collection(db, 'messages'), {
+      const quickRef = await addDoc(collection(db, 'messages'), {
         content: msg,
         senderId: user.uid,
         channelId,
@@ -568,7 +573,7 @@ const PortalChatView: React.FC = () => {
       const channelLabel = selectedProjectId
         ? customerProjects?.find(p => p.id === selectedProjectId)?.name || 'Projekt'
         : 'Bisedë e përgjithshme';
-      await notifyStaffOfClientMessage(msg, channelLabel);
+      await notifyStaffOfClientMessage(msg, channelLabel, quickRef.id);
     } catch {
       toast({ title: 'Gabim', description: 'Mesazhi nuk u dërgua.', variant: 'destructive' });
     }

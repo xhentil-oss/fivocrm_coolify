@@ -42,7 +42,8 @@ import { isPathEnabled, type PlanKey } from '../lib/modules';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useFollowUpDue } from '../hooks/useFollowUpDue';
-import { useCollection, useDocument, useGlobalBusinessId } from '../hooks/useFirestore';
+import { useDocument, useGlobalBusinessId } from '../hooks/useFirestore';
+import { useUnreadChat } from '../hooks/useUnreadChat';
 import type { Business } from '../types';
 
 interface SidebarProps {
@@ -183,76 +184,12 @@ const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const permissions = usePermissions();
   const { user } = useAuth();
-  // Active business (tenant) — used to scope the unread badge so a super-admin
-  // doesn't get sound/badge for OTHER tenants' client messages (which the scoped
-  // chat then can't show → "badge but no message").
+  // Unread chat badge — ONE model shared with ChatView and MobileBottomNav
+  // (src/hooks/useUnreadChat.ts). The badge used to have its own filter here
+  // (DMs scoped by business, deleted rows counted, group `readBy` checked only
+  // over rows already read by someone), so it disagreed with the chat list.
+  const unreadChatCount = useUnreadChat().total;
   const businessId = useGlobalBusinessId();
-
-  // Unread direct messages count — DMs are stored in the `messages` collection
-  // (not `directMessages`).  A DM has a `receiverId` but no `channelId`.
-  const unreadDmQuery = useMemo(() => {
-    if (!user) return undefined;
-    return {
-      where: [
-        { field: 'receiverId', operator: '==', value: user.uid },
-        { field: 'isRead', operator: '==', value: false },
-      ],
-      skipTeamFilter: true,
-      // Badge only needs a count — cap the listener so an ignored inbox can't
-      // stream an unbounded number of docs forever.
-      limit: 200,
-    };
-  }, [user]);
-
-  const { data: unreadMessages } = useCollection<any>('messages', unreadDmQuery);
-
-  // Unread client-channel messages. Mirrors ChatView's allUnreadChannelQuery (same
-  // where/orderBy/limit → the two share one listener + the existing composite index
-  // messages(businessId, isRead, createdAt DESC)). The old shape (businessId-only
-  // server query, senderType/isRead filtered client-side) downloaded the tenant's
-  // ENTIRE message history just to draw a badge. senderType is filtered below.
-  const unreadClientQuery = useMemo(() => {
-    if (!user) return undefined;
-    return {
-      where: [{ field: 'isRead', operator: '==', value: false }],
-      orderBy: { field: 'createdAt', direction: 'desc' as const },
-      limit: 200,
-      teamScopedWhere: true,
-    };
-  }, [user]);
-  const { data: unreadClientMessages } = useCollection<any>('messages', unreadClientQuery);
-
-  // Group channels I belong to — needed to count their unread messages. A group
-  // message was in NO badge before: this query counts unread `messages` and the DM
-  // pass below only looks at rows WITHOUT a channelId.
-  const { data: myChannels } = useCollection<any>('channels', { skipTeamFilter: true });
-  const myGroupIds = useMemo(() => {
-    const ids = new Set<string>();
-    (myChannels || []).forEach((c: any) => {
-      if (c?.isGroup && Array.isArray(c.members) && user?.uid && c.members.includes(user.uid)) ids.add(c.id);
-    });
-    return ids;
-  }, [myChannels, user?.uid]);
-
-  const unreadChatCount = useMemo(() => {
-    let count = 0;
-    // Scope to the active business: only count messages belonging to this tenant
-    // (when a businessId is active). Excludes other tenants' client messages so the
-    // super-admin's badge matches the (scoped) chat list.
-    const inBusiness = (m: any) => !businessId || m.businessId === businessId;
-    if (unreadMessages && user) {
-      count += unreadMessages.filter(m => m.senderId !== user.uid && !m.channelId && inBusiness(m)).length;
-    }
-    if (unreadClientMessages && user) {
-      count += unreadClientMessages.filter(m => m.senderType === 'client' && m.senderId !== user.uid && inBusiness(m)).length;
-      // Group-channel messages. Read state for a group is per-member (`readBy`), not
-      // the shared `isRead` flag, so "unread for me" = my uid is not in readBy.
-      count += unreadClientMessages.filter(m =>
-        m.channelId && myGroupIds.has(m.channelId) && m.senderId !== user.uid && inBusiness(m)
-        && !(Array.isArray(m.readBy) && m.readBy.includes(user.uid))).length;
-    }
-    return count;
-  }, [unreadMessages, unreadClientMessages, user, businessId, myGroupIds]);
 
   // Follow-ups due for ME (waiting replies + overdue + today). Bounded listener;
   // hidden entirely when the index is not deployed / no access (error → 0).

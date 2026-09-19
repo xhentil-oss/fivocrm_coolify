@@ -23,6 +23,10 @@ export interface NotifyStaffInput {
   actionLabel?: string;
   /** Chat channel id (used for push deep-links). */
   linkTo?: string;
+  /** Chat only: `ch:<channelId>` — delivery skips push+email while the recipient is reading it. */
+  conversationKey?: string;
+  /** Chat only: the message document id, so the reader can dismiss the row if it is deleted. */
+  messageId?: string;
   projectId?: string;
   /** The responsible person, when the portal already knows it (validated server-side). */
   responsibleUserId?: string | null;

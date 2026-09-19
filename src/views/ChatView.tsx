@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate, Link as RouterLink } from 'react-router-dom';
-import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
+import { useCollection, useMutation, getGlobalTeamId, getGlobalBusinessId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Input } from '../components/ui/input';
@@ -34,10 +34,12 @@ import { copyWithToast } from '../lib/clipboard';
 import { ToastAction } from '../components/ui/toast';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { getTimestampMs } from '../lib/utils';
+import { useUnreadChat } from '../hooks/useUnreadChat';
+import { isDmForMe, isUnreadClientMessage, groupFullyReadAfter, unionById } from '../lib/chat/unread';
 import { useNotificationPrefs, useConversationPresence } from '../hooks/useNotificationPrefs';
 import { channelConversationKey, dmConversationKey } from '../lib/notificationPrefs';
 import { auth, db } from '../lib/firebase';
-import { writeBatch, doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { writeBatch, doc, updateDoc, setDoc, deleteDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, ClientRequest, Team, Task, Channel } from '../types';
 import UnifiedChatList, { type UnifiedConv } from '../components/UnifiedChatList';
 
@@ -71,7 +73,14 @@ const CHANNELS: { id: string; name: string; icon: typeof Hash; description: stri
 // per caller (300/h) — an unbounded fan-out in a 100-person channel would exhaust it
 // and start dropping notifications for everything else. A truncated fan-out is
 // LOGGED, never silent.
-const MAX_CHANNEL_NOTIFY = 25;
+// Mirrors MAX_FANOUT in api/_send-notification-email.ts. The fan-out is ONE server
+// call, so the cap only bounds that call's work; 25 silently dropped members 26+.
+const MAX_CHANNEL_NOTIFY = 200;
+/** Newest messages loaded per DM thread (each direction). */
+const DM_THREAD_LIMIT = 300;
+/** dmThreads doc id: the two uids sorted, joined with '__' (mirrored in api/cron/run.ts). */
+const dmThreadId = (a: string, b: string) => [a, b].sort().join('__');
+const isCoarsePointer = () => typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)')?.matches;
 
 const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '💯', '✅', '🙏', '😎', '🤔'];
 
@@ -318,7 +327,9 @@ const ChatView: React.FC = () => {
   // CRM views already hold.
   const { data: customers } = useCollection<Customer>('customers');
   const { data: projects } = useCollection<Project>('projects');
-  const { data: userProfiles } = useCollection<UserProfile>('userProfiles');
+  // `live`: the online dot / "Aktiv tani" read `lastSeen` (60 s heartbeat, 3-min
+  // window); through the 5-minute static cache the dot lagged reality by minutes.
+  const { data: userProfiles } = useCollection<UserProfile>('userProfiles', { live: true });
   // clientPortalAccess isn't business-scoped (portal users have no businessId), so the
   // chat "Klientët" list leaked other tenants' clients. customers IS business-scoped,
   // so intersect by customerId to scope the client list to this business.
@@ -331,7 +342,10 @@ const ChatView: React.FC = () => {
   // 200 newest, pushed server-side (teamScopedWhere) — the previous read pulled
   // every request the business ever had, on every chat open. Composite index:
   // clientRequests(businessId, createdAt DESC).
+  // The "requests" mode is unreachable (nothing sets it any more) — do not open a
+  // 200-row listener on every chat visit for a panel nobody can reach.
   const { data: requests, } = useCollection<ClientRequest>('clientRequests', {
+    skip: chatMode !== 'requests',
     orderBy: { field: 'createdAt', direction: 'desc' },
     limit: 200,
     teamScopedWhere: true,
@@ -499,27 +513,53 @@ const ChatView: React.FC = () => {
     return map;
   }, [recentClientMsgs]);
 
-  const clientUnreadMap = useMemo(() => {
-    const map = new Map<string, number>();
-    allUnreadClientMsgs?.forEach(m => {
-      if (m.channelId) map.set(m.channelId, (map.get(m.channelId) || 0) + 1);
-    });
-    return map;
-  }, [allUnreadClientMsgs]);
+  // ONE unread model for every surface (list badges, header total, Sidebar,
+  // MobileBottomNav) — see src/lib/chat/unread.ts. The DM badge used to be counted
+  // from `bgReceivedDMs` (the 100 newest received rows of ANY read state) while the
+  // nav badge counted `receiverId == me && isRead == false`; a group badge was
+  // "read by anyone" here and per-member in the Sidebar. Counted == marked now.
+  const unread = useUnreadChat();
+  // Per-channel client unread — from the shared model (excludes deleted rows and
+  // colleagues' messages; the old map counted every row of the query).
+  const clientUnreadMap = unread.clientByChannel;
 
+  // ONE thread, bounded. These used to be `senderId == me` / `receiverId == me` with
+  // no limit — every message the user ever sent ANYWHERE (groups, client threads)
+  // was downloaded on entering DM mode and filtered client-side. Now: the pair,
+  // newest DM_THREAD_LIMIT, server-side (index messages(senderId, receiverId,
+  // createdAt DESC)); cross-team by design, so no tenant predicate.
   const directMsgQuery = useMemo(() => ({
-    skip: !user?.uid || chatMode !== 'direct',
-    where: user?.uid ? [{ field: 'senderId', operator: '==', value: user.uid }] : undefined,
-    // Cross-team DM: don't restrict to current team. A user's own sent
-    // messages must be visible regardless of which team the recipient is in.
+    skip: !user?.uid || chatMode !== 'direct' || !activeDirectUserId,
+    where: user?.uid && activeDirectUserId ? [
+      { field: 'senderId', operator: '==' as const, value: user.uid },
+      { field: 'receiverId', operator: '==' as const, value: activeDirectUserId },
+    ] : undefined,
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
+    limit: DM_THREAD_LIMIT,
     skipTeamFilter: true,
-  }), [user?.uid, chatMode]);
+  }), [user?.uid, chatMode, activeDirectUserId]);
   const directMsgReceivedQuery = useMemo(() => ({
-    skip: !user?.uid || chatMode !== 'direct',
-    where: user?.uid ? [{ field: 'receiverId', operator: '==', value: user.uid }] : undefined,
-    // Cross-team DM: receive messages from senders in any team.
+    skip: !user?.uid || chatMode !== 'direct' || !activeDirectUserId,
+    where: user?.uid && activeDirectUserId ? [
+      { field: 'senderId', operator: '==' as const, value: activeDirectUserId },
+      { field: 'receiverId', operator: '==' as const, value: user.uid },
+    ] : undefined,
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
+    limit: DM_THREAD_LIMIT,
     skipTeamFilter: true,
-  }), [user?.uid, chatMode]);
+  }), [user?.uid, chatMode, activeDirectUserId]);
+
+  // Thread heads for the DM list (WhatsApp-style): one doc per pair, written by the
+  // sender on every DM. The list preview used to come from the 100 newest messages
+  // I SENT anywhere — for a group-heavy user that window held no DMs at all, so
+  // every DM row lost its "Ti: …" preview and its recency, and dropped out of the
+  // main list. Legacy threads without a head still fall back to those windows.
+  const dmThreadsQuery = useMemo(() => ({
+    skip: !user?.uid,
+    where: user?.uid ? [{ field: 'participants', operator: 'array-contains' as const, value: user.uid }] : undefined,
+    skipTeamFilter: true,
+  }), [user?.uid]);
+  const { data: dmThreads } = useCollection<any>('dmThreads', dmThreadsQuery);
 
   // Always-on background query: received DMs regardless of active chat mode
   const bgDmQuery = useMemo(() => ({
@@ -717,42 +757,14 @@ const ChatView: React.FC = () => {
     bgSentDMs?.forEach(m => {
       if (!(m as any).channelId && m.receiverId && m.receiverId !== user.uid) userIds.add(m.receiverId);
     });
-    // Sort by last message time (most recent first), then unread on top
-    return Array.from(userIds).sort((a, b) => {
-      const aLast = bgReceivedDMs?.find(m => !(m as any).channelId && m.senderId === a)?.createdAt
-        ?? bgSentDMs?.find(m => !(m as any).channelId && m.receiverId === a)?.createdAt;
-      const bLast = bgReceivedDMs?.find(m => !(m as any).channelId && m.senderId === b)?.createdAt
-        ?? bgSentDMs?.find(m => !(m as any).channelId && m.receiverId === b)?.createdAt;
-      return getTimestampMs(bLast) - getTimestampMs(aLast);
+    (dmThreads || []).forEach((t: any) => {
+      (Array.isArray(t.participants) ? t.participants : []).forEach((uid: string) => { if (uid && uid !== user.uid) userIds.add(uid); });
     });
-  }, [allDirectMessages, bgReceivedDMs, bgSentDMs, user]);
+    return Array.from(userIds);
+  }, [allDirectMessages, bgReceivedDMs, bgSentDMs, dmThreads, user]);
 
-  const directUnreadMap = useMemo(() => {
-    const map = new Map<string, number>();
-    if (!user) return map;
-    // Use persistent bgReceivedDMs so unread badges work in all modes
-    const source = bgReceivedDMs ?? allDirectMessages;
-    source.forEach(m => {
-      if (!(m as any).channelId && m.senderId !== user.uid && m.receiverId === user.uid && !m.isRead) {
-        map.set(m.senderId, (map.get(m.senderId) || 0) + 1);
-      }
-    });
-    return map;
-  }, [allDirectMessages, bgReceivedDMs, user]);
-
-  const channelUnreadMap = useMemo(() => {
-    const map = new Map<string, number>();
-    if (!user) return map;
-    const standardIds = new Set<string>([...CHANNELS.map(c => c.id), ...myGroups.map(g => g.id)]);
-    // Use background all-unread query so non-active channels show correct badges
-    const source = allUnreadTeamMsgs ?? [];
-    source.forEach(m => {
-      if (m.channelId && standardIds.has(m.channelId) && m.senderId !== user.uid && !(m as any).deletedAt) {
-        map.set(m.channelId, (map.get(m.channelId) || 0) + 1);
-      }
-    });
-    return map;
-  }, [allUnreadTeamMsgs, user, myGroups]);
+  const directUnreadMap = unread.dmBySender;
+  const channelUnreadMap = unread.groupByChannel;
 
   const otherMembers = useMemo(() => {
     if (!teamMembers) return [];
@@ -937,10 +949,10 @@ const ChatView: React.FC = () => {
     room = room.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60);
     const url = await startVideo(room);
     if (!url) return;
-    // For a client channel, post a join link so the client sees the invite.
-    if (chatMode === 'channel' && activeChannel.startsWith('client-')) {
-      handleSendMessage(null, { content: `📹 Thirrje video u nis. Bashkohu: ${url}` });
-    }
+    // Post the join link as a message in EVERY conversation kind — the DM /
+    // group notification path is what actually tells the callee (nothing else
+    // did: useVideoCall only creates the room).
+    handleSendMessage(null, { content: `📹 Thirrje video u nis. Bashkohu: ${url}` });
   };
 
   // ── #19 AI Summary of conversation ──
@@ -1237,9 +1249,14 @@ const ChatView: React.FC = () => {
 
   // ── #5 Snooze / Remind me ──
   const reminderMutation = useMutation<any>('chatReminders');
+  // Only PENDING reminders: fired rows are marked sent and used to stay in the
+  // listener forever (a list that only ever grew).
   const { data: reminders } = useCollection<any>('chatReminders', {
     skipTeamFilter: true,
-    where: user?.uid ? [{ field: 'userId', operator: '==' as const, value: user.uid }] : undefined,
+    where: user?.uid ? [
+      { field: 'userId', operator: '==' as const, value: user.uid },
+      { field: 'sent', operator: '==' as const, value: false },
+    ] : undefined,
   });
   const [reminderPickerFor, setReminderPickerFor] = useState<string | null>(null);
   const firedRemindersRef = useRef<Set<string>>(new Set());
@@ -1384,10 +1401,17 @@ const ChatView: React.FC = () => {
         if (!t || t > now) continue;
         firedScheduledRef.current.add(s.id);
         try {
+          // Claim first: a second tab/device polling the same row sees `sent: true`
+          // and skips it. The old order (create, then remove) let both send.
+          await scheduledMutation.update(s.id, { sent: true, sentAt: new Date() });
+          const isClientTarget = typeof s.channelId === 'string' && s.channelId.startsWith('client-');
           const base: any = {
             content: s.content || '📎 Bashkëngjitje',
             senderId: user.uid,
-            isRead: false,
+            // Staff→client rows are read by the CLIENT via `readAt`; `isRead` is the
+            // staff-side flag and would otherwise sit in the unread window forever.
+            isRead: isClientTarget,
+            ...(isClientTarget ? { senderType: 'staff' as const } : {}),
           };
           if (s.attachmentUrl) base.attachmentUrl = s.attachmentUrl;
           if (s.channelId) {
@@ -1481,10 +1505,16 @@ const ChatView: React.FC = () => {
   const typingConversationKey = chatMode === 'channel'
     ? activeChannel
     : (user?.uid && activeDirectUserId ? `dm-${[user.uid, activeDirectUserId].sort().join('-')}` : '');
+  // businessId == bid AND channelId == key, both server-side (two equalities need
+  // no composite index). The old shape was channelId-only with skipTeamFilter — an
+  // UNSCOPED list the rules cannot prove (`isBusinessMember(resource.data.businessId)`
+  // is unconstrained), so it was denied for everyone but a super-admin: the indicator
+  // never showed, and because the writer looked up "my existing doc" in that empty
+  // list, every second of typing CREATED a new document that nothing ever deleted.
   const typingQuery = useMemo(() => ({
     skip: !typingConversationKey,
     where: [{ field: 'channelId', operator: '==' as const, value: typingConversationKey }],
-    skipTeamFilter: true,
+    teamScopedWhere: true,
   }), [typingConversationKey]);
   const { data: typingIndicators } = useCollection<any>('typingIndicators', typingQuery);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1515,37 +1545,42 @@ const ChatView: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [typingIndicators, user, chatMode, activeChannel, activeDirectUserId, nowTick]);
 
+  // One document per (conversation, user), at a deterministic id — so "stop typing"
+  // and the switch/unmount cleanup can delete it WITHOUT having read it first.
+  const typingDocId = useCallback((key: string) => `${key}__${user?.uid || ''}`, [user?.uid]);
   const handleTyping = useCallback(() => {
     if (!user) return;
     const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${[user.uid, activeDirectUserId].sort().join('-')}`;
+    if (!channelOrDm) return;
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     // Debounce: only write to Firestore at most once per second
     const now = Date.now();
     if (now - lastTypingWriteRef.current >= 1000) {
       lastTypingWriteRef.current = now;
-      const existing = typingIndicators?.find((t: any) => t.userId === user.uid && t.channelId === channelOrDm);
-      if (existing) {
-        typingMutation.update(existing.id, { timestamp: new Date() }).catch(() => {});
-      } else {
-        typingMutation.create({ userId: user.uid, channelId: channelOrDm, timestamp: new Date() } as any).catch(() => {});
-      }
+      // setDoc(merge) = create or refresh; the rules accept the create through the
+      // tenant stamp and the update through `userId == me`.
+      setDoc(doc(db, 'typingIndicators', typingDocId(channelOrDm)), {
+        userId: user.uid, channelId: channelOrDm, timestamp: new Date(),
+        businessId: getGlobalBusinessId() || undefined, teamId: getGlobalTeamId() || undefined,
+      }, { merge: true }).catch(() => {});
     }
     typingTimeoutRef.current = setTimeout(() => {
-      const ex = typingIndicators?.find((t: any) => t.userId === user.uid && t.channelId === channelOrDm);
-      if (ex) typingMutation.remove(ex.id).catch(() => {});
+      deleteDoc(doc(db, 'typingIndicators', typingDocId(channelOrDm))).catch(() => {});
     }, 3000);
-  }, [user, chatMode, activeChannel, activeDirectUserId, typingIndicators, typingMutation]);
+  }, [user, chatMode, activeChannel, activeDirectUserId, typingDocId]);
 
-  // Cleanup typing indicator on channel switch or unmount
+  // Cleanup typing indicator on channel switch or unmount — by id, plus whatever
+  // the (now readable) list still shows as mine.
   useEffect(() => {
+    if (!user) return;
+    const key = typingConversationKey;
     return () => {
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      if (key) deleteDoc(doc(db, 'typingIndicators', typingDocId(key))).catch(() => {});
       const list = typingIndicatorsRef.current;
-      if (user && list) {
-        const myIndicators = list.filter((t: any) => t.userId === user.uid);
-        myIndicators.forEach((t: any) => typingMutation.remove(t.id).catch(() => {}));
-      }
+      (list || []).filter((t: any) => t.userId === user.uid).forEach((t: any) => typingMutation.remove(t.id).catch(() => {}));
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatMode, activeChannel, activeDirectUserId]);
 
   // Which conversation I am reading right now, published for the SENDER's benefit:
@@ -1693,7 +1728,11 @@ const ChatView: React.FC = () => {
   useEffect(() => {
     if (!user || !filteredMessages) return;
     if (isInitialMsgLoadRef.current) {
-      // Seed the set on first load — no sound
+      // Seed the set on the first REAL load — no sound. Right after a switch the
+      // list is empty while the new query loads; seeding on that emptied the set,
+      // so the messages of the thread you just opened (e.g. the DM whose toast you
+      // tapped) chirped a second time when they arrived.
+      if (isPending && filteredMessages.length === 0) return;
       filteredMessages.forEach(m => prevSeenMsgIdsRef.current.add(m.id));
       isInitialMsgLoadRef.current = false;
       return;
@@ -1715,7 +1754,7 @@ const ChatView: React.FC = () => {
       playBirdChirp();
     }
     filteredMessages.forEach(m => prevSeenMsgIdsRef.current.add(m.id));
-  }, [filteredMessages, user, playBirdChirp, canPlaySound, chatMode]);
+  }, [filteredMessages, isPending, user, playBirdChirp, canPlaySound, chatMode]);
 
   // Helpers
   // (displayNameCache + getUserDisplayName hoisted above near profileMap to fix TDZ.)
@@ -1751,8 +1790,17 @@ const ChatView: React.FC = () => {
     };
     bgReceivedDMs?.forEach(m => process(m, m.senderId));
     bgSentDMs?.forEach(m => { if (m.receiverId) process(m, m.receiverId); });
+    (dmThreads || []).forEach((t: any) => {
+      const peer = (Array.isArray(t.participants) ? t.participants : []).find((uid: string) => uid !== user?.uid);
+      const lm = t.lastMessage;
+      if (!peer || !lm) return;
+      const existing = map.get(peer);
+      if (!existing || getTimestampMs(lm.createdAt) >= getTimestampMs(existing.createdAt)) {
+        map.set(peer, { content: lm.attachment ? '📎 Skedar' : (lm.content || ''), isOwn: lm.senderId === user?.uid, createdAt: lm.createdAt });
+      }
+    });
     return map;
-  }, [bgReceivedDMs, bgSentDMs, user?.uid]);
+  }, [bgReceivedDMs, bgSentDMs, dmThreads, user?.uid]);
 
   // Kept as fallback / future use; the active renderer is renderMessageBody.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -1818,9 +1866,11 @@ const ChatView: React.FC = () => {
   // Lower-cased member-name → userId lookup, for @mention matching
   const memberNameIndex = useMemo(() => {
     const idx = new Map<string, string>();
+    // Display names ONLY — the email local-part fallback made "@social media"
+    // resolve to social@fivo.al and push a mention nobody typed.
     teamMembers?.forEach(m => {
       if (!m.userId) return;
-      const name = (m.displayName || m.email?.split('@')[0] || '').trim();
+      const name = (m.displayName || '').trim();
       if (name) idx.set(name.toLowerCase(), m.userId);
     });
     userProfiles?.forEach(p => {
@@ -2040,15 +2090,8 @@ const ChatView: React.FC = () => {
     return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
   };
 
-  const totalUnread = useMemo(() => {
-    let count = 0;
-    CHANNELS.forEach(c => { count += channelUnreadMap.get(c.id) || 0; });
-    myGroups.forEach(g => { count += channelUnreadMap.get(g.id) || 0; });
-    directConversations.forEach(uid => { count += directUnreadMap.get(uid) || 0; });
-    // Client-portal channels were never rolled into the header badge.
-    clientUnreadMap.forEach(v => { count += v; });
-    return count;
-  }, [channelUnreadMap, directUnreadMap, directConversations, clientUnreadMap, myGroups]);
+  // Same number the Sidebar / MobileBottomNav show — one model.
+  const totalUnread = unread.total;
 
   // Last own message in current DM — for read receipt display
   const lastOwnMsgId = useMemo(() => {
@@ -2160,10 +2203,15 @@ const ChatView: React.FC = () => {
         }
       }
       const mentions = extractMentions(finalText);
+      const isStaffToClient = isClientChannel && targetMode === 'channel';
       const baseMessage: Partial<ChatMessage> = {
         content: finalText || '📎 Attachment',
         senderId: user.uid,
-        isRead: false,
+        // `isRead` is the STAFF-side flag (DMs, client messages). A staff→client row
+        // is read by the client through `readAt` (portal), so it starts read here —
+        // otherwise it sat in the tenant's `isRead == false` window until a colleague
+        // happened to open the thread, crowding real unread rows out of the cap.
+        isRead: isStaffToClient,
         attachmentUrl: effectiveAttachment || undefined,
         ...(mentions.length > 0 ? { mentions } as any : {}),
         ...(isClientChannel && targetMode === 'channel' ? { senderType: 'staff' as const } : {}),
@@ -2202,7 +2250,13 @@ const ChatView: React.FC = () => {
           const custId = targetChannel.match(/^client-([A-Za-z0-9]+)/)?.[1];
           if (custId) updateDoc(doc(db, 'customers', custId), { lastClientMessageAt: nowTs }).catch(() => {});
         } else if ((allGroups || []).some(g => g.id === targetChannel && g.isGroup)) {
-          updateDoc(doc(db, 'channels', targetChannel), { lastMessageAt: nowTs }).catch(() => {});
+          // Preview + sender so the list row can show the last message instead of a
+          // member count (the rules let any MEMBER write exactly these fields).
+          updateDoc(doc(db, 'channels', targetChannel), {
+            lastMessageAt: nowTs,
+            lastMessagePreview: (effectiveAttachment && !finalText ? '📎 Skedar' : finalText).slice(0, 140),
+            lastMessageSenderId: user.uid,
+          }).catch(() => {});
         }
 
         // Notify mentioned staff (mention highlighting existed but no notification was created)
@@ -2287,6 +2341,26 @@ const ChatView: React.FC = () => {
             const custId = match[1];
             const projId = match[2];
             const pa = portalAccess?.find(a => a.customerId === custId);
+            // A client with NO portal record used to get nothing at all — no bell,
+            // no email — while staff saw a normal sent bubble. The email endpoint
+            // resolves the address itself (customer.email, then the portal login).
+            if (!pa) {
+              try {
+                const token = await auth.currentUser?.getIdToken();
+                if (token) {
+                  fetch('/api/send-invoice-email', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                    body: JSON.stringify({
+                      type: 'notify-client',
+                      channelId: targetChannel,
+                      senderName: getUserDisplayName(user.uid) || 'Ekipi',
+                      messagePreview: (effectiveText || '📎 Bashkëngjitje').slice(0, 200),
+                    }),
+                  }).catch(() => {});
+                }
+              } catch { /* skip */ }
+            }
             if (pa) {
               const customer = customers?.find(c => c.id === custId);
               const projectName = projId ? projects?.find(p => p.id === projId)?.name : null;
@@ -2351,6 +2425,13 @@ const ChatView: React.FC = () => {
       } else if (targetDirectUserId) {
         const createdDm = await messageMutation.create({ ...baseMessage, receiverId: targetDirectUserId } as Omit<ChatMessage, 'id'>);
         const dmMessageId = (createdDm as any)?.id as string | undefined;
+        // Thread head for the list preview / recency (see dmThreadsQuery). Never blocks the send.
+        setDoc(doc(db, 'dmThreads', dmThreadId(user.uid, targetDirectUserId)), {
+          participants: [user.uid, targetDirectUserId].sort(),
+          businessId: getGlobalBusinessId() || null,
+          lastMessage: { content: (finalText || '').slice(0, 140), senderId: user.uid, createdAt: new Date(), attachment: !!effectiveAttachment },
+          updatedAt: new Date(),
+        }, { merge: true }).catch(() => {});
         // Notify the recipient (push + email, arrives even when the app is closed).
         // DMs previously created no notification, so recipients missed messages while
         // away. Title = sender's name, imageUrl = their avatar (WhatsApp/Airbnb style).
@@ -2405,7 +2486,10 @@ const ChatView: React.FC = () => {
 
   const handleDeleteMessage = async (msgId: string) => {
     try {
-      await messageMutation.update(msgId, { deletedAt: new Date(), content: 'Ky mesazh u fshi.', attachmentUrl: null, reactions: {}, isPinned: false } as any);
+      // `isRead: true` so a deleted row leaves every unread window (a badge with
+      // nothing behind it otherwise); `editHistory: []` so earlier versions of a
+      // message the sender withdrew are not still readable by the whole tenant.
+      await messageMutation.update(msgId, { deletedAt: new Date(), content: 'Ky mesazh u fshi.', attachmentUrl: null, reactions: {}, isPinned: false, isRead: true, editHistory: [] } as any);
     } catch {
       toast({ title: 'Fshirja dështoi', description: 'Provo përsëri.', variant: 'destructive' });
     }
@@ -2715,27 +2799,52 @@ const ChatView: React.FC = () => {
     markedAsReadRef.current.clear();
   }, [activeDirectUserId, activeChannel, chatMode]);
 
+  // A rejected read-mark used to be invisible: the optimistic snapshot hid the
+  // badge while the thread was open, the server rolled it back, the effect retried
+  // on every snapshot and only console.error knew. Now a failure is (a) surfaced
+  // once, (b) retried per document so one bad row cannot veto the rest, and (c)
+  // NOT retried in a loop — the ids stay in markedAsReadRef until the next switch.
+  const readMarkToastShownRef = useRef(false);
+  const commitReadMarks = useCallback((patches: { id: string; patch: Record<string, unknown> }[], label: string) => {
+    const CHUNK = 400;
+    for (let i = 0; i < patches.length; i += CHUNK) {
+      const chunk = patches.slice(i, i + CHUNK);
+      const batch = writeBatch(db);
+      chunk.forEach(({ id, patch }) => batch.update(doc(db, 'messages', id), patch));
+      batch.commit().catch(async (err) => {
+        console.error(`[ChatView] markAsRead ${label} batch failed`, err);
+        const failures: unknown[] = [];
+        await Promise.all(chunk.map(({ id, patch }) =>
+          updateDoc(doc(db, 'messages', id), patch).catch(e => { failures.push(e); })));
+        if (failures.length > 0 && !readMarkToastShownRef.current) {
+          readMarkToastShownRef.current = true;
+          const code = (failures[0] as any)?.code || (err as any)?.code || 'unknown';
+          toast({
+            title: 'Mesazhet nuk u shënuan si të lexuara',
+            description: `Numri i palexuar do të mbetet. Gabimi: ${code}. Rifresko faqen; nëse vazhdon, njofto administratorin.`,
+            variant: 'destructive',
+          });
+        }
+      });
+    }
+  }, [toast]);
+
   useEffect(() => {
     if (!activeDirectUserId || !user || chatMode !== 'direct') return;
-    // Snapshot the current conversation — guard against rapid switches
     const snapshotDmUserId = activeDirectUserId;
-    // Source from bgReceivedDMs (an always-on background listener) rather than
-    // allDirectMessages (which only loads AFTER entering the DM) — so opening a
-    // conversation clears its unread badge immediately, even on a quick open+leave.
-    const source = bgReceivedDMs || [];
-    const unread = source.filter(m => !(m as any).channelId && m.senderId === snapshotDmUserId && m.receiverId === user.uid && !m.isRead && !markedAsReadRef.current.has(m.id));
-    if (unread.length === 0) return;
-    // ── #32 Batched read receipts ──
-    const ids = unread.map(m => m.id);
+    // Union of every DM source we hold: the unread listener (what the badge
+    // counts), the recency window (bgReceivedDMs) and the open thread itself —
+    // so a message that is rendered, or counted, is always also marked. The old
+    // pass read ONLY bgReceivedDMs (100 newest received rows of any state), so a
+    // counted-elsewhere or thread-only row could stay unread forever.
+    const source = unionById<ChatMessage>(unread.unreadDms, bgReceivedDMs, directMessages);
+    const toMark = source.filter(m =>
+      isDmForMe(m, user.uid) && m.senderId === snapshotDmUserId && !m.isRead && !markedAsReadRef.current.has(m.id));
+    if (toMark.length === 0) return;
+    const ids = toMark.map(m => m.id);
     ids.forEach(id => markedAsReadRef.current.add(id));
-    if (activeDirectUserId !== snapshotDmUserId) return;
-    const batch = writeBatch(db);
-    ids.forEach(id => batch.update(doc(db, 'messages', id), { isRead: true }));
-    batch.commit().catch((err) => {
-      ids.forEach(id => markedAsReadRef.current.delete(id));
-      console.error('[ChatView] markAsRead DM batch failed', err);
-    });
-  }, [activeDirectUserId, bgReceivedDMs, allDirectMessages, user, chatMode]);
+    commitReadMarks(ids.map(id => ({ id, patch: { isRead: true } })), 'DM');
+  }, [activeDirectUserId, bgReceivedDMs, directMessages, unread.unreadDms, user, chatMode, commitReadMarks]);
 
   useEffect(() => {
     if (chatMode !== 'channel' || !user || !activeChannel) return;
@@ -2747,40 +2856,40 @@ const ChatView: React.FC = () => {
     // quick open+leave otherwise left it unread).
     const bg = (isClientChannel ? (allUnreadClientMsgs || []) : (allUnreadTeamMsgs || []))
       .filter(m => (m as any).channelId === activeChannel);
-    const byId = new Map<string, any>();
-    [...(channelMessages || []), ...bg].forEach(m => byId.set(m.id, m));
-    // In a group, "read" is per-member (readBy), so a message stays unread FOR ME
-    // until my uid is in readBy — even after another member has read it (isRead=true).
-    const unread = [...byId.values()].filter(m => {
-      if (m.senderId === user.uid || markedAsReadRef.current.has(m.id)) return false;
-      return isGroupChannel ? !((m as any).readBy || []).includes(user.uid) : !m.isRead;
+    const rows = unionById<ChatMessage>(channelMessages, bg);
+    const groupMembers = isGroupChannel ? (allGroups || []).find(g => g.id === snapshotChannel)?.members : undefined;
+    const patches: { id: string; patch: Record<string, unknown> }[] = [];
+    rows.forEach(m => {
+      if (m.senderId === user.uid || markedAsReadRef.current.has(m.id)) return;
+      if (isGroupChannel) {
+        // Per-member read (readBy). `isRead` is flipped ONLY once every other member
+        // has read — it is what lets the row leave the shared `isRead == false`
+        // window. It used to flip on the FIRST reader, so members B and C never saw
+        // a badge for a message A had opened.
+        if (((m as any).readBy || []).includes(user.uid)) return;
+        const patch: Record<string, unknown> = { readBy: arrayUnion(user.uid) };
+        if (groupFullyReadAfter(m as any, user.uid, groupMembers)) patch.isRead = true;
+        patches.push({ id: m.id, patch });
+      } else if (isClientChannel) {
+        if (m.isRead) return;
+        // Only the CLIENT's messages get a staff read receipt. A colleague's message
+        // to the client is flushed from the unread window (isRead) but never gets
+        // `readAt` — that field is the client's receipt ("✓✓ Parë"), written by the
+        // portal alone; staff opening the thread used to forge it.
+        patches.push({ id: m.id, patch: isUnreadClientMessage(m, user.uid) ? { isRead: true, readAt: new Date() } : { isRead: true } });
+      } else {
+        if (m.isRead) return;
+        patches.push({ id: m.id, patch: { isRead: true } });
+      }
     });
-    if (unread.length === 0) return;
-    const ids = unread.map(m => m.id);
-    ids.forEach(id => markedAsReadRef.current.add(id));
+    if (patches.length === 0) return;
+    patches.forEach(p => markedAsReadRef.current.add(p.id));
     if (activeChannel !== snapshotChannel || chatMode !== 'channel') {
-      ids.forEach(id => markedAsReadRef.current.delete(id));
+      patches.forEach(p => markedAsReadRef.current.delete(p.id));
       return;
     }
-    // Chunked: a group catch-up can exceed 500 updates (each carrying an arrayUnion
-    // field transform), and an oversized commit fails WHOLE — then the catch stripped
-    // the dedup ref and the effect retried and failed on every snapshot forever.
-    const CHUNK = 400;
-    for (let i = 0; i < ids.length; i += CHUNK) {
-      const chunk = ids.slice(i, i + CHUNK);
-      const batch = writeBatch(db);
-      chunk.forEach(id => {
-        const patch: any = { isRead: true };
-        if (isGroupChannel) patch.readBy = arrayUnion(user.uid); // WhatsApp-style per-member read receipts
-        else if (isClientChannel) patch.readAt = new Date();
-        batch.update(doc(db, 'messages', id), patch);
-      });
-      batch.commit().catch((err) => {
-        chunk.forEach(id => markedAsReadRef.current.delete(id));
-        console.error('[ChatView] markAsRead channel batch failed', err);
-      });
-    }
-  }, [chatMode, channelMessages, allUnreadClientMsgs, allUnreadTeamMsgs, user, activeChannel, isClientChannel, isGroupChannel]);
+    commitReadMarks(patches, 'channel');
+  }, [chatMode, channelMessages, allUnreadClientMsgs, allUnreadTeamMsgs, allGroups, user, activeChannel, isClientChannel, isGroupChannel, commitReadMarks]);
 
   // Dismiss the bell notification(s) tied to the conversation I just opened.
   // Chat notifications (client_message, @mention) carry linkTo = the channel id;
@@ -2963,7 +3072,6 @@ const ChatView: React.FC = () => {
   const SLASH_COMMANDS = useMemo(() => ([
     { cmd: 'task', label: '/task', desc: 'Krijo një detyrë nga ky tekst' },
     { cmd: 'snippet', label: '/snippet', desc: 'Fut një përgjigje të ruajtur' },
-    { cmd: 'remind', label: '/remind', desc: 'Vendos një kujtues' },
     { cmd: 'me', label: '/me', desc: 'Dërgo si veprim (italic)' },
     { cmd: 'shrug', label: '/shrug', desc: 'Fut ¯\\_(\u30c4)_/¯' },
     { cmd: 'tableflip', label: '/tableflip', desc: 'Fut (\u256f\u00b0\u25a1\u00b0)\u256f\ufe35 \u253b\u2501\u253b' },
@@ -2995,12 +3103,6 @@ const ChatView: React.FC = () => {
         setSnippetPickerOpen(true);
         return;
       }
-      case 'remind': {
-        // Prefill text for the user to type their reminder details
-        setMessageText('/remind ');
-        requestAnimationFrame(() => chatTextareaRef.current?.focus());
-        return;
-      }
       case 'me': {
         setMessageText('/me ');
         requestAnimationFrame(() => chatTextareaRef.current?.focus());
@@ -3022,6 +3124,73 @@ const ChatView: React.FC = () => {
   }, [user]);
 
   // Loading / Error
+  // The list model is built once per data change — it used to be an IIFE inside
+  // the JSX, rebuilt (with every closure) on each keystroke of the composer.
+  const unifiedConversations = useMemo((): UnifiedConv[] => {
+            const convs: UnifiedConv[] = [];
+            // FivoAI — always pinned at top.
+            convs.push({ key: 'ai', type: 'ai', name: 'FivoAI', preview: 'Asistenti juaj personal', time: 0, unread: 0, pinned: true, initials: 'AI', isActive: chatMode === 'ai', onSelect: handleSelectAi });
+            // Groups
+            (myGroups || []).forEach(g => convs.push({
+              key: 'g-' + g.id, type: 'group', name: g.name || 'Grup',
+              preview: (g as any).lastMessagePreview
+                ? `${(g as any).lastMessageSenderId === user?.uid ? 'Ti' : getUserDisplayName((g as any).lastMessageSenderId || '')}: ${(g as any).lastMessagePreview}`
+                : `${(g.members || []).length} ${plural((g.members || []).length, 'anëtar', 'anëtarë')}`,
+              time: (g as any).lastMessageAt ? getTimestampMs((g as any).lastMessageAt) : 0,
+              unread: channelUnreadMap.get(g.id) || 0,
+              initials: (g.name || 'G').slice(0, 2).toUpperCase(),
+              isActive: chatMode === 'channel' && activeChannel === g.id,
+              onSelect: () => handleSelectChannel(g.id),
+            }));
+            // Clients — list EVERY customer of this business, not just those with a
+            // clientPortalAccess record. Previously the list was driven by
+            // `portalAccess`, so a client only appeared after logging into the portal
+            // at least once; CRM-only clients (e.g. added but never logged in) were
+            // invisible and un-messageable. `customers` is business-scoped, so the
+            // `client-{id}` channel is always readable under RLS. Portal access is
+            // merged in only for the email fallback on the display name.
+            const portalByCustomer = new Map<string, ClientPortalAccess>();
+            (portalAccess || []).forEach(a => { if (a.customerId && !portalByCustomer.has(a.customerId)) portalByCustomer.set(a.customerId, a); });
+            (customers || []).forEach(c => {
+              if (!c.id) return;
+              const access = portalByCustomer.get(c.id);
+              const cid = `client-${c.id}`;
+              const repId = (c as any)?.assignedToUserId;
+              const denorm = (c as any)?.lastClientMessageAt ? getTimestampMs((c as any).lastClientMessageAt) : 0;
+              convs.push({
+                key: 'c-' + c.id, type: 'client', name: c.name || access?.email || 'Klient',
+                preview: repId ? `👤 ${repId === user?.uid ? 'Ti' : getUserDisplayName(repId)}` : '',
+                unassigned: !repId && Math.max(denorm, clientRecencyMap.get(c.id) || 0) > 0,
+                time: Math.max(denorm, clientRecencyMap.get(c.id) || 0),
+                unread: clientUnreadMap.get(cid) || 0,
+                initials: (c.name || access?.email || 'K').slice(0, 2).toUpperCase(),
+                isActive: chatMode === 'channel' && activeChannel === cid,
+                onSelect: () => handleSelectChannel(cid),
+              });
+            });
+            // Staff DMs (existing convos + all active members so new DMs can start)
+            const staffIds = new Set<string>(directConversations || []);
+            (teamMembers || []).forEach(m => { if (m.userId && m.userId !== user?.uid) staffIds.add(m.userId); });
+            staffIds.forEach(uid => {
+              const last = dmLastMessageMap.get(uid);
+              const status = getUserStatus(uid);
+              convs.push({
+                key: 's-' + uid, type: 'staff', name: getUserDisplayName(uid),
+                preview: last ? `${last.isOwn ? 'Ti: ' : ''}${last.content}` : '',
+                time: last ? getTimestampMs(last.createdAt) : 0,
+                unread: directUnreadMap.get(uid) || 0,
+                online: isOnline(uid),
+                statusEmoji: status?.emoji,
+                initials: (getUserDisplayName(uid) || '??').slice(0, 2).toUpperCase(),
+                isActive: chatMode === 'direct' && activeDirectUserId === uid,
+                onSelect: () => handleSelectDirectMessage(uid),
+              });
+            });
+    return convs;
+  }, [myGroups, customers, portalAccess, teamMembers, directConversations, dmLastMessageMap, clientRecencyMap,
+      channelUnreadMap, clientUnreadMap, directUnreadMap, chatMode, activeChannel, activeDirectUserId, user?.uid,
+      getUserDisplayName, getUserStatus, isOnline, handleSelectAi, handleSelectChannel, handleSelectDirectMessage]);
+
   if (chatMode !== 'ai' && isPending) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
@@ -3078,66 +3247,7 @@ const ChatView: React.FC = () => {
         <UnifiedChatList
           canCreateGroups={canCreateGroups}
           onCreateGroup={() => { setNewGroupName(''); setNewGroupDesc(''); setNewGroupMembers([]); setShowCreateGroup(true); }}
-          conversations={((): UnifiedConv[] => {
-            const convs: UnifiedConv[] = [];
-            // FivoAI — always pinned at top.
-            convs.push({ key: 'ai', type: 'ai', name: 'FivoAI', preview: 'Asistenti juaj personal', time: 0, unread: 0, pinned: true, initials: 'AI', isActive: chatMode === 'ai', onSelect: handleSelectAi });
-            // Groups
-            (myGroups || []).forEach(g => convs.push({
-              key: 'g-' + g.id, type: 'group', name: g.name || 'Grup',
-              preview: `${(g.members || []).length} ${plural((g.members || []).length, 'anëtar', 'anëtarë')}`,
-              time: (g as any).lastMessageAt ? getTimestampMs((g as any).lastMessageAt) : 0,
-              unread: channelUnreadMap.get(g.id) || 0,
-              initials: (g.name || 'G').slice(0, 2).toUpperCase(),
-              isActive: chatMode === 'channel' && activeChannel === g.id,
-              onSelect: () => handleSelectChannel(g.id),
-            }));
-            // Clients — list EVERY customer of this business, not just those with a
-            // clientPortalAccess record. Previously the list was driven by
-            // `portalAccess`, so a client only appeared after logging into the portal
-            // at least once; CRM-only clients (e.g. added but never logged in) were
-            // invisible and un-messageable. `customers` is business-scoped, so the
-            // `client-{id}` channel is always readable under RLS. Portal access is
-            // merged in only for the email fallback on the display name.
-            const portalByCustomer = new Map<string, ClientPortalAccess>();
-            (portalAccess || []).forEach(a => { if (a.customerId && !portalByCustomer.has(a.customerId)) portalByCustomer.set(a.customerId, a); });
-            (customers || []).forEach(c => {
-              if (!c.id) return;
-              const access = portalByCustomer.get(c.id);
-              const cid = `client-${c.id}`;
-              const repId = (c as any)?.assignedToUserId;
-              const denorm = (c as any)?.lastClientMessageAt ? getTimestampMs((c as any).lastClientMessageAt) : 0;
-              convs.push({
-                key: 'c-' + c.id, type: 'client', name: c.name || access?.email || 'Klient',
-                preview: repId ? `👤 ${repId === user?.uid ? 'Ti' : getUserDisplayName(repId)}` : '',
-                unassigned: !repId,
-                time: Math.max(denorm, clientRecencyMap.get(c.id) || 0),
-                unread: clientUnreadMap.get(cid) || 0,
-                initials: (c.name || access?.email || 'K').slice(0, 2).toUpperCase(),
-                isActive: chatMode === 'channel' && activeChannel === cid,
-                onSelect: () => handleSelectChannel(cid),
-              });
-            });
-            // Staff DMs (existing convos + all active members so new DMs can start)
-            const staffIds = new Set<string>(directConversations || []);
-            (teamMembers || []).forEach(m => { if (m.userId && m.userId !== user?.uid) staffIds.add(m.userId); });
-            staffIds.forEach(uid => {
-              const last = dmLastMessageMap.get(uid);
-              const status = getUserStatus(uid);
-              convs.push({
-                key: 's-' + uid, type: 'staff', name: getUserDisplayName(uid),
-                preview: last ? `${last.isOwn ? 'Ti: ' : ''}${last.content}` : '',
-                time: last ? getTimestampMs(last.createdAt) : 0,
-                unread: directUnreadMap.get(uid) || 0,
-                online: isOnline(uid),
-                statusEmoji: status?.emoji,
-                initials: (getUserDisplayName(uid) || '??').slice(0, 2).toUpperCase(),
-                isActive: chatMode === 'direct' && activeDirectUserId === uid,
-                onSelect: () => handleSelectDirectMessage(uid),
-              });
-            });
-            return convs;
-          })()}
+          conversations={unifiedConversations}
         />
 
         {/* Sidebar-i i vjetër me seksione, i zëvendësuar nga <UnifiedChatList> më lart.
@@ -4635,7 +4745,12 @@ const ChatView: React.FC = () => {
                         }
                         if (e.key === 'Escape') { e.preventDefault(); setSlashOpen(false); return; }
                       }
-                      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e as any); }
+                      // Desktop: Enter sends, Shift+Enter breaks the line. Touch
+                      // keyboards: Enter breaks the line (there is no Shift), the
+                      // send button sends. IME composition Enter never sends.
+                      if (e.key === 'Enter' && !e.shiftKey && !(e.nativeEvent as any)?.isComposing && !isCoarsePointer()) {
+                        e.preventDefault(); handleSendMessage(e as any);
+                      }
                     }}
                     onPaste={async (e) => {
                       const items = e.clipboardData?.items;

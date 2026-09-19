@@ -19,7 +19,7 @@ import {
   assertFails,
   assertSucceeds,
 } from '@firebase/rules-unit-testing';
-import { doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, collection, query, where } from 'firebase/firestore';
+import { doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, collection, query, where, orderBy, limit } from 'firebase/firestore';
 
 const PROJECT_ID = 'fivocrm-rules-test';
 const VICTIM_BIZ = 'bizVictim';
@@ -318,6 +318,136 @@ test('10a. business member can react to a message in their tenant', async () => 
 test('10b. outsider cannot react to a message in another tenant', async () => {
   const mallory = testEnv.authenticatedContext('mallory', { email: 'm@evil.com' }).firestore();
   await assertFails(setDoc(doc(mallory, 'messages', 'msg1'), { reactions: { '💀': ['mallory'] } }, { merge: true }));
+});
+
+// 10c. A DM RECIPIENT marks the message read (ChatView's markAsRead batch: `isRead` only).
+// The receiver is not the sender, so this rides on the field-whitelist branch; it must
+// hold with and without a businessId on the row (legacy DMs) and across businesses.
+test('10c. DM recipient can mark the message read (same tenant, legacy row, cross-tenant)', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'messages', 'dm-same'), { businessId: MY_BIZ, teamId: MY_TEAM, senderId: 'zoe', receiverId: 'alice', content: 'hi', isRead: false });
+    await setDoc(doc(db, 'messages', 'dm-legacy'), { senderId: 'zoe', receiverId: 'alice', content: 'old', isRead: false });
+    await setDoc(doc(db, 'messages', 'dm-cross'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, senderId: 'vstaff', receiverId: 'alice', content: 'x', isRead: false });
+  });
+  const alice = testEnv.authenticatedContext('alice', { email: 'alice@mine.com' }).firestore();
+  await assertSucceeds(updateDoc(doc(alice, 'messages', 'dm-same'), { isRead: true }));
+  await assertSucceeds(updateDoc(doc(alice, 'messages', 'dm-legacy'), { isRead: true }));
+  await assertSucceeds(updateDoc(doc(alice, 'messages', 'dm-cross'), { isRead: true }));
+  // Someone who is neither party nor a tenant member cannot.
+  const mallory = testEnv.authenticatedContext('mallory', { email: 'm@evil.com' }).firestore();
+  await assertFails(updateDoc(doc(mallory, 'messages', 'dm-same'), { isRead: true }));
+});
+
+// 10d. LIST queries ChatView actually issues on `messages` (rules are not filters: an
+// unprovable list is denied outright and the group renders empty).
+test('10d. group channel message list: unscoped by channelId (ChatView today) vs businessId-scoped', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'channels', 'grp1'), { businessId: MY_BIZ, teamId: MY_TEAM, isGroup: true, members: ['alice', 'zoe'], name: 'G' });
+    await setDoc(doc(db, 'messages', 'gm1'), { businessId: MY_BIZ, teamId: MY_TEAM, channelId: 'grp1', senderId: 'zoe', content: 'g', isRead: false, createdAt: new Date() });
+  });
+  const alice = testEnv.authenticatedContext('alice', { email: 'alice@mine.com' }).firestore();
+  const unscoped = query(collection(alice, 'messages'), where('channelId', '==', 'grp1'), orderBy('createdAt', 'desc'), limit(50));
+  const scoped = query(collection(alice, 'messages'), where('businessId', '==', MY_BIZ), where('channelId', '==', 'grp1'), orderBy('createdAt', 'desc'), limit(50));
+  // The channelId-only list is what ChatView issues; it is provable through group
+  // membership (isGroupChannelMember) — it used to be denied for every non-super-admin.
+  await assertSucceeds(getDocs(unscoped));
+  await assertSucceeds(getDocs(scoped));
+  // A business member who is NOT in the group cannot list it by channelId alone …
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teamMembers', `${MY_TEAM}_bob`), { userId: 'bob', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active' });
+    await setDoc(doc(ctx.firestore(), 'users', 'bob'), { teamId: MY_TEAM, businessId: MY_BIZ });
+  });
+  const bob = testEnv.authenticatedContext('bob', { email: 'bob@mine.com' }).firestore();
+  await assertFails(getDocs(query(collection(bob, 'messages'), where('channelId', '==', 'grp1'), orderBy('createdAt', 'desc'), limit(50))));
+  // … and an outsider cannot even with the tenant predicate.
+  const mallory = testEnv.authenticatedContext('mallory', { email: 'm@evil.com' }).firestore();
+  await assertFails(getDocs(query(collection(mallory, 'messages'), where('businessId', '==', MY_BIZ), where('channelId', '==', 'grp1'))));
+  await assertFails(getDocs(query(collection(mallory, 'messages'), where('channelId', '==', 'grp1'))));
+});
+
+test('10e. typing indicators list by channel (ChatView today) vs businessId-scoped', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'typingIndicators', 'ti1'), { businessId: MY_BIZ, teamId: MY_TEAM, channelId: 'grp1', userId: 'zoe', timestamp: new Date() });
+  });
+  const alice = testEnv.authenticatedContext('alice', { email: 'alice@mine.com' }).firestore();
+  // ChatView now reads typing indicators businessId-scoped (teamScopedWhere); the old
+  // channelId-only shape is unprovable and stays denied.
+  await assertFails(getDocs(query(collection(alice, 'typingIndicators'), where('channelId', '==', 'grp1'))));
+  await assertSucceeds(getDocs(query(collection(alice, 'typingIndicators'), where('businessId', '==', MY_BIZ), where('channelId', '==', 'grp1'))));
+  // Deterministic-id write path: setDoc(merge) creates, refreshes, and deletes by id.
+  const myDoc = doc(alice, 'typingIndicators', 'grp1__alice');
+  await assertSucceeds(setDoc(myDoc, { userId: 'alice', channelId: 'grp1', timestamp: new Date(), businessId: MY_BIZ, teamId: MY_TEAM }, { merge: true }));
+  await assertSucceeds(setDoc(myDoc, { userId: 'alice', channelId: 'grp1', timestamp: new Date(), businessId: MY_BIZ, teamId: MY_TEAM }, { merge: true }));
+  await assertSucceeds(deleteDoc(myDoc));
+});
+
+// 10f. Group management is rules-enforced: admins edit, members may only leave or
+// write the last-message denormalisation, a non-member business colleague nothing.
+test('10f. group channels: admin edits, member leaves / denormalises, outsider-member cannot manage', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'channels', 'grp2'), { businessId: MY_BIZ, teamId: MY_TEAM, isGroup: true, name: 'G2', members: ['alice', 'zoe', 'bob'], admins: ['zoe'], createdByUserId: 'zoe' });
+    await setDoc(doc(db, 'teamMembers', `${MY_TEAM}_eve`), { userId: 'eve', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active' });
+    await setDoc(doc(db, 'users', 'eve'), { teamId: MY_TEAM, businessId: MY_BIZ });
+    await setDoc(doc(db, 'teamMembers', `${MY_TEAM}_zoe`), { userId: 'zoe', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active' });
+    await setDoc(doc(db, 'users', 'zoe'), { teamId: MY_TEAM, businessId: MY_BIZ });
+  });
+  const alice = testEnv.authenticatedContext('alice', { email: 'alice@mine.com' }).firestore();
+  const zoe = testEnv.authenticatedContext('zoe', { email: 'zoe@mine.com' }).firestore();
+  const eve = testEnv.authenticatedContext('eve', { email: 'eve@mine.com' }).firestore();
+  // member (not admin): may denormalise the last message, may leave, may NOT rename / add self as admin / add members
+  await assertSucceeds(updateDoc(doc(alice, 'channels', 'grp2'), { lastMessageAt: new Date(), lastMessagePreview: 'hi', lastMessageSenderId: 'alice' }));
+  await assertFails(updateDoc(doc(alice, 'channels', 'grp2'), { name: 'Mine now' }));
+  await assertFails(updateDoc(doc(alice, 'channels', 'grp2'), { admins: ['zoe', 'alice'] }));
+  await assertFails(updateDoc(doc(alice, 'channels', 'grp2'), { members: ['alice', 'zoe', 'bob', 'eve'] }));
+  await assertFails(deleteDoc(doc(alice, 'channels', 'grp2')));
+  // a business colleague who is NOT a member cannot join or touch it
+  await assertFails(updateDoc(doc(eve, 'channels', 'grp2'), { members: ['alice', 'zoe', 'bob', 'eve'] }));
+  await assertFails(updateDoc(doc(eve, 'channels', 'grp2'), { lastMessageAt: new Date() }));
+  // admin: full control
+  await assertSucceeds(updateDoc(doc(zoe, 'channels', 'grp2'), { name: 'Renamed', members: ['alice', 'zoe', 'bob', 'eve'] }));
+  // member leaves (removes ONLY themselves)
+  await assertSucceeds(updateDoc(doc(alice, 'channels', 'grp2'), { members: ['zoe', 'bob', 'eve'], admins: ['zoe'] }));
+  // group creation must include the creator as member + admin
+  await assertFails(setDoc(doc(alice, 'channels', 'grp-bad'), { businessId: MY_BIZ, teamId: MY_TEAM, isGroup: true, name: 'x', members: ['zoe'], admins: ['zoe'], createdByUserId: 'alice' }));
+  await assertSucceeds(setDoc(doc(alice, 'channels', 'grp-ok'), { businessId: MY_BIZ, teamId: MY_TEAM, isGroup: true, name: 'x', members: ['alice', 'zoe'], admins: ['alice'], createdByUserId: 'alice' }));
+  await assertSucceeds(deleteDoc(doc(alice, 'channels', 'grp-ok')));
+});
+
+// 10g. Posting into a group requires membership; legacy channels and client threads unchanged.
+test('10g. only group members may post into a group channel', async () => {
+  // finn is a business colleague who is NOT in grp2 (eve was added by the admin in 10f).
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teamMembers', `${MY_TEAM}_finn`), { userId: 'finn', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active' });
+    await setDoc(doc(ctx.firestore(), 'users', 'finn'), { teamId: MY_TEAM, businessId: MY_BIZ });
+  });
+  const finn = testEnv.authenticatedContext('finn', { email: 'finn@mine.com' }).firestore();
+  const eve = testEnv.authenticatedContext('eve', { email: 'eve@mine.com' }).firestore();
+  const zoe = testEnv.authenticatedContext('zoe', { email: 'zoe@mine.com' }).firestore();
+  await assertFails(setDoc(doc(finn, 'messages', 'gm-finn'), { businessId: MY_BIZ, teamId: MY_TEAM, channelId: 'grp2', senderId: 'finn', content: 'sneak', isRead: false, createdAt: new Date() }));
+  await assertSucceeds(setDoc(doc(zoe, 'messages', 'gm-zoe'), { businessId: MY_BIZ, teamId: MY_TEAM, channelId: 'grp2', senderId: 'zoe', content: 'ok', isRead: false, createdAt: new Date() }));
+  // a channel id with no `channels` doc (legacy fixed channel) still posts
+  await assertSucceeds(setDoc(doc(eve, 'messages', 'legacy-eve'), { businessId: MY_BIZ, teamId: MY_TEAM, channelId: 'general-mine', senderId: 'eve', content: 'ok', isRead: false, createdAt: new Date() }));
+});
+
+// 10h. dmThreads: participants only.
+test('10h. dmThreads readable/writable by the two participants only', async () => {
+  const alice = testEnv.authenticatedContext('alice', { email: 'alice@mine.com' }).firestore();
+  const mallory = testEnv.authenticatedContext('mallory', { email: 'm@evil.com' }).firestore();
+  const id = 'alice__zoe';
+  await assertSucceeds(setDoc(doc(alice, 'dmThreads', id), { participants: ['alice', 'zoe'], businessId: MY_BIZ, lastMessage: { content: 'hi', senderId: 'alice', createdAt: new Date() }, updatedAt: new Date() }, { merge: true }));
+  await assertSucceeds(setDoc(doc(alice, 'dmThreads', id), { lastMessage: { content: 'again', senderId: 'alice', createdAt: new Date() }, updatedAt: new Date() }, { merge: true }));
+  await assertFails(updateDoc(doc(alice, 'dmThreads', id), { participants: ['alice', 'mallory'] }));
+  await assertFails(setDoc(doc(mallory, 'dmThreads', 'alice__mallory2'), { participants: ['alice', 'zoe'], updatedAt: new Date() }));
+  await assertFails(getDoc(doc(mallory, 'dmThreads', id)));
+  await assertSucceeds(getDocs(query(collection(alice, 'dmThreads'), where('participants', 'array-contains', 'alice'))));
+  await assertFails(getDocs(query(collection(mallory, 'dmThreads'), where('participants', 'array-contains', 'alice'))));
+  // per-thread DM list shapes ChatView issues (senderId == me / receiverId == me + peer)
+  await assertSucceeds(getDocs(query(collection(alice, 'messages'), where('senderId', '==', 'alice'), where('receiverId', '==', 'zoe'), orderBy('createdAt', 'desc'), limit(300))));
+  await assertSucceeds(getDocs(query(collection(alice, 'messages'), where('senderId', '==', 'zoe'), where('receiverId', '==', 'alice'), orderBy('createdAt', 'desc'), limit(300))));
+  await assertFails(getDocs(query(collection(mallory, 'messages'), where('senderId', '==', 'zoe'), where('receiverId', '==', 'alice'), orderBy('createdAt', 'desc'), limit(300))));
 });
 
 // 11. The dead directMessages collection is fully locked.
