@@ -148,7 +148,7 @@ const TimesheetView: React.FC = () => {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-xl font-bold text-foreground"><Clock className="h-5 w-5" /> Orët {showTeam ? 'e ekipit' : 'e mia'}</h1>
-          <p className="text-sm text-muted-foreground">Klient → projekt → orë. Këto orë janë kosto reale në Financat → Klientët.</p>
+          <p className="text-sm text-muted-foreground">Klient → projekt → orë. Këto orë janë kosto reale në Financat → Fitimi (tabela e klientëve).</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {canSeeTeam && (

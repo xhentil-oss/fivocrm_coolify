@@ -538,7 +538,13 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
 - **Month close** = `financeMonthCloses/{bid}_{YYYY-MM}` (`locked`, snapshot, acknowledged
   warnings), Admin-written, never deleted; `monthCloseChecks()` is the pre-close list.
   `client-profitability-report` (day 2, 08:05 local, VPS, NOT in run-all) nudges managers
-  with timesheet gaps + unplanned projects and deep-links `/app/finances?tab=clients`.
+  with timesheet gaps + unplanned projects and deep-links `/app/finances?tab=clients`
+  (lands on the Fitimi tab; the client table is its first panel).
+- **Financat has THREE tabs and ONE revenue basis** (`'earned' | 'collected'`, labels
+  Fituar/Arkëtuar) shared by the client table, the department table, the responsible
+  fold and the department trend; every engine gets the same `periodRange` ("Ky muaj"
+  ends NOW) and the same `labor`. The hero stays cash-of-the-month and says so. Do not
+  add a fourth basis or a second period control.
 - Adding a cost figure anywhere? → read hours through `allocateLabor`/`laborForEntries`,
   never `project.spent`/`laborCost` (those are the cron's denormalised, current-salary copies).
 

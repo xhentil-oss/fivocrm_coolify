@@ -152,6 +152,7 @@ export interface ClientProfitabilityResult {
   };
   labor: LaborAllocation;
   basis: 'hours' | 'none';
+  revenueBasis: 'earned' | 'collected';
   overheadBasis: FinanceSettings['overheadBasis'];
   warnings: {
     membersWithoutRate: string[];
@@ -176,6 +177,12 @@ export interface ClientProfitabilityInput {
   rateCard?: RateCardRole[] | null;
   /** Reuse an allocation already computed for the same period (one answer everywhere). */
   labor?: LaborAllocation | null;
+  /**
+   * 'earned' (default): revenue recognised by the work done in the period.
+   * 'collected': money that actually arrived in the period, per project — the
+   * same toggle the rest of Financat exposes, so the tabs stop disagreeing.
+   */
+  revenueBasis?: 'earned' | 'collected';
 }
 
 const NO_CLIENT = '__none__';
@@ -191,7 +198,12 @@ export function periodPayrollBasis(p: { monthsRecorded: number; monthsProfile: n
 export function computeClientProfitability(input: ClientProfitabilityInput): ClientProfitabilityResult {
   const settings = resolveFinanceSettings(input.settings);
   const { start, end } = input.period;
-  const projects = (input.projects || []).filter(p => p.status !== 'Archived' || parseDate(p.archivedAt) == null || (parseDate(p.archivedAt) as Date) >= start);
+  const collectedBasis = input.revenueBasis === 'collected';
+  // No archived filter here: projectPnl / departmentPnl have none either, and a
+  // project with nothing in the period (no earned, hours, expenses or invoices)
+  // is skipped below anyway. Two engines with two membership rules gave two
+  // different overhead shares for every OTHER project.
+  const projects = input.projects || [];
   const clientProjectIds = new Set(projects.filter(p => !!p.customerId).map(p => p.id));
   const labor = input.labor && input.labor.period.start.getTime() === start.getTime() && input.labor.period.end.getTime() === end.getTime()
     ? input.labor
@@ -227,21 +239,27 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
   // ── Invoices: per project (billed / collected in period) + unlinked per customer ──
   const invByProject = new Map<string, { invoiced: number; collected: number }>();
   const unlinkedByCustomer = new Map<string, number>();
+  const unlinkedCollectedByCustomer = new Map<string, number>();
   const unlinkedInvoices = { count: 0, amount: 0 };
   const outstandingByCustomer = new Map<string, number>();
+  let collectedAll = 0;
   for (const inv of invoices) {
     if (inv.status === 'Draft' || inv.status === 'Cancelled') continue;
     const billed = getInvoiceBilledBetween(inv, start, end);
     const collected = getInvoiceCollectedBetween(inv, start, end);
+    collectedAll += collected;
     if (inv.customerId) outstandingByCustomer.set(inv.customerId, (outstandingByCustomer.get(inv.customerId) || 0) + getInvoiceOutstandingAll(inv));
     if (inv.projectId && projectIds.has(inv.projectId)) {
       const cur = invByProject.get(inv.projectId) || { invoiced: 0, collected: 0 };
       cur.invoiced += billed; cur.collected += collected;
       invByProject.set(inv.projectId, cur);
-    } else if (billed > 0) {
-      unlinkedInvoices.count += 1; unlinkedInvoices.amount += billed;
+    } else {
       const key = inv.customerId || NO_CLIENT;
-      unlinkedByCustomer.set(key, (unlinkedByCustomer.get(key) || 0) + billed);
+      if (billed > 0) {
+        unlinkedInvoices.count += 1; unlinkedInvoices.amount += billed;
+        unlinkedByCustomer.set(key, (unlinkedByCustomer.get(key) || 0) + billed);
+      }
+      if (collected > 0) unlinkedCollectedByCustomer.set(key, (unlinkedCollectedByCustomer.get(key) || 0) + collected);
     }
   }
 
@@ -251,9 +269,9 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
   let internalProjectLabor = 0;
   for (const p of projects) {
     const pl = labor.byProject.get(p.id);
-    const earned = projectEarnedInPeriod(p, entries, input.period);
     const dx = directByProject.get(p.id) || { direct: 0, passThrough: 0 };
     const iv = invByProject.get(p.id) || { invoiced: 0, collected: 0 };
+    const earned = collectedBasis ? iv.collected : projectEarnedInPeriod(p, entries, input.period);
     const hours = pl?.hours || 0;
     const laborCost = pl?.cost || 0;
     if (!p.customerId) { internalProjectLabor += laborCost; continue; }
@@ -295,12 +313,15 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
 
   // ── Client rows (before overhead) ──
   const nameById = new Map((input.customers || []).map(c => [c.id, c.name || c.company || 'Pa emër']));
-  const customerIds = new Set<string>([...lines.keys(), ...unlinkedByCustomer.keys()].filter(k => k !== NO_CLIENT));
+  const customerIds = new Set<string>([...lines.keys(), ...unlinkedByCustomer.keys(), ...unlinkedCollectedByCustomer.keys()].filter(k => k !== NO_CLIENT));
   const rows: ClientRow[] = [];
   for (const cid of customerIds) {
     const ls = (lines.get(cid) || []).sort((a, b) => b.earned - a.earned);
     const sum = (f: (l: ClientProjectLine) => number) => ls.reduce((s, l) => s + f(l), 0);
-    const earned = sum(l => l.earned);
+    // On the collected basis, cash on an invoice with no project is still this
+    // client's revenue (it is in the hero's "Para që hyri"); on the earned basis no
+    // project earned it, so it stays an `unlinkedInvoiced` note.
+    const earned = sum(l => l.earned) + (collectedBasis ? (unlinkedCollectedByCustomer.get(cid) || 0) : 0);
     const passThrough = sum(l => l.passThrough);
     const netRevenue = earned - passThrough;
     const directLabor = sum(l => l.laborCost);
@@ -367,7 +388,10 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
   // cost of the period (payroll + other expenses + project-direct expenses).
   const allDirect = Array.from(directByProject.values()).reduce((s, v) => s + v.direct, 0);
   const allPass = Array.from(directByProject.values()).reduce((s, v) => s + v.passThrough, 0);
-  const allEarned = totals.earned + projects.filter(p => !p.customerId).reduce((s, p) => s + projectEarnedInPeriod(p, entries, input.period), 0);
+  // Company revenue: on the collected basis every lek that arrived (the hero's
+  // "Para që hyri"); on the earned basis the clients' earned revenue — an
+  // internal project's `budget` is never money a client will pay, so it is out.
+  const allEarned = collectedBasis ? collectedAll : totals.earned;
   const operatingProfit = allEarned - allPass - labor.payroll.total - otherFixed - allDirect;
 
   return {
@@ -390,6 +414,7 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
     },
     labor,
     basis: labor.basis,
+    revenueBasis: collectedBasis ? 'collected' : 'earned',
     overheadBasis: settings.overheadBasis,
     warnings: {
       membersWithoutRate: labor.membersWithoutRate,

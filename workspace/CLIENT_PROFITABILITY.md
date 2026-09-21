@@ -46,7 +46,7 @@ muaj të mbyllur (`monthLockedFor`), test 55a–55c.
 
 ## Mbyllja e muajit
 
-Financat → Klientët → **Mbyll muajin** (Admin): `monthCloseChecks()` liston çka mungon
+Financat → Fitimi (tabela e klientëve) → **Mbyll muajin** (Admin): `monthCloseChecks()` liston çka mungon
 (orë 0, persona pa pagë, projekte pa plan, fatura pa projekt, orë × tarifa > pagë, paga nga
 plani) → `financeMonthCloses/{businessId}_{YYYY-MM}` me `locked: true` + snapshot i tabelës
 + warnings e pranuara. Pas kësaj orët e muajit janë read-only (rules + UI 🔒). Rihapja =

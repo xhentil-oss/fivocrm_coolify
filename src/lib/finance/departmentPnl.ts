@@ -34,7 +34,9 @@ import {
   monthsBetween,
   billingTypeOf,
 } from './projectPeriod';
-import type { LaborAllocation } from './laborAllocation';
+import { allocateLabor, type LaborAllocation } from './laborAllocation';
+import type { FinanceSettings } from './profitabilityCore';
+import type { RateCardRole } from './costRates';
 import { projectEarnedInPeriod } from './revenueRecognition';
 
 export interface DepartmentPnlOptions {
@@ -464,17 +466,36 @@ export function buildDepartmentProfitTrend(
     revenueBasis?: 'budget' | 'invoiced';
     invoices?: Invoice[] | null;
     teams?: Array<{ id: string; name?: string; department?: string }> | null;
+    /**
+     * Logged hours + cost-rate rules. When given, EVERY month of the trend is
+     * costed by its own hours (`allocateLabor` per month) — the table above the
+     * chart uses hours, so a trend on the legacy salary split showed a different
+     * September than the September row it sat under.
+     */
+    timeEntries?: import('../../types').TimeEntry[] | null;
+    settings?: Partial<FinanceSettings> | null;
+    rateCard?: RateCardRole[] | null;
   } = {},
 ): DepartmentTrend {
   const monthly: { label: string; byDept: Map<string, number> }[] = [];
   const totals = new Map<string, number>();
+  const clientProjectIds = new Set((projects || []).filter(p => !!p.customerId).map(p => p.id));
   for (let i = months - 1; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const start = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
-    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+    const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+    // The current month runs to NOW, like every other month-to-date figure on the page.
+    const end = monthEnd > now ? now : monthEnd;
+    const labor = extra.timeEntries
+      ? allocateLabor({
+          timeEntries: extra.timeEntries, members: teamMembers, expenses, period: { start, end },
+          settings: extra.settings, rateCard: extra.rateCard, clientProjectIds,
+        })
+      : null;
     const res = computeDepartmentPnl(projects, teamMembers, expenses, {
       range: { start, end }, mode: 'all', now,
       revenueBasis: extra.revenueBasis, invoices: extra.invoices, teams: extra.teams,
+      labor, timeEntries: extra.timeEntries,
     });
     const byDept = new Map<string, number>();
     for (const row of res.rows) {

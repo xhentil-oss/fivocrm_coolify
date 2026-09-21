@@ -22,7 +22,7 @@ import { payrollBetween, type PeriodPayroll } from './payroll';
 import { memberCostRate, memberCostRole, memberCapacityHours, type RateCardRole } from './costRates';
 import { resolveFinanceSettings, type FinanceSettings, type CostRateBasis } from './profitabilityCore';
 import { entryHours, entryInPeriod, entryInstantMs, entryIsOpen } from './timeEntries';
-import { monthsBetween } from './projectPeriod';
+import { fractionalMonthsBetween, monthCoverage } from './projectPeriod';
 
 export interface MemberLaborLine {
   userId: string;
@@ -63,6 +63,7 @@ export interface MemberLabor {
 
 export interface LaborAllocation {
   basis: 'hours' | 'none';
+  /** `months` is FRACTIONAL (1 Sep → 10 Sep = 0.32): capacity scales with elapsed time. */
   period: { start: Date; end: Date; months: number };
   settings: FinanceSettings;
   byProject: Map<string, ProjectLabor>;
@@ -71,6 +72,11 @@ export interface LaborAllocation {
   internal: { hours: number; cost: number };
   /** Σ labour cost of hours logged on projects (client or internal). */
   absorbed: number;
+  /**
+   * Payroll of the period. A month still in progress is charged at its
+   * elapsed share ONLY when the month's basis is the PLAN — a recorded payment
+   * is what left the bank and is never scaled (same law as the Financat hero).
+   */
   payroll: PeriodPayroll;
   /** Payroll not covered by logged hours → shared overhead. */
   unabsorbed: number;
@@ -100,11 +106,32 @@ const monthEndOf = (ms: number): Date => {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
 };
 
+/**
+ * A month the period only partly covers (month-to-date, or a range starting
+ * mid-month) is charged at its elapsed share — but only where that month's
+ * payroll is the PLAN. Charging a whole month of plan against ten days of hours
+ * inflated `unabsorbed`, and with it every client's overhead, for the first
+ * third of every month.
+ */
+export function proratePlanPayroll(p: PeriodPayroll, start: Date, end: Date): PeriodPayroll {
+  let total = 0, profile = 0, changed = false;
+  const months = p.months.map(m => {
+    if (m.basis !== 'profile') { total += m.total; profile += m.profile; return m; }
+    const share = monthCoverage(m.year, m.monthIndex, start, end);
+    if (share >= 1 || share <= 0) { total += m.total; profile += m.profile; return m; }
+    changed = true;
+    const scaled = { ...m, total: m.total * share, profile: m.profile * share };
+    total += scaled.total; profile += scaled.profile;
+    return scaled;
+  });
+  return changed ? { ...p, total, profile, months } : p;
+}
+
 export function allocateLabor(input: LaborAllocationInput): LaborAllocation {
   const settings = resolveFinanceSettings(input.settings);
   const { start, end } = input.period;
-  const months = monthsBetween(start, end);
-  const payroll = payrollBetween(input.members, input.expenses, start, end);
+  const months = fractionalMonthsBetween(start, end);
+  const payroll = proratePlanPayroll(payrollBetween(input.members, input.expenses, start, end), start, end);
   const memberByUid = new Map<string, TeamMember>();
   for (const m of input.members || []) if (m.userId) memberByUid.set(m.userId, m);
 

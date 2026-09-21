@@ -23,6 +23,39 @@ export function monthsBetween(a: Date, b: Date): number {
   return Math.max(1, (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth()) + 1);
 }
 
+/**
+ * Months between two instants as a FRACTION: a period 1 Sep 00:00 → 10 Sep 12:00
+ * is 0.32 months, not 1. Whole-month rules (retainer fees, payroll rows) keep
+ * `monthsBetween`; this is for what scales with elapsed time — practical
+ * capacity and the PLAN payroll of a month still in progress.
+ */
+export function fractionalMonthsBetween(start: Date, end: Date): number {
+  if (end <= start) return 0;
+  let total = 0;
+  let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+  const lastMonth = new Date(end.getFullYear(), end.getMonth(), 1);
+  for (let guard = 0; cursor.getTime() <= lastMonth.getTime() && guard < 1200; guard++) {
+    const monthStart = cursor;
+    const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+    const from = start > monthStart ? start : monthStart;
+    // A range ending at 23:59:59.999 IS the whole month — never 0.9999999.
+    const to = end < monthEnd && monthEnd.getTime() - end.getTime() > 1000 ? end : monthEnd;
+    if (to > from) total += (to.getTime() - from.getTime()) / (monthEnd.getTime() - monthStart.getTime());
+    cursor = monthEnd;
+  }
+  return total;
+}
+
+/** Share of the calendar month `monthStart` that lies inside [start, end] (0..1). */
+export function monthCoverage(monthYear: number, monthIndex: number, start: Date, end: Date): number {
+  const monthStart = new Date(monthYear, monthIndex, 1);
+  const monthEnd = new Date(monthYear, monthIndex + 1, 1);
+  const from = start > monthStart ? start : monthStart;
+  const to = end < monthEnd && monthEnd.getTime() - end.getTime() > 1000 ? end : monthEnd;
+  if (to <= from) return 0;
+  return Math.min(1, (to.getTime() - from.getTime()) / (monthEnd.getTime() - monthStart.getTime()));
+}
+
 /** Whether a project's `budget` is a monthly fee or a one-time value. */
 export function billingTypeOf(p: Project): 'one-time' | 'monthly' {
   if (p.billingType === 'monthly' || p.billingType === 'one-time') return p.billingType;

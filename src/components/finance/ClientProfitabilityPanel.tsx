@@ -7,7 +7,7 @@ import { RECOGNITION_METHOD_LABELS } from '../../lib/finance/revenueRecognition'
 import type { BudgetAlertLevel, MarginStatus } from '../../lib/finance/profitabilityCore';
 
 /**
- * Financat → Klientët. The table the owner opens on the 1st of the month:
+ * Financat → Fitimi (tabela e klientëve). The table the owner opens on the 1st of the month:
  * earned · direct cost · GROSS PROFIT · overhead · net · hours · L/h · cash.
  * Gross margin is the decision figure and carries the colour; cash is a separate
  * column set. Every row unfolds to its projects (method, plan vs actual alarm,
@@ -104,13 +104,13 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
           </div>
         </div>
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
-          <Tile label="Të ardhura të fituara" value={T.earned} />
+          <Tile label={result.revenueBasis === 'collected' ? 'Të ardhura (arkëtuar)' : 'Të ardhura të fituara'} value={T.earned} />
           <Tile label="Kosto direkte" value={T.directLabor + T.directExpenses} sub={`punë ${formatALL(Math.round(T.directLabor))}`} />
           <Tile label="Fitimi bruto" value={T.grossProfit} sub={pctTxt(T.grossMarginPct)} tone={T.grossProfit >= 0 ? 'pos' : 'neg'} strong />
           <Tile label="Overhead" value={T.overhead} sub={C.unallocatedOverhead > 0 ? `pa alokuar ${formatALL(Math.round(C.unallocatedOverhead))}` : `pool ${formatALL(Math.round(C.overheadPool))}`} />
           <Tile label="Fitimi neto" value={T.netProfit} sub={pctTxt(T.netMarginPct)} tone={T.netProfit >= 0 ? 'pos' : 'neg'} strong />
           <Tile label="Punë e pafaturuar" value={T.unbilledEarned} sub="e fituar, jo në faturë" />
-          <Tile label="Pa arkëtuar" value={T.outstanding} tone={T.outstanding > 0 ? 'warn' : undefined} />
+          <Tile label="Pa arkëtuar (gjithsej)" value={T.outstanding} sub="borxhi total, jo vetëm periudha" tone={T.outstanding > 0 ? 'warn' : undefined} />
         </div>
         <details className="mt-3 text-[12.5px] text-[#7286a3]">
           <summary className="cursor-pointer font-semibold text-[#08183A]">Si lidhet me Financat (rezultati operativ i periudhës)</summary>
@@ -167,7 +167,7 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
                 <th className="px-2 py-2.5 text-right">L/orë</th>
                 <th className="px-2 py-2.5 text-right">Faturuar</th>
                 <th className="px-2 py-2.5 text-right">Arkëtuar</th>
-                <th className="px-5 py-2.5 text-right sm:px-6">Pa arkëtuar</th>
+                <th className="px-5 py-2.5 text-right sm:px-6" title="Borxhi i klientit sot, gjithë kohës">Pa arkëtuar Σ</th>
               </tr>
             </thead>
             <tbody>
@@ -230,7 +230,10 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
           </table>
         </div>
         <p className="px-5 py-3 text-[11.5px] leading-relaxed text-[#7286a3] sm:px-6">
-          Të ardhura = puna e FITUAR në periudhë (retainer: tarifa mujore; projekt fiks: sipas orëve të kryera ndaj planit), jo faturimi.
+          {result.revenueBasis === 'collected'
+            ? 'Të ardhura = paraja e ARKËTUAR në periudhë për çdo projekt (baza "Arkëtuar").'
+            : 'Të ardhura = puna e FITUAR në periudhë (retainer: tarifa mujore; projekt fiks: sipas orëve të kryera ndaj planit), jo faturimi.'}
+          {' '}«Pa arkëtuar Σ» është borxhi i klientit sot, gjithë kohës — jo i periudhës.
           Kosto direkte = orë × kosto/orë e personit (pagë e ngarkuar ÷ kapacitet) + shpenzime të lidhura me projektin.
           Fitimi bruto ≥ {s.marginThresholds.healthy} % 🟢 · ≥ {s.marginThresholds.watch} % 🟡 · më poshtë 🔴. A–D: marzh × fërkim (L/orë ndaj mesatares).
         </p>

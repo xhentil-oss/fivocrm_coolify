@@ -178,12 +178,13 @@ export function payrollBetween(
 /**
  * Payroll to EXPECT next month — a forward commitment, not history.
  *
- * The plan (`monthlySalary`) is the right basis here: next month has no recorded
- * payments yet, and a contract is a commitment. But a tenant who only ever
- * records Salary expense rows and never fills `monthlySalary` used to get a
- * cash-flow gap and a profit forecast with NO payroll in them at all, which is
- * the most expensive line missing. So when the plan is empty, fall back to the
- * average of the last `monthsBack` complete months that actually had payments.
+ * Same precedence as `payrollForMonth`: what was actually PAID wins. The average
+ * of the last `monthsBack` complete months with recorded salary rows is what next
+ * month will most likely cost (it includes the freelancers and models the plan
+ * structurally cannot); the plan (`monthlySalary`) is the fallback when nothing
+ * has been recorded. The old order (plan first) made the forecast and the
+ * cash-flow gap read a stale 500 000 plan while the hero, two rows above, charged
+ * the 2 000 000 that really left the bank every month.
  */
 export function forwardPayrollEstimate(
   members: TeamMember[] | undefined | null,
@@ -191,10 +192,6 @@ export function forwardPayrollEstimate(
   now: Date,
   monthsBack = 3,
 ): { amount: number; basis: PayrollBasis } {
-  const nextMonthEnd = new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59, 59, 999);
-  const plan = totalSalaryForMonth(members, nextMonthEnd);
-  if (plan > 0) return { amount: plan, basis: 'profile' };
-
   let sum = 0;
   let months = 0;
   for (let i = 1; i <= monthsBack; i++) {
@@ -203,8 +200,12 @@ export function forwardPayrollEstimate(
     const { amount } = recordedPayrollBetween(expenses, s, e);
     if (amount > 0) { sum += amount; months += 1; }
   }
-  if (months === 0) return { amount: 0, basis: 'none' };
-  return { amount: sum / months, basis: 'recorded' };
+  if (months > 0) return { amount: sum / months, basis: 'recorded' };
+
+  const nextMonthEnd = new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59, 59, 999);
+  const plan = totalSalaryForMonth(members, nextMonthEnd);
+  if (plan > 0) return { amount: plan, basis: 'profile' };
+  return { amount: 0, basis: 'none' };
 }
 
 /** Short Albanian label for a basis — used wherever a payroll figure is shown. */

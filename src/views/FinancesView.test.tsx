@@ -203,38 +203,35 @@ describe('FinancesView', () => {
     expect(screen.getByText('Trendi i fitimit')).toBeInTheDocument();
     expect(screen.getByText('Arkëtimet sipas muajit')).toBeInTheDocument();
 
-    // Tab 2 — profit, plus the one filter row that scopes its panels
+    // Tab 2 — profit: ONE filter row, then clients (the owner's question), service
+    // lines, capacity; the responsible cut and the trend are folded but in the DOM.
     selectTab('Fitimi');
     expect(screen.getByText('Periudha')).toBeInTheDocument();
-    expect(screen.getByText('Fitimi sipas departamentit')).toBeInTheDocument();
-    expect(screen.getByText('Të ardhurat sipas përgjegjësit')).toBeInTheDocument();
-    // The deeper cuts stay reachable, just folded away.
-    expect(screen.getByText('Fitimi sipas projekti')).toBeInTheDocument();
-
-    // Tab 3 — clients: ONE table (earned − hours × cost rate − direct = gross; overhead
-    // by hours; cash apart), with its basis said out loud when no hours were logged.
-    selectTab('Klientët');
     expect(screen.getByText(/Fitimi për klient/)).toBeInTheDocument();
     expect(screen.getByText(/Asnjë orë e regjistruar/)).toBeInTheDocument();
+    expect(screen.getByText('Fitimi sipas departamentit')).toBeInTheDocument();
+    expect(screen.getByText('Kapaciteti i ekipit')).toBeInTheDocument();
+    expect(screen.getByText('Të ardhurat sipas përgjegjësit')).toBeInTheDocument();
+    // There is no fourth tab any more — the client table lives inside Fitimi.
+    expect(screen.queryByRole('tab', { name: /Klientët/ })).toBeNull();
   });
 
   it('scopes the profit panels with one shared period + basis control', () => {
     render(<FinancesView />);
     selectTab('Fitimi');
 
-    // Default: the year, on money actually collected — profit should open on
-    // cash that arrived, not on a plan.
+    // Default: the year, on the work EARNED — cash is its own column set.
     expect(screen.getByRole('button', { name: 'Viti', pressed: true })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Paguar', pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Fituar', pressed: true })).toBeInTheDocument();
     // The label appears once per panel that reads the period (filter row, capacity card).
     expect(screen.getAllByText(new RegExp(`Viti ${now.getFullYear()}`)).length).toBeGreaterThan(0);
-    expect(screen.getByText(/vetëm faturat e paguara/)).toBeInTheDocument();
+    expect(screen.getAllByText(/puna e fituar/).length).toBeGreaterThan(0);
 
     // Switching the basis re-labels the summary line, proving the single control
     // reaches the panels (it used to live buried inside one card).
-    fireEvent.click(screen.getByRole('button', { name: 'Buxhet' }));
-    expect(screen.getByRole('button', { name: 'Buxhet', pressed: true })).toBeInTheDocument();
-    expect(screen.getByText(/buxheti i projekteve/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Arkëtuar' }));
+    expect(screen.getByRole('button', { name: 'Arkëtuar', pressed: true })).toBeInTheDocument();
+    expect(screen.getAllByText(/paraja e arkëtuar/).length).toBeGreaterThan(0);
 
     // A specific month is reachable from the same row, replacing the second,
     // independent month dropdown the responsible card used to own.
@@ -310,9 +307,12 @@ describe('FinancesView', () => {
     });
     render(<FinancesView />);
     selectTab('Fitimi');
+    // These two tests are about the CASH basis (a project that billed vs one that did
+    // not); on the default "Fituar" basis an unfinished one-time project earns nothing.
+    fireEvent.click(screen.getByRole('button', { name: 'Arkëtuar' }));
 
-    // Every project name also appears in the folded project-by-project table, so
-    // what proves anything here is the CHANGE in how often it appears.
+    // The project name may also appear elsewhere on the tab, so what proves
+    // anything here is the CHANGE in how often it appears.
     const before = screen.queryAllByText('Projekt i Brendshëm').length;
     fireEvent.click(screen.getByRole('button', { name: /^Web/ }));
     expect(screen.queryAllByText('Projekt i Brendshëm').length).toBe(before);
@@ -333,6 +333,7 @@ describe('FinancesView', () => {
   it('opens a department that billed nothing at all, instead of folding it away', () => {
     render(<FinancesView />);
     selectTab('Fitimi');
+    fireEvent.click(screen.getByRole('button', { name: 'Arkëtuar' }));
 
     // "Social" has one project and no paid invoice behind it, so EVERY line in it
     // is a zero-revenue line. Folding by default would hide the drill-down's

@@ -104,7 +104,7 @@ const Customer360View: React.FC = () => {
   const hostingOn = moduleEnabled('hosting');
   const { data: hostingSubs } = useCollection<Subscription>('subscriptions', { ...byCustomer, skip: byCustomer.skip || !hostingOn });
   const { data: hostingDomains } = useCollection<Domain>('domains', { ...byCustomer, skip: byCustomer.skip || !hostingOn });
-  // Client profitability (same engine as Financat → Klientët): hours, pay, expenses, settings.
+  // Client profitability (same engine as Financat → Fitimi (tabela e klientëve)): hours, pay, expenses, settings.
   const { data: timeEntries } = useCollection<TimeEntry>('timeEntries', { skipTeamFilter: true, skip: !canSeeFinancials(permissions) });
   const { data: allExpenses } = useCollection<Expense>('expenses', { skipTeamFilter: true, skip: !canSeeFinancials(permissions) });
   const { data: rawMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true, skip: !canSeeFinancials(permissions) });
@@ -263,7 +263,7 @@ const Customer360View: React.FC = () => {
   const pendingAmount = customerInvoices.reduce((s, i) => s + getInvoiceOutstandingAll(i), 0);
   const activeProjectCount = customerProjects.filter(p => p.status === 'Active').length;
 
-  // Per-client P&L — ONE engine with Financat → Klientët (clientProfitability.ts):
+  // Per-client P&L — ONE engine with Financat → Fitimi (tabela e klientëve) (clientProfitability.ts):
   // earned revenue − hours × cost rate − direct expenses = gross; − overhead = net.
   const clientPnl = useMemo(() => {
     const now = new Date();
@@ -525,7 +525,7 @@ const Customer360View: React.FC = () => {
         </Card>
       </div>
 
-      {/* Per-client P&L — same numbers as Financat → Klientët */}
+      {/* Per-client P&L — same numbers as Financat → Fitimi (tabela e klientëve) */}
       {canSeeFinancials(permissions) && (
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
@@ -587,7 +587,7 @@ const Customer360View: React.FC = () => {
         <p className="text-[11px] text-muted-foreground mt-2">
           {clientPnl.basis === 'none'
             ? 'Asnjë orë e regjistruar në këtë periudhë — puna direkte është 0 dhe shifra është vlerësim. Orët regjistrohen te Orët e mia / raporti ditor.'
-            : 'Të ardhurat = puna e fituar (retainer: tarifa mujore; projekt fiks: sipas orëve ndaj planit). Punë = orë × kosto/orë e personit. E njëjta tabelë si Financat → Klientët.'}
+            : 'Të ardhurat = puna e fituar (retainer: tarifa mujore; projekt fiks: sipas orëve ndaj planit). Punë = orë × kosto/orë e personit. E njëjta tabelë si Financat → Fitimi (tabela e klientëve).'}
         </p>
       </Card>
       )}
