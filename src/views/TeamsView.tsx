@@ -1446,6 +1446,12 @@ const EditMemberForm: React.FC<{
   // every closed month silently improved when someone left (see TeamMember.leftAt).
   const [leftAt, setLeftAt] = useState(() => toDateInput(parseDate((member as any).leftAt)));
   const [hourlyCostRate, setHourlyCostRate] = useState(member.hourlyCostRate?.toString() || '');
+  // Rate-card role + practical client capacity (src/lib/finance/costRates.ts):
+  // cost/hour = loaded salary / capacity, and hours are grouped per role.
+  const [costRole, setCostRole] = useState<string>((member as any).costRole || '');
+  const [clientCapacityHours, setClientCapacityHours] = useState<string>(
+    (member as any).clientCapacityHours ? String((member as any).clientCapacityHours) : '',
+  );
   // The member's CRAFT. Distinct from `role` (authorisation) and from `serviceLines`
   // (P&L allocation) — see TeamMember.position.
   const [position, setPosition] = useState<string>(member.position || '');
@@ -1517,6 +1523,8 @@ const EditMemberForm: React.FC<{
       // costing money in every P&L. deleteField() is the explicit erase.
       monthlySalary: newSalary == null ? deleteField() : newSalary,
       hourlyCostRate: hourlyCostRate ? parseFloat(hourlyCostRate) : deleteField(),
+      costRole: (costRole.trim() || deleteField()) as any,
+      clientCapacityHours: (parseFloat(clientCapacityHours) > 0 ? parseFloat(clientCapacityHours) : deleteField()) as any,
       position: position || undefined,
       serviceLines: serviceLines.length ? serviceLines : undefined,
       // Only include when we changed it, so unrelated edits don't clobber history.
@@ -1796,7 +1804,7 @@ const EditMemberForm: React.FC<{
 
         <div className="pt-1">
           <Label htmlFor="hourlyCostRate" className="text-xs text-amber-800 dark:text-amber-300">Tarifa e kostos / orë (L)</Label>
-          <p className="text-[11px] text-muted-foreground">Kosto e brendshme për orë pune (P&amp;L per-klient + buxheti). Bosh = llogaritet nga rroga / 160.</p>
+          <p className="text-[11px] text-muted-foreground">Mbivendosje manuale. Bosh = llogaritet: rroga × (1 + kontributet) ÷ kapaciteti praktik për klientë (Cilësimet → Financat).</p>
           <input
             id="hourlyCostRate"
             type="number"
@@ -1804,9 +1812,40 @@ const EditMemberForm: React.FC<{
             step="0.01"
             value={hourlyCostRate}
             onChange={(e) => setHourlyCostRate(e.target.value)}
-            placeholder={monthlySalary ? `auto ≈ ${Math.round((parseFloat(monthlySalary) || 0) / 160)}` : 'p.sh. 5'}
+            placeholder={monthlySalary ? `auto ≈ ${Math.round(((parseFloat(monthlySalary) || 0) * 1.167) / (parseFloat(clientCapacityHours) > 0 ? parseFloat(clientCapacityHours) : 120))}` : 'p.sh. 1000'}
             className="mt-1 w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
+        </div>
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          <div>
+            <Label htmlFor="costRole" className="text-xs">Roli në rate card</Label>
+            <input
+              id="costRole"
+              value={costRole}
+              onChange={(e) => setCostRole(e.target.value)}
+              placeholder="p.sh. Graphic Designer"
+              list="cost-role-options"
+              className="mt-1 w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            <datalist id="cost-role-options">
+              {['Graphic Designer', 'SMM', 'Photographer', 'Videographer', 'SEO Specialist', 'Web Designer', 'Developer', 'PM', 'Strategy', 'Sales'].map(r => <option key={r} value={r} />)}
+            </datalist>
+            <p className="text-[11px] text-muted-foreground mt-1">Grupon orët dhe koston për rol te klientët dhe projektet.</p>
+          </div>
+          <div>
+            <Label htmlFor="clientCapacityHours" className="text-xs">Kapacitet klientësh (orë/muaj)</Label>
+            <input
+              id="clientCapacityHours"
+              type="number"
+              min="1"
+              max="400"
+              value={clientCapacityHours}
+              onChange={(e) => setClientCapacityHours(e.target.value)}
+              placeholder="default 120"
+              className="mt-1 w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            <p className="text-[11px] text-muted-foreground mt-1">Orë reale për klientë, pa mbledhje/admin/pushime.</p>
+          </div>
         </div>
         {/* Craft first, money second. The two were conflated before: the daily report
             read the P&L allocation as if it were the person's department, so a Web

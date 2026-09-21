@@ -70,6 +70,7 @@ const MarketingView = lazyRetry(() => import('./views/MarketingView'));
 const SocialMediaView = lazyRetry(() => import('./views/SocialMediaView'));
 const GmbReviewsView = lazyRetry(() => import('./views/GmbReviewsView'));
 const FinancesView = lazyRetry(() => import('./views/FinancesView'));
+const TimesheetView = lazyRetry(() => import('./views/TimesheetView'));
 const BonusView = lazyRetry(() => import('./views/BonusView'));
 const UserProfileView = lazyRetry(() => import('./views/UserProfileView'));
 const SettingsView = lazyRetry(() => import('./views/SettingsView'));
@@ -423,6 +424,7 @@ function AppContent() {
                       <Route path="/app/follow-ups" element={<ModuleGate moduleId="crm"><FollowUpsView /></ModuleGate>} />
                       <Route path="/app/deals" element={<PermissionGate permissionKey="canAccessCRM"><DealsView /></PermissionGate>} />
                       <Route path="/app/tasks" element={<PermissionGate permissionKey="canAccessTasks"><TasksView /></PermissionGate>} />
+                      <Route path="/app/timesheet" element={<ModuleGate moduleId="timesheet"><TimesheetView /></ModuleGate>} />
                       {/* Daily reports now live inside the hub. Kept as a redirect so
                           existing bookmarks and the daily-report notification deep
                           link keep working. */}

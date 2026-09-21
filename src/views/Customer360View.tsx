@@ -25,6 +25,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Separator } from '../components/ui/separator';
 import { safeHref, toAll, canSeeFinancials, currencySymbol } from '../lib/utils';
 import { getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
+import { computeClientProfitability, clientRowFor } from '../lib/finance/clientProfitability';
+import { useTeamSettingsData } from '../hooks/useTeamSettings';
+import { useMemberCompensation } from '../hooks/useMemberCompensation';
 import { resolvePortalUserId } from '../lib/notifyClient';
 import FollowUpBadge from '../components/crm/FollowUpBadge';
 import ContactQuickActions from '../components/crm/ContactQuickActions';
@@ -36,7 +39,7 @@ import EmailComposerDialog, { useContactEmailAvailable, type EmailTarget } from 
 import { useFollowUpActions, targetFromCustomer } from '../hooks/useFollowUpActions';
 import { dueState, daysSinceContact, touchContactPatch } from '../lib/crm/followUp';
 import { Bell, CheckCircle2 } from 'lucide-react';
-import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service, FollowUpType, Subscription, Domain } from '../types';
+import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service, FollowUpType, Subscription, Domain, TimeEntry, Expense, TeamMember } from '../types';
 
 const Customer360View: React.FC = () => {
   const { customerId } = useParams<{ customerId: string }>();
@@ -101,6 +104,13 @@ const Customer360View: React.FC = () => {
   const hostingOn = moduleEnabled('hosting');
   const { data: hostingSubs } = useCollection<Subscription>('subscriptions', { ...byCustomer, skip: byCustomer.skip || !hostingOn });
   const { data: hostingDomains } = useCollection<Domain>('domains', { ...byCustomer, skip: byCustomer.skip || !hostingOn });
+  // Client profitability (same engine as Financat → Klientët): hours, pay, expenses, settings.
+  const { data: timeEntries } = useCollection<TimeEntry>('timeEntries', { skipTeamFilter: true, skip: !canSeeFinancials(permissions) });
+  const { data: allExpenses } = useCollection<Expense>('expenses', { skipTeamFilter: true, skip: !canSeeFinancials(permissions) });
+  const { data: rawMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true, skip: !canSeeFinancials(permissions) });
+  const { members: compMembers } = useMemberCompensation(rawMembers, { skip: !canSeeFinancials(permissions) });
+  const tenantSettings = useTeamSettingsData();
+  const [pnlPeriod, setPnlPeriod] = useState<'month' | 'year' | 'all'>('year');
   const activityMutation = useMutation<Activity>('activities');
   const quoteMutation = useMutation<Quote>('quotes');
   const contractMutation = useMutation<Contract>('contracts');
@@ -253,17 +263,22 @@ const Customer360View: React.FC = () => {
   const pendingAmount = customerInvoices.reduce((s, i) => s + getInvoiceOutstandingAll(i), 0);
   const activeProjectCount = customerProjects.filter(p => p.status === 'Active').length;
 
-  // Per-client P&L: billed revenue − cost (labor + project expenses, rolled up
-  // daily onto each project's `spent`/`laborCost` by the project-spend-rollup cron).
+  // Per-client P&L — ONE engine with Financat → Klientët (clientProfitability.ts):
+  // earned revenue − hours × cost rate − direct expenses = gross; − overhead = net.
   const clientPnl = useMemo(() => {
-    const revenue = totalRevenue;
-    const laborCost = customerProjects.reduce((s, p: any) => s + (Number(p.laborCost) || 0), 0);
-    const cost = customerProjects.reduce((s, p: any) => s + (Number(p.spent) || 0), 0);
-    const expensesCost = Math.max(0, cost - laborCost);
-    const margin = revenue - cost;
-    const marginPct = revenue > 0 ? Math.round((margin / revenue) * 100) : 0;
-    return { revenue, cost, laborCost, expensesCost, margin, marginPct };
-  }, [totalRevenue, customerProjects]);
+    const now = new Date();
+    const period = pnlPeriod === 'month'
+      ? { start: new Date(now.getFullYear(), now.getMonth(), 1), end: now }
+      : pnlPeriod === 'year'
+        ? { start: new Date(now.getFullYear(), 0, 1), end: now }
+        : { start: new Date(2000, 0, 1), end: now };
+    const result = computeClientProfitability({
+      customers: customer ? [customer] : [], projects: customerProjects, timeEntries, members: compMembers,
+      expenses: allExpenses, invoices: customerInvoices, period,
+      settings: tenantSettings?.financeSettings, rateCard: tenantSettings?.rateCard,
+    });
+    return { row: clientRowFor(result, customerId || ''), basis: result.basis, thresholds: result.settings.marginThresholds };
+  }, [customer, customerId, customerProjects, timeEntries, compMembers, allExpenses, customerInvoices, tenantSettings?.financeSettings, tenantSettings?.rateCard, pnlPeriod]);
 
   // Project task progress
   const projectProgress = useMemo(() => {
@@ -510,36 +525,72 @@ const Customer360View: React.FC = () => {
         </Card>
       </div>
 
-      {/* Per-client P&L */}
+      {/* Per-client P&L — same numbers as Financat → Klientët */}
+      {canSeeFinancials(permissions) && (
       <Card className="p-4">
-        <div className="flex items-center justify-between gap-2 mb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <h3 className="text-sm font-semibold text-foreground">Fitim/Humbje (P&amp;L) e klientit</h3>
-          <span className={`text-sm font-bold tabular-nums ${clientPnl.margin < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-            Marzh: {clientPnl.margin.toLocaleString()} ALL {clientPnl.revenue > 0 && `(${clientPnl.marginPct}%)`}
-          </span>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-          <div className="rounded-lg border p-3">
-            <p className="text-xs text-muted-foreground">Të ardhura (faturuar)</p>
-            <p className="font-bold tabular-nums text-emerald-600">{clientPnl.revenue.toLocaleString()} ALL</p>
-          </div>
-          <div className="rounded-lg border p-3">
-            <p className="text-xs text-muted-foreground">Kosto pune</p>
-            <p className="font-bold tabular-nums">{clientPnl.laborCost.toLocaleString()} ALL</p>
-          </div>
-          <div className="rounded-lg border p-3">
-            <p className="text-xs text-muted-foreground">Shpenzime</p>
-            <p className="font-bold tabular-nums">{clientPnl.expensesCost.toLocaleString()} ALL</p>
-          </div>
-          <div className="rounded-lg border p-3">
-            <p className="text-xs text-muted-foreground">Kosto totale</p>
-            <p className="font-bold tabular-nums text-red-600">{clientPnl.cost.toLocaleString()} ALL</p>
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-lg border border-border text-xs">
+              {([['month', 'Ky muaj'], ['year', 'Viti'], ['all', 'Gjithë']] as const).map(([k, l]) => (
+                <button key={k} type="button" onClick={() => setPnlPeriod(k)}
+                  className={`px-2.5 py-1 ${pnlPeriod === k ? 'bg-primary/10 text-primary font-semibold' : 'text-muted-foreground'}`}>{l}</button>
+              ))}
+            </div>
+            {clientPnl.row && (
+              <span className={`text-sm font-bold tabular-nums ${clientPnl.row.netProfit < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                Neto: {Math.round(clientPnl.row.netProfit).toLocaleString()} ALL{clientPnl.row.netMarginPct != null && ` (${Math.round(clientPnl.row.netMarginPct)}%)`}
+              </span>
+            )}
           </div>
         </div>
+        {!clientPnl.row ? (
+          <p className="text-sm text-muted-foreground">Asnjë punë, e ardhur apo faturë për këtë klient në periudhën e zgjedhur.</p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-sm">
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Të ardhura të fituara</p>
+                <p className="font-bold tabular-nums">{Math.round(clientPnl.row.earned).toLocaleString()} ALL</p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Punë ({(Math.round(clientPnl.row.hours * 10) / 10).toLocaleString()} h)</p>
+                <p className="font-bold tabular-nums">{Math.round(clientPnl.row.directLabor).toLocaleString()} ALL</p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Shpenzime direkte</p>
+                <p className="font-bold tabular-nums">{Math.round(clientPnl.row.directExpenses).toLocaleString()} ALL</p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Fitimi bruto</p>
+                <p className={`font-bold tabular-nums ${clientPnl.row.grossProfit < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                  {Math.round(clientPnl.row.grossProfit).toLocaleString()} ALL
+                  {clientPnl.row.grossMarginPct != null && <span className="ml-1 text-xs font-semibold">{clientPnl.row.status === 'healthy' ? '🟢' : clientPnl.row.status === 'watch' ? '🟡' : '🔴'} {Math.round(clientPnl.row.grossMarginPct)}%</span>}
+                </p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Overhead (sipas orëve)</p>
+                <p className="font-bold tabular-nums">{Math.round(clientPnl.row.overhead).toLocaleString()} ALL</p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Faturuar / arkëtuar / borxh</p>
+                <p className="font-bold tabular-nums text-xs">{Math.round(clientPnl.row.invoiced).toLocaleString()} / {Math.round(clientPnl.row.collected).toLocaleString()} / <span className={clientPnl.row.outstanding > 0 ? 'text-amber-600' : ''}>{Math.round(clientPnl.row.outstanding).toLocaleString()}</span></p>
+              </div>
+            </div>
+            {Object.keys(clientPnl.row.byRole).length > 0 && (
+              <p className="text-[11px] text-muted-foreground mt-2">
+                Punë sipas rolit: {Object.entries(clientPnl.row.byRole).sort((a, b) => b[1].cost - a[1].cost).map(([r, v]) => `${r} ${Math.round(v.hours * 10) / 10}h · ${Math.round(v.cost).toLocaleString()} L`).join(' · ')}
+              </p>
+            )}
+          </>
+        )}
         <p className="text-[11px] text-muted-foreground mt-2">
-          Kostoja e punës = orët e loguara × tarifa e kostos së anëtarit; përditësohet nga rollup-i ditor.
+          {clientPnl.basis === 'none'
+            ? 'Asnjë orë e regjistruar në këtë periudhë — puna direkte është 0 dhe shifra është vlerësim. Orët regjistrohen te Orët e mia / raporti ditor.'
+            : 'Të ardhurat = puna e fituar (retainer: tarifa mujore; projekt fiks: sipas orëve ndaj planit). Punë = orë × kosto/orë e personit. E njëjta tabelë si Financat → Klientët.'}
         </p>
       </Card>
+      )}
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="space-y-4">

@@ -1,27 +1,39 @@
 import type { TeamMember, TimeEntry } from '../../types';
 import { getTimestampMs } from '../utils';
-
-// Assumed billable hours in a month when deriving an hourly cost from salary.
-const DEFAULT_MONTHLY_HOURS = 160;
+import { costRateFor, resolveFinanceSettings, type FinanceSettings } from './profitabilityCore';
 
 /**
- * Internal labor cost per hour for a member (ALL). Explicit `hourlyCostRate`
- * wins; otherwise derived from `monthlySalary / 160`; else 0.
+ * Internal labor cost per hour for a member (ALL).
  *
- * NOTE: the cron `project-spend-rollup` (api/cron/run.ts) mirrors this formula —
- * keep the two in sync.
+ * Explicit `hourlyCostRate` wins; otherwise the LOADED monthly cost (salary ×
+ * (1 + employer contributions)) over the member's PRACTICAL client capacity
+ * (`clientCapacityHours`, else the tenant default of 120 h — not 160/176: meetings,
+ * admin, leave and internal work are not client hours). Rule and defaults live in
+ * profitabilityCore.ts, which the cron `project-spend-rollup` (api/cron/run.ts)
+ * imports as its byte-identical mirror — so the two can no longer drift.
+ *
+ * `settings` = `teamSettings.financeSettings`; omitted = the defaults.
  */
-export function memberHourlyCost(m?: Pick<TeamMember, 'hourlyCostRate' | 'monthlySalary'> | null): number {
+export function memberHourlyCost(
+  m?: Pick<TeamMember, 'hourlyCostRate' | 'monthlySalary' | 'clientCapacityHours'> | null,
+  settings?: Partial<FinanceSettings> | null,
+): number {
   if (!m) return 0;
-  if (m.hourlyCostRate && m.hourlyCostRate > 0) return m.hourlyCostRate;
-  if (m.monthlySalary && m.monthlySalary > 0) return m.monthlySalary / DEFAULT_MONTHLY_HOURS;
-  return 0;
+  return costRateFor({
+    monthlySalary: m.monthlySalary || 0,
+    hourlyCostRateOverride: m.hourlyCostRate,
+    capacityHours: m.clientCapacityHours,
+    settings: resolveFinanceSettings(settings),
+  }).rate;
 }
 
 /** Billing rate per hour for a member (ALL); falls back to cost rate. */
-export function memberBillRate(m?: Pick<TeamMember, 'hourlyBillRate' | 'hourlyCostRate' | 'monthlySalary'> | null): number {
+export function memberBillRate(
+  m?: Pick<TeamMember, 'hourlyBillRate' | 'hourlyCostRate' | 'monthlySalary' | 'clientCapacityHours'> | null,
+  settings?: Partial<FinanceSettings> | null,
+): number {
   if (m?.hourlyBillRate && m.hourlyBillRate > 0) return m.hourlyBillRate;
-  return memberHourlyCost(m);
+  return memberHourlyCost(m, settings);
 }
 
 /** Duration of a time entry in hours. Prefers stored `duration` (minutes),
@@ -50,18 +62,19 @@ export interface ProjectLabor {
 export function computeProjectLabor(
   entries: TimeEntry[],
   membersByUserId: Map<string, TeamMember>,
+  settings?: Partial<FinanceSettings> | null,
 ): ProjectLabor {
   let hours = 0, billableHours = 0, cost = 0, billableValue = 0;
   for (const e of entries) {
     const h = entryHours(e);
     if (h <= 0) continue;
     const member = membersByUserId.get(e.userId);
-    const costRate = memberHourlyCost(member);
+    const costRate = memberHourlyCost(member, settings);
     hours += h;
     cost += h * costRate;
     if (e.isBillable) {
       billableHours += h;
-      const rate = (e.hourlyRate && e.hourlyRate > 0) ? e.hourlyRate : memberBillRate(member);
+      const rate = (e.hourlyRate && e.hourlyRate > 0) ? e.hourlyRate : memberBillRate(member, settings);
       billableValue += h * rate;
     }
   }

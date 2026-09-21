@@ -36,6 +36,7 @@ import {
   Search,
   BellRing,
   Server as ServerIcon,
+  Clock,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { isPathEnabled, type PlanKey } from '../lib/modules';
@@ -94,6 +95,7 @@ const allSections: NavSection[] = [
     entries: [
       { path: '/app/dashboard', label: 'Dashboard', icon: LayoutDashboard, permissionKey: 'canAccessProfile' },
       { path: '/app/tasks', label: 'Detyrat', icon: CheckSquare, permissionKey: 'canAccessTasks' },
+      { path: '/app/timesheet', label: 'Orët e mia', icon: Clock, permissionKey: 'canAccessTasks' },
       { path: '/app/projects', label: 'Projektet', icon: FolderKanban, permissionKey: 'canAccessProjects' },
       { path: '/app/workspace', label: 'Workspace', icon: Briefcase, permissionKey: 'canAccessProjects' },
       { path: '/app/goals', label: 'Objektivat', icon: Target, permissionKey: 'canAccessGoals' },

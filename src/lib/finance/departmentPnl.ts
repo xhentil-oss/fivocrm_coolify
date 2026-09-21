@@ -26,7 +26,16 @@ import { toAll } from '../utils';
 import { parseDate, monthsElapsedInYear, MONTH_LABELS_SQ, getInvoiceCollectedBetween } from './financialAnalytics';
 import { memberSalaryForMonth } from './salaryHistory';
 import { payrollBetween } from './payroll';
-import { retainerEarningEnd, memberOnPayrollBetween } from './projectPnl';
+import {
+  retainerEarningEnd,
+  memberOnPayrollBetween,
+  isProjectCompleted as isCompleted,
+  projectDate,
+  monthsBetween,
+  billingTypeOf,
+} from './projectPeriod';
+import type { LaborAllocation } from './laborAllocation';
+import { projectEarnedInPeriod } from './revenueRecognition';
 
 export interface DepartmentPnlOptions {
   mode?: 'all' | 'completed';
@@ -48,6 +57,14 @@ export interface DepartmentPnlOptions {
    * non-project expense is global overhead).
    */
   teams?: Array<{ id: string; name?: string; department?: string }> | null;
+  /**
+   * Hours-based labour (`allocateLabor`). With logged hours, a project's labour
+   * is the cost of the HOURS its people logged on it (not their salary split
+   * equally across their projects), the unabsorbed payroll becomes shared
+   * overhead, and one-time revenue is earned by effort. See projectPnl.ts.
+   */
+  labor?: LaborAllocation | null;
+  timeEntries?: import('../../types').TimeEntry[] | null;
 }
 
 export interface DeptParticipant { userId: string; name: string; cost: number }
@@ -81,6 +98,8 @@ export interface DepartmentPnlResult {
   unmatchedDepartmentFixed: { count: number; amount: number };
   /** Expenses tagged to a project outside this period; pooled, not dropped. */
   unallocatedDirect: { count: number; amount: number };
+  /** 'hours' when `opts.labor` carried logged hours; 'legacy' = salary split equally. */
+  laborBasis: 'hours' | 'legacy';
   totals: { revenue: number; directCost: number; labor: number; overhead: number; cost: number; profit: number };
 }
 
@@ -89,19 +108,6 @@ const NO_DEPT = 'Pa departament';
 /** Label for recorded payroll that no active member can carry (see below). */
 export const PAYROLL_WITHOUT_MEMBER = 'Paga pa anëtar aktiv';
 
-function isCompleted(p: Project): boolean {
-  return p.status === 'Completed' || (!!(p as any).isRecurring && !!(p as any).lastCompletedAt);
-}
-function projectDate(p: Project): Date | null {
-  return parseDate((p as any).lastCompletedAt) || parseDate(p.updatedAt) || parseDate(p.createdAt);
-}
-function monthsBetween(a: Date, b: Date): number {
-  return Math.max(1, (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth()) + 1);
-}
-function billingTypeOf(p: Project): 'one-time' | 'monthly' {
-  if (p.billingType === 'monthly' || p.billingType === 'one-time') return p.billingType;
-  return (p as any).isRecurring ? 'monthly' : 'one-time';
-}
 const norm = (v: unknown) => (typeof v === 'string' ? v.trim().toLowerCase() : '');
 
 export function computeDepartmentPnl(
@@ -116,6 +122,7 @@ export function computeDepartmentPnl(
     departmentFixedPool: {},
     unmatchedDepartmentFixed: { count: 0, amount: 0 },
     unallocatedDirect: { count: 0, amount: 0 },
+    laborBasis: 'legacy',
     totals: { revenue: 0, directCost: 0, labor: 0, overhead: 0, cost: 0, profit: 0 },
   };
   if (!projects) return empty;
@@ -226,6 +233,10 @@ export function computeDepartmentPnl(
     planTotal > 0 ? memberPlanSalary(m) * payrollScale : equalShare
   );
 
+  // ── Hours-based labour (opt-in): the cost of the hours actually logged. ──
+  const hoursLabor = opts.labor && opts.labor.basis === 'hours' ? opts.labor : null;
+  const laborBasis: 'hours' | 'legacy' = hoursLabor ? 'hours' : 'legacy';
+
   const participantsOf = (p: Project): string[] => {
     const ids = new Set<string>();
     const owner = norm(p.responsibleUserId || p.createdByUserId || '');
@@ -299,6 +310,9 @@ export function computeDepartmentPnl(
     if (useInvoiced) return invoicedByProject.get(p.id) || 0;
     const fee = toAll(p.budget || 0, (p as any).currency);
     if (fee <= 0) return 0;
+    if (billingTypeOf(p) === 'one-time' && hoursLabor) {
+      return projectEarnedInPeriod(p, opts.timeEntries || [], { start: periodStart, end: periodEnd });
+    }
     if (billingTypeOf(p) === 'one-time') {
       // Point-in-time recognition: a one-time deal is earned when DELIVERED, so it
       // is recognised in the month the project was completed — not while running.
@@ -316,6 +330,9 @@ export function computeDepartmentPnl(
   };
   const revenueByProject = new Map<string, number>(periodProjects.map(p => [p.id, revenueOf(p)]));
   const totalRevenue = periodProjects.reduce((s, p) => s + (revenueByProject.get(p.id) || 0), 0);
+  const totalLaborHours = hoursLabor
+    ? periodProjects.reduce((s, p) => s + (hoursLabor.byProject.get(p.id)?.hours || 0), 0)
+    : 0;
 
   // ── Build project lines ──
   const memberName = (id: string) => {
@@ -336,15 +353,25 @@ export function computeDepartmentPnl(
   const projectLines: Array<DeptProjectLine & { departmentFixed: number }> = periodProjects.map(p => {
     const revenue = revenueByProject.get(p.id) || 0;
     const directCost = directByProject.get(p.id) || 0;
-    const parts = participantsOf(p).map(id => {
-      const m = memberById.get(id)!;
-      const cnt = projectCountByMember.get(id) || 1;
-      return { userId: id, name: memberName(id), cost: memberPeriodSalary(m) / cnt };
-    });
+    const parts = hoursLabor
+      ? (hoursLabor.byProject.get(p.id)?.byMember || []).map(l => ({ userId: l.userId, name: l.name, cost: l.cost }))
+      : participantsOf(p).map(id => {
+          const m = memberById.get(id)!;
+          const cnt = projectCountByMember.get(id) || 1;
+          return { userId: id, name: memberName(id), cost: memberPeriodSalary(m) / cnt };
+        });
     const labor = parts.reduce((s, x) => s + x.cost, 0);
-    // Two overhead components: the business-wide pool by revenue weight, plus
-    // this department's OWN tagged expenses spread only inside the department.
-    const globalOverhead = totalRevenue > 0 ? otherFixedPool * (revenue / totalRevenue) : 0;
+    // Two overhead components: the business-wide pool (by labour hours when hours
+    // exist, else revenue weight), plus this department's OWN tagged expenses
+    // spread only inside the department. With hours, the pool also carries the
+    // UNABSORBED payroll — bench time nobody logged on a client.
+    const sharedPool = otherFixedPool + (hoursLabor ? Math.max(0, hoursLabor.unabsorbed) : 0);
+    const hoursWeight = hoursLabor && hoursLabor.settings.overheadBasis === 'labor-hours' && totalLaborHours > 0
+      ? (hoursLabor.byProject.get(p.id)?.hours || 0) / totalLaborHours
+      : null;
+    const globalOverhead = hoursWeight != null
+      ? sharedPool * hoursWeight
+      : totalRevenue > 0 ? sharedPool * (revenue / totalRevenue) : 0;
     const dept = deptOfProject(p);
     const deptPool = departmentFixedPool.get(dept) || 0;
     const dRev = deptRevenue.get(dept) || 0;
@@ -386,12 +413,16 @@ export function computeDepartmentPnl(
   })).sort((a, b) => b.profit - a.profit);
 
   // ── Unallocated labor: payroll members on no period-project ──
-  const unallocatedMembers = payrollMembers
-    .filter(m => (projectCountByMember.get(norm(m.userId || '')) || 0) === 0)
-    .map(m => ({ name: m.displayName || (m as any).email || 'Pa emër', cost: memberPeriodSalary(m) }))
-    .filter(x => x.cost > 0)
-    .sort((a, b) => b.cost - a.cost);
-  if (unattributablePayroll > 0) {
+  const unallocatedMembers = hoursLabor
+    // With hours, whatever payroll the logged hours did not absorb is ALREADY in
+    // the shared overhead pool above; it is listed here for the reader, not added.
+    ? (hoursLabor.unabsorbed > 0 ? [{ name: 'Punë e paabsorbuar (orë të paregjistruara / të brendshme)', cost: hoursLabor.unabsorbed }] : [])
+    : payrollMembers
+      .filter(m => (projectCountByMember.get(norm(m.userId || '')) || 0) === 0)
+      .map(m => ({ name: m.displayName || (m as any).email || 'Pa emër', cost: memberPeriodSalary(m) }))
+      .filter(x => x.cost > 0)
+      .sort((a, b) => b.cost - a.cost);
+  if (!hoursLabor && unattributablePayroll > 0) {
     unallocatedMembers.push({ name: PAYROLL_WITHOUT_MEMBER, cost: unattributablePayroll });
   }
   const unallocatedTotal = unallocatedMembers.reduce((s, x) => s + x.cost, 0);
@@ -408,6 +439,7 @@ export function computeDepartmentPnl(
     departmentFixedPool: Object.fromEntries(departmentFixedPool),
     unmatchedDepartmentFixed,
     unallocatedDirect,
+    laborBasis,
     totals,
   };
 }

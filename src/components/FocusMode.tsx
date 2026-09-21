@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Button } from './ui/button';
 import { X, Play, Pause, RotateCcw, Check, Brain } from 'lucide-react';
 import type { TimeEntry } from '../types';
+import { dayKeyOf } from '../lib/finance/timeEntries';
 
 /**
  * Focus Mode — Deep Work (Cal Newport) + Pomodoro, tied to the day's frog.
@@ -29,8 +30,11 @@ const FocusMode: React.FC<{
   onClose: () => void;
   taskTitle?: string;
   taskId?: string;
+  /** The task's project/client, so the session reaches the project P&L. */
+  projectId?: string;
+  customerId?: string;
   onLogged?: (minutes: number) => void;
-}> = ({ open, onClose, taskTitle, taskId, onLogged }) => {
+}> = ({ open, onClose, taskTitle, taskId, projectId, customerId, onLogged }) => {
   const { user } = useAuth();
   const timeEntryMutation = useMutation<TimeEntry>('timeEntries');
 
@@ -80,11 +84,15 @@ const FocusMode: React.FC<{
       await timeEntryMutation.create({
         userId: user.uid,
         taskId: taskId || undefined,
+        projectId: projectId || undefined,
+        customerId: customerId || undefined,
         description: taskTitle || 'Focus session',
         startTime: new Date(Date.now() - secs * 1000),
         endTime: new Date(),
         duration: mins,
-        isBillable: false,
+        date: dayKeyOf(new Date()),
+        source: 'pomodoro',
+        isBillable: !!projectId && !!customerId,
         isPomodoroSession: true,
       } as any);
       onLogged?.(mins);

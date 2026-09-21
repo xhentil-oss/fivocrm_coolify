@@ -83,6 +83,8 @@ export const NOTIFICATION_TYPES = {
   project_status_changed:   { category: 'projects', priority: 'info' },
   project_open_reminder:    { category: 'projects', priority: 'warning',  groupLabel: 'kujtesa projektesh' },
   project_cycle_reset:      { category: 'projects', priority: 'neutral' },
+  // Budget consumed crossed 70 / 85 / 100 % of the staffing plan (project-spend-rollup).
+  project_budget_alert:     { category: 'projects', priority: 'warning',  groupLabel: 'alarme buxheti projektesh' },
   lead_created:             { category: 'projects', priority: 'info',     groupLabel: 'lead të rinj' },
   lead_assigned:            { category: 'projects', priority: 'info',     groupLabel: 'lead të caktuar' },
   lead_converted:           { category: 'projects', priority: 'success' },
@@ -138,6 +140,8 @@ export const NOTIFICATION_TYPES = {
   // The daily-report escalation ladder: the person first, their manager after.
   daily_report_due:         { category: 'reports',  priority: 'warning',  groupLabel: 'raporte në pritje' },
   daily_report_missing:     { category: 'reports',  priority: 'critical', groupLabel: 'raporte që mungojnë' },
+  // Day 2 of the month: the client-profitability table for last month is ready to review/close.
+  client_profitability_report: { category: 'reports', priority: 'info' },
 
   // ── Sistem (abonim + konfigurim i gabuar) ───────────────────────────────────
   // Deliberately its own category: these are "your account/setup is broken"

@@ -26,6 +26,10 @@ vi.mock('../hooks/use-toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
 
 const collections: Record<string, any[]> = {};
 const documents: Record<string, any> = {};
+// Cost-rate rules + rate card come from tenant settings (Cilësimet → Financat);
+// none here = the defaults, so every figure these tests assert on is unchanged.
+vi.mock('../hooks/useTeamSettings', () => ({ useTeamSettingsData: () => null, saveTeamSettings: vi.fn() }));
+
 vi.mock('../hooks/useFirestore', () => ({
   useCollection: (name: string) => ({ data: collections[name] ?? [], loading: false }),
   useDocument: (name: string, id: string) => ({

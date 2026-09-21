@@ -32,8 +32,19 @@ import type { Project, TeamMember, Expense, Invoice } from '../../types';
 import { toAll } from '../utils';
 import { parseDate, monthsElapsedInYear, getInvoiceCollectedBetween } from './financialAnalytics';
 import { payrollBetween } from './payroll';
-import { memberEndDate, memberSalaryForMonth } from './salaryHistory';
-import { TERMINAL_PROJECT_STATUSES } from './recurringBilling';
+import {
+  isProjectCompleted as isCompleted,
+  projectDate,
+  monthsBetween,
+  billingTypeOf,
+  retainerEarningEnd,
+  memberOnPayrollBetween,
+} from './projectPeriod';
+import type { LaborAllocation } from './laborAllocation';
+import { projectEarnedInPeriod } from './revenueRecognition';
+
+// Re-exported for the modules that import them from here (departmentPnl, views).
+export { retainerEarningEnd, memberOnPayrollBetween };
 
 export interface ProjectPnlOptions {
   /** 'completed' counts only Completed (or recurring-completed) projects; 'all' counts every project. */
@@ -54,6 +65,23 @@ export interface ProjectPnlOptions {
   revenueBasis?: 'budget' | 'invoiced';
   /** Invoices, needed when revenueBasis === 'invoiced'. */
   invoices?: Invoice[] | null;
+  /**
+   * Hours-based labour allocation for the same period (`allocateLabor`,
+   * lib/finance/laborAllocation.ts). When supplied AND it has hours
+   * (`basis: 'hours'`):
+   *   · each project carries its OWN labour cost (hours × cost rate) as a direct
+   *     cost, and the fixed pool holds only the UNABSORBED payroll (bench,
+   *     meetings, people who logged nothing) plus non-project expenses;
+   *   · the pool is allocated by labour HOURS (or revenue, per
+   *     `settings.overheadBasis`), so the client that consumes the team carries
+   *     the overhead;
+   *   · a one-time project's revenue is EARNED by effort (percentage of
+   *     completion) instead of booked whole in its completion month.
+   * Omitted (or `basis: 'none'`): the legacy full-absorption model, unchanged.
+   */
+  labor?: LaborAllocation | null;
+  /** Time entries, only needed with `labor` for effort-based revenue recognition. */
+  timeEntries?: import('../../types').TimeEntry[] | null;
 }
 
 export interface ProjectPnlRow {
@@ -64,7 +92,11 @@ export interface ProjectPnlRow {
   billingType: 'one-time' | 'monthly';
   activeMonths: number; // months the project counted toward the period (monthly only; 1 for one-time)
   revenue: number;      // recognised revenue for the period (ALL)
-  directCost: number;   // project-linked expenses (ALL)
+  directCost: number;   // project-linked expenses (ALL) — PLUS hours × cost rate when `labor` was supplied
+  /** Hours × cost rate for this project (0 on the legacy model). */
+  laborCost: number;
+  /** Logged hours inside the period (0 on the legacy model). */
+  hours: number;
   overhead: number;     // allocated share of the fixed pool (ALL)
   cost: number;         // directCost + overhead
   profit: number;       // revenue − cost
@@ -83,7 +115,9 @@ export interface ProjectPnlResult {
      *  pool and the Shpenzimet page disagree, so the UI can say why. */
     payrollFallbackMonths: number;
   };
-  allocationBasis: 'revenue' | 'equal';
+  allocationBasis: 'revenue' | 'equal' | 'labor-hours';
+  /** 'hours' when `opts.labor` carried logged hours; 'legacy' otherwise. */
+  laborBasis: 'hours' | 'legacy';
   totals: {
     revenue: number;
     directCost: number;
@@ -114,113 +148,6 @@ export interface ProjectPnlResult {
   unallocatedDirect: { count: number; amount: number };
 }
 
-function isCompleted(p: Project): boolean {
-  return p.status === 'Completed' || (!!(p as any).isRecurring && !!(p as any).lastCompletedAt);
-}
-
-function projectDate(p: Project): Date | null {
-  return parseDate((p as any).lastCompletedAt) || parseDate(p.updatedAt) || parseDate(p.createdAt);
-}
-
-/** Inclusive whole-month count between two dates (≥1). */
-function monthsBetween(a: Date, b: Date): number {
-  return Math.max(1, (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth()) + 1);
-}
-
-/** Whether a project's `budget` is a monthly fee or a one-time value. */
-function billingTypeOf(p: Project): 'one-time' | 'monthly' {
-  if (p.billingType === 'monthly' || p.billingType === 'one-time') return p.billingType;
-  return (p as any).isRecurring ? 'monthly' : 'one-time';
-}
-
-/**
- * When does a MONTHLY retainer stop earning its fee?
- *
- * The period filter and the revenue calculation both used
- * `lastCompletedAt ?? periodEnd`, which is wrong in BOTH directions:
- *
- *  · too generous — a retainer cancelled in February and viewed in September
- *    still overlapped every month in between, so a 50 000/month fee credited
- *    450 000 of revenue that will never be billed, to the project, its
- *    department and its responsible person;
- *  · too mean — `lastCompletedAt` means "the last time every task on this
- *    project was done", not "the engagement ended". One all-done afternoon in
- *    March silently stopped a live retainer from earning for the rest of the
- *    year.
- *
- * So the span is derived from the BILLING SERIES wherever the data allows, and
- * `lastCompletedAt` is only consulted for a project whose series is not running
- * (legacy rows, which have no stop stamp at all). The candidates, all optional:
- *   · `recurringBillingStoppedAt` — `stopProjectBillingPatch()`; read only while
- *     the series is off, because restoring a project does not clear it;
- *   · `recurringEndDate` — "repeat until": nothing bills past it;
- *   · `archivedAt` — only while the project actually IS archived (same reason);
- *   · for a terminal status (Cancelled/Archived) the best evidence available,
- *     falling back to `updatedAt`, since cancelling is itself an update.
- * Nothing found = still running = `fallbackEnd` (the period end).
- *
- * `isRecurringPaused` deliberately does NOT end the span: a pause is temporary
- * and carries no timestamp, so there is nothing honest to end it at.
- */
-export function retainerEarningEnd(p: Project, fallbackEnd: Date): Date {
-  const ends: number[] = [fallbackEnd.getTime()];
-  const push = (d: Date | null) => { if (d) ends.push(d.getTime()); };
-  const running = !!(p as any).isRecurring;
-  const terminal = !!p.status && TERMINAL_PROJECT_STATUSES.includes(p.status);
-
-  if (!running) push(parseDate((p as any).recurringBillingStoppedAt));
-  push(parseDate((p as any).recurringEndDate));
-  if (p.status === 'Archived') push(parseDate((p as any).archivedAt));
-  if (terminal) {
-    push(parseDate((p as any).archivedAt)
-      || parseDate((p as any).recurringBillingStoppedAt)
-      || parseDate((p as any).lastCompletedAt)
-      || parseDate(p.updatedAt)
-      || parseDate(p.createdAt));
-  }
-  if (!running && !terminal) push(parseDate((p as any).lastCompletedAt));
-
-  return new Date(Math.min(...ends));
-}
-
-/**
- * Was this member on payroll at any point inside [start, end]?
- *
- * Leaving payroll is an EVENT WITH A DATE, not a status — that is the whole
- * point of `memberEndDate()` / `memberSalaryForMonth()` in salaryHistory.ts. A
- * plain `status === 'Active'` filter placed BEFORE those functions defeats them
- * one layer up: the day a leaver is flipped to Inactive, every closed month's
- * labour line and fixed pool loses their salary and the past year's profit
- * silently improves. A month that has already been paid cannot become free.
- *
- * The rule itself is never re-derived here:
- *   · Active → on payroll (the salary function still zeroes any month after a
- *     `leftAt` that was recorded anyway);
- *   · a status that was never Active (a `Pending` invite nobody accepted) →
- *     never on payroll, unchanged;
- *   · Inactive WITH `leftAt` → on payroll for the period when they left after it
- *     opened (each month inside is then priced individually);
- *   · Inactive WITHOUT `leftAt` → ask `memberSalaryForMonth` month by month; a
- *     month it prices above 0 is a month this person was on payroll. That keeps
- *     salaryHistory.ts the single owner of the "when did they leave" fallback.
- */
-export function memberOnPayrollBetween(member: TeamMember, start: Date, end: Date): boolean {
-  if (member.status === 'Active') return true;
-  if (member.status !== 'Inactive') return false;
-
-  const left = memberEndDate(member);
-  if (left) return left.getTime() > start.getTime();
-
-  let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
-  const lastMonth = new Date(end.getFullYear(), end.getMonth(), 1);
-  for (let guard = 0; cursor.getTime() <= lastMonth.getTime() && guard < 600; guard++) {
-    const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0, 23, 59, 59, 999);
-    if (memberSalaryForMonth(member, monthEnd) > 0) return true;
-    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
-  }
-  return false;
-}
-
 const CATEGORY_SALARY = 'Salary';
 
 export function computeProjectPnl(
@@ -235,6 +162,7 @@ export function computeProjectPnl(
     rows: [],
     fixedPool: { salaries: 0, otherFixed: 0, total: 0, payrollFallbackMonths: 0 },
     allocationBasis: 'revenue',
+    laborBasis: 'legacy',
     totals: { revenue: 0, directCost: 0, overhead: 0, cost: 0, profit: 0 },
     missingBudget: { count: 0, names: [] },
     revenueBasis: resolvedBasis,
@@ -379,6 +307,11 @@ export function computeProjectPnl(
     }
   }
 
+  // ── Hours-based labour (opt-in). With logged hours, each project's own labour
+  // is a DIRECT cost and only the unabsorbed remainder of payroll is shared.
+  const labor = opts.labor && opts.labor.basis === 'hours' ? opts.labor : null;
+  const laborBasis: 'hours' | 'legacy' = labor ? 'hours' : 'legacy';
+  if (labor) salaries = Math.max(0, labor.unabsorbed);
   const poolTotal = salaries + otherFixed;
 
   // ── Recognised revenue per project.
@@ -389,6 +322,11 @@ export function computeProjectPnl(
     // Budget basis: one-time = budget; monthly = fee × active months.
     // Normalizo në ALL (kostot/pagat janë në ALL) që marzhi të jetë i saktë për EUR.
     const fee = toAll(p.budget || 0, p.currency);
+    if (bt === 'one-time' && labor) {
+      // Effort-based recognition (percentage of completion) — see revenueRecognition.ts.
+      const earned = projectEarnedInPeriod(p, opts.timeEntries || [], { start: periodStart, end: periodEnd });
+      return { revenue: earned, billingType: bt, activeMonths: earned > 0 ? 1 : 0 };
+    }
     if (bt === 'one-time') {
       // Revenue recognition (IFRS 15, point in time): a one-time deal is EARNED
       // when the work is delivered, so its value is recognised in the month the
@@ -414,7 +352,12 @@ export function computeProjectPnl(
 
   // ── Allocate the pool by revenue weight (equal split when no revenue).
   const totalRevenue = periodProjects.reduce((s, p) => s + revInfo.get(p.id)!.revenue, 0);
-  const allocationBasis: 'revenue' | 'equal' = totalRevenue > 0 ? 'revenue' : 'equal';
+  const laborHoursOf = (id: string) => labor?.byProject.get(id)?.hours || 0;
+  const totalLaborHours = labor ? periodProjects.reduce((s, p) => s + laborHoursOf(p.id), 0) : 0;
+  const useHoursWeight = !!labor && labor.settings.overheadBasis === 'labor-hours' && totalLaborHours > 0;
+  const allocationBasis: 'revenue' | 'equal' | 'labor-hours' = useHoursWeight
+    ? 'labor-hours'
+    : totalRevenue > 0 ? 'revenue' : 'equal';
   const equalShare = periodProjects.length > 0 ? 1 / periodProjects.length : 0;
 
   const missingBudget = { count: 0, names: [] as string[] };
@@ -422,10 +365,14 @@ export function computeProjectPnl(
   const rows: ProjectPnlRow[] = periodProjects.map(p => {
     const info = revInfo.get(p.id)!;
     const revenue = info.revenue;
-    const directCost = directByProject.get(p.id) || 0;
-    const share = allocationBasis === 'revenue'
-      ? (totalRevenue > 0 ? revenue / totalRevenue : 0)
-      : equalShare;
+    const laborCost = labor?.byProject.get(p.id)?.cost || 0;
+    const hours = laborHoursOf(p.id);
+    const directCost = (directByProject.get(p.id) || 0) + laborCost;
+    const share = allocationBasis === 'labor-hours'
+      ? hours / totalLaborHours
+      : allocationBasis === 'revenue'
+        ? (totalRevenue > 0 ? revenue / totalRevenue : 0)
+        : equalShare;
     const overhead = poolTotal * share;
     const cost = directCost + overhead;
     const profit = revenue - cost;
@@ -442,6 +389,8 @@ export function computeProjectPnl(
       activeMonths: info.activeMonths,
       revenue,
       directCost,
+      laborCost,
+      hours,
       overhead,
       cost,
       profit,
@@ -465,6 +414,7 @@ export function computeProjectPnl(
     rows,
     fixedPool: { salaries, otherFixed, total: poolTotal, payrollFallbackMonths },
     allocationBasis,
+    laborBasis,
     totals,
     missingBudget,
     revenueBasis: resolvedBasis,

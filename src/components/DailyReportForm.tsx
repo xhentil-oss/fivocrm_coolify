@@ -29,6 +29,8 @@ import { checkDailyReportQuality } from '../lib/productivity/dailyReportQuality'
 import { completeTask } from '../lib/recurringUtils';
 import { dueState } from '../lib/crm/followUp';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
+import { timeEntriesFromOutcomes } from '../lib/finance/timeEntries';
+import { memberCostRole } from '../lib/finance/costRates';
 import type {
   Customer, DailyReport, DailyTaskOutcome, Project, Task, Lead,
   StandupEntry, TaskOutcomeState, TeamMember, Notification,
@@ -191,6 +193,10 @@ const DailyReportForm: React.FC<DailyReportFormProps> = ({
 
   const reportMutation = useMutation<DailyReport>('dailyReports');
   const taskMutation = useMutation<Task>('tasks');
+  // The hours typed on each task row become time entries (one per task per day,
+  // deterministic id → a re-submitted report updates, never duplicates). This is
+  // how the daily habit feeds the client P&L without a second form.
+  const timeEntryMutation = useMutation<any>('timeEntries');
   const notificationMutation = useMutation<Notification>('notifications');
 
   const customerByProjectId = useMemo(() => {
@@ -414,6 +420,21 @@ const DailyReportForm: React.FC<DailyReportFormProps> = ({
         dueAt,
         wasLate: now.getTime() > dueAt.getTime(),
       } as any);
+
+      // Hours → time entries. Never awaited un-caught: the report is already saved.
+      const me = (teamMembers || []).find(m => m.userId === user.uid);
+      const entryOps = timeEntriesFromOutcomes(savedOutcomes, {
+        userId: user.uid,
+        dayKey: today,
+        customerByProjectId,
+        costRole: me ? memberCostRole(me) : undefined,
+        teamId: permissions.teamId || undefined,
+      });
+      const entryResults = await Promise.allSettled(entryOps.map(e => timeEntryMutation.create(e.data as any, e.id)));
+      const failedEntries = entryResults.filter(r => r.status === 'rejected').length;
+      if (failedEntries) {
+        toast({ title: `${failedEntries} rreshta orësh nuk u ruajtën`, description: 'Raporti u ruajt; shto orët nga Orët e mia.', variant: 'destructive' });
+      }
 
       // Notify admin/manager when blocker is reported
       if (blockers.trim() && teamMembers) {

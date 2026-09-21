@@ -9,6 +9,12 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { canSeeFinancials, toAll, fromAll, currencySymbol } from '../lib/utils';
 import { projectBillingPeriodKey, projectBillingPeriodEnd, stopProjectBillingPatch } from '../lib/finance/recurringBilling';
 import { recurringOccurrenceId } from '../lib/finance/recurringInvoices';
+import { normalizePlannedRoles, plannedFieldsPatch } from '../lib/finance/projectBudget';
+import { buildRateCard } from '../lib/finance/costRates';
+import { resolveFinanceSettings } from '../lib/finance/profitabilityCore';
+import { useTeamSettingsData } from '../hooks/useTeamSettings';
+import { useMemberCompensation } from '../hooks/useMemberCompensation';
+import PlannedRolesEditor from '../components/projects/PlannedRolesEditor';
 import {
   archiveConsequences,
   archiveProjectPatch,
@@ -332,14 +338,18 @@ const ProjectsView: React.FC = () => {
     if (selectedServiceIdsStr) {
       try { selectedServiceIds = JSON.parse(selectedServiceIdsStr); } catch { selectedServiceIds = undefined; }
     }
-    const profitSplitStr = formData.get('profitSplit') as string;
-    let profitSplit: Array<{ userId: string; percent: number }> | undefined;
-    if (profitSplitStr) {
-      try {
-        const parsed = JSON.parse(profitSplitStr);
-        profitSplit = Array.isArray(parsed) && parsed.length > 0 ? parsed : undefined;
-      } catch { profitSplit = undefined; }
-    }
+    // Staffing budget (hours per role), engagement end and recognition method —
+    // see src/lib/finance/projectBudget.ts / revenueRecognition.ts.
+    let plannedRoles: ReturnType<typeof normalizePlannedRoles> = [];
+    try { plannedRoles = normalizePlannedRoles(JSON.parse((formData.get('plannedRoles') as string) || '[]')); } catch { plannedRoles = []; }
+    const plannedDirectRaw = parseFloat((formData.get('plannedDirectExpenses') as string) || '');
+    const plannedDirectExpenses = Number.isFinite(plannedDirectRaw) && plannedDirectRaw > 0 ? plannedDirectRaw : undefined;
+    const targetMarginRaw = parseFloat((formData.get('targetMarginPct') as string) || '');
+    const targetMarginPct = Number.isFinite(targetMarginRaw) && targetMarginRaw > 0 ? Math.min(95, targetMarginRaw) : undefined;
+    const endDateStr = formData.get('endDate') as string;
+    const endDate = endDateStr ? new Date(endDateStr + 'T12:00:00') : undefined;
+    const recognitionRaw = (formData.get('recognitionMethod') as string) || '';
+    const recognitionMethod = (['effort', 'straight-line', 'on-completion'] as const).find(m => m === recognitionRaw);
 
     const budgetRaw = budgetStr ? parseFloat(budgetStr) : undefined;
     const budget = budgetRaw !== undefined && !isNaN(budgetRaw) ? budgetRaw : undefined;
@@ -374,7 +384,10 @@ const ProjectsView: React.FC = () => {
       recurringEndDate: isRecurring ? recurringEndDate : undefined,
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
       serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
-      profitSplit: profitSplit && profitSplit.length > 0 ? profitSplit : undefined,
+      endDate,
+      recognitionMethod,
+      targetMarginPct,
+      ...plannedFieldsPatch(plannedRoles, plannedDirectExpenses),
     });
 
     // Only auto-create an invoice when there is something to bill: an explicit
@@ -729,14 +742,18 @@ const ProjectsView: React.FC = () => {
     if (selectedServiceIdsStr) {
       try { selectedServiceIds = JSON.parse(selectedServiceIdsStr); } catch { selectedServiceIds = undefined; }
     }
-    const profitSplitStr = formData.get('profitSplit') as string;
-    let profitSplit: Array<{ userId: string; percent: number }> | undefined;
-    if (profitSplitStr) {
-      try {
-        const parsed = JSON.parse(profitSplitStr);
-        profitSplit = Array.isArray(parsed) && parsed.length > 0 ? parsed : undefined;
-      } catch { profitSplit = undefined; }
-    }
+    // Staffing budget (hours per role), engagement end and recognition method —
+    // see src/lib/finance/projectBudget.ts / revenueRecognition.ts.
+    let plannedRoles: ReturnType<typeof normalizePlannedRoles> = [];
+    try { plannedRoles = normalizePlannedRoles(JSON.parse((formData.get('plannedRoles') as string) || '[]')); } catch { plannedRoles = []; }
+    const plannedDirectRaw = parseFloat((formData.get('plannedDirectExpenses') as string) || '');
+    const plannedDirectExpenses = Number.isFinite(plannedDirectRaw) && plannedDirectRaw > 0 ? plannedDirectRaw : undefined;
+    const targetMarginRaw = parseFloat((formData.get('targetMarginPct') as string) || '');
+    const targetMarginPct = Number.isFinite(targetMarginRaw) && targetMarginRaw > 0 ? Math.min(95, targetMarginRaw) : undefined;
+    const endDateStr = formData.get('endDate') as string;
+    const endDate = endDateStr ? new Date(endDateStr + 'T12:00:00') : undefined;
+    const recognitionRaw = (formData.get('recognitionMethod') as string) || '';
+    const recognitionMethod = (['effort', 'straight-line', 'on-completion'] as const).find(m => m === recognitionRaw);
 
     const budgetRaw = budgetStr ? parseFloat(budgetStr) : undefined;
     const budget = budgetRaw !== undefined && !isNaN(budgetRaw) ? budgetRaw : undefined;
@@ -853,9 +870,14 @@ const ProjectsView: React.FC = () => {
             : { isRecurring: false })),
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
       serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
-      // Write [] (not undefined) so clearing a manual split resets to the default
-      // "100% to responsible" instead of leaving the old split in place.
-      profitSplit: profitSplit && profitSplit.length > 0 ? profitSplit : [],
+      // Explicit null CLEARS (removeUndefined strips undefined — see formValue.ts).
+      endDate: endDate ?? null,
+      recognitionMethod: recognitionMethod ?? null,
+      targetMarginPct: targetMarginPct ?? null,
+      ...plannedFieldsPatch(plannedRoles, plannedDirectExpenses),
+      // The manual revenue split is retired: staff are cost allocated by logged
+      // hours (laborAllocation.ts), not shareholders of a project's revenue.
+      profitSplit: [],
       // The claim re-expressed in the frequency being saved (no-op unless the
       // frequency actually changed).
       ...reExpressedClaim,
@@ -1539,28 +1561,32 @@ const ProjectForm: React.FC<{
     initialData?.billingDayOfMonth ? String(initialData.billingDayOfMonth) : '',
   );
   const [serviceCategory, setServiceCategory] = useState<string>('__all__');
-  // Manual revenue split among participants. Off → 100% to responsible (default).
-  const [customSplit, setCustomSplit] = useState<boolean>(!!(initialData as any)?.profitSplit?.length);
-  const [splitPct, setSplitPct] = useState<Record<string, number>>(() => {
-    const init: Record<string, number> = {};
-    ((initialData as any)?.profitSplit || []).forEach((e: any) => {
-      if (e?.userId) init[e.userId] = Number(e.percent) || 0;
-    });
-    return init;
-  });
   const { getName } = useUserNames(teamMembers || []);
 
-  // Participants eligible for a split: responsible + selected members (deduped).
-  const splitParticipants = React.useMemo(() => {
-    const ids: string[] = [];
-    if (responsibleUserId && responsibleUserId !== '__none__') ids.push(responsibleUserId);
-    memberUserIds.forEach(id => { if (!ids.includes(id)) ids.push(id); });
-    return ids;
-  }, [responsibleUserId, memberUserIds]);
-
-  const pctFor = (id: string) =>
-    splitPct[id] !== undefined ? splitPct[id] : (id === responsibleUserId ? 100 : 0);
-  const splitTotal = splitParticipants.reduce((s, id) => s + pctFor(id), 0);
+  // ── Staffing budget, engagement end, recognition (client profitability) ──
+  const [endDateInput, setEndDateInput] = useState(() => {
+    const d = (initialData as any)?.endDate ? new Date((initialData as any).endDate) : null;
+    return d && !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : '';
+  });
+  const [recognitionMethod, setRecognitionMethod] = useState<string>((initialData as any)?.recognitionMethod || '__auto__');
+  const [plannedRoles, setPlannedRoles] = useState<import('../types').ProjectPlannedRole[]>(
+    () => normalizePlannedRoles((initialData as any)?.plannedRoles || []),
+  );
+  const [plannedDirectExpenses, setPlannedDirectExpenses] = useState<string>(
+    (initialData as any)?.plannedDirectExpenses ? String((initialData as any).plannedDirectExpenses) : '',
+  );
+  const [targetMarginPct, setTargetMarginPct] = useState<string>(
+    (initialData as any)?.targetMarginPct ? String((initialData as any).targetMarginPct) : '',
+  );
+  const tenantSettings = useTeamSettingsData();
+  const financeSettings = React.useMemo(() => resolveFinanceSettings(tenantSettings?.financeSettings), [tenantSettings?.financeSettings]);
+  // Rates come from the pay records (teamMemberComp), which the budget editor may read
+  // because it is only rendered for canSeeBudget (Manager/Admin).
+  const { members: compMembers } = useMemberCompensation(teamMembers, { skip: !canSeeBudget });
+  const rateCard = React.useMemo(
+    () => buildRateCard(compMembers, financeSettings, new Date(), tenantSettings?.rateCard),
+    [compMembers, financeSettings, tenantSettings?.rateCard],
+  );
 
   const serviceCategories = React.useMemo(() => {
     if (!services) return [];
@@ -1603,16 +1629,11 @@ const ProjectForm: React.FC<{
     if (billingDayOfMonth) formData.set('billingDayOfMonth', billingDayOfMonth);
     formData.set('memberUserIds', JSON.stringify(memberUserIds));
     formData.set('selectedServiceIds', JSON.stringify(selectedServiceIds));
-    // Only persist a manual split when the toggle is on; otherwise leave it empty
-    // so the default "100% to responsible" applies.
-    if (customSplit && splitParticipants.length > 0) {
-      const arr = splitParticipants
-        .map(id => ({ userId: id, percent: pctFor(id) }))
-        .filter(e => e.percent > 0);
-      formData.set('profitSplit', JSON.stringify(arr));
-    } else {
-      formData.set('profitSplit', JSON.stringify([]));
-    }
+    if (endDateInput) formData.set('endDate', endDateInput);
+    if (billingType === 'one-time' && recognitionMethod !== '__auto__') formData.set('recognitionMethod', recognitionMethod);
+    formData.set('plannedRoles', JSON.stringify(normalizePlannedRoles(plannedRoles)));
+    if (plannedDirectExpenses) formData.set('plannedDirectExpenses', plannedDirectExpenses);
+    if (targetMarginPct) formData.set('targetMarginPct', targetMarginPct);
     // Override budget with computed service total if services are selected
     if (serviceBudget !== null) {
       formData.set('budget', String(serviceBudget));
@@ -1829,6 +1850,47 @@ const ProjectForm: React.FC<{
         </p>
       </div>
 
+      {/* End date + how the fee becomes EARNED revenue over time (revenueRecognition.ts) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <Label htmlFor="endDate">Data e mbarimit</Label>
+          <Input id="endDate" type="date" value={endDateInput} onChange={(e) => setEndDateInput(e.target.value)} />
+          <p className="text-xs text-muted-foreground mt-1">Fundi i angazhimit — kufiri tjetër i njohjes lineare.</p>
+        </div>
+        {billingType === 'one-time' && canSeeBudget && (
+          <div>
+            <Label htmlFor="recognitionMethod">Si fitohen të ardhurat</Label>
+            <Select value={recognitionMethod} onValueChange={setRecognitionMethod}>
+              <SelectTrigger id="recognitionMethod"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__auto__">Automatik (sipas të dhënave)</SelectItem>
+                <SelectItem value="effort">Sipas punës së kryer (orë / orë të planifikuara)</SelectItem>
+                <SelectItem value="straight-line">Lineare nga fillimi te mbarimi</SelectItem>
+                <SelectItem value="on-completion">Në muajin e mbylljes</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground mt-1">
+              Automatik: me buxhet orësh → sipas punës; me datë fillimi+mbarimi → lineare; ndryshe në mbyllje.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {canSeeBudget && (
+        <PlannedRolesEditor
+          value={plannedRoles}
+          onChange={setPlannedRoles}
+          rateCard={rateCard}
+          members={compMembers}
+          settings={financeSettings}
+          contractValueAll={toAll(parseFloat(serviceBudget !== null ? String(serviceBudget) : budgetInput) || 0, currency)}
+          directExpenses={plannedDirectExpenses}
+          onDirectExpensesChange={setPlannedDirectExpenses}
+          targetMarginPct={targetMarginPct}
+          onTargetMarginChange={setTargetMarginPct}
+        />
+      )}
+
       {/* Department / service line — groups profit in the Department P&L */}
       <div>
         <Label htmlFor="department">Departamenti (service line)</Label>
@@ -1922,55 +1984,6 @@ const ProjectForm: React.FC<{
           </div>
           {memberUserIds.length > 0 && (
             <p className="text-xs text-primary mt-1">{memberUserIds.length} person{memberUserIds.length !== 1 ? 'a' : ''} të zgjedhur</p>
-          )}
-        </div>
-      )}
-
-      {/* Manual revenue split */}
-      {splitParticipants.length > 0 && (
-        <div className="border rounded-lg p-3 space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">Ndaj xhiron mes ekipit</p>
-              <p className="text-xs text-muted-foreground">
-                Pa këtë, 100% e vlerës i kalon përgjegjësit. Aktivizoje për ta ndarë manualisht.
-              </p>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={customSplit}
-              onClick={() => setCustomSplit(!customSplit)}
-              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${customSplit ? 'bg-primary' : 'bg-muted-foreground/30'}`}
-            >
-              <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${customSplit ? 'translate-x-4' : 'translate-x-1'}`} />
-            </button>
-          </div>
-          {customSplit && (
-            <div className="space-y-2">
-              {splitParticipants.map(id => (
-                <div key={id} className="flex items-center gap-2">
-                  <span className="text-sm flex-1 truncate">
-                    {getName(id)}
-                    {id === responsibleUserId && <span className="text-[11px] text-muted-foreground ml-1">(përgjegjës)</span>}
-                  </span>
-                  <Input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="1"
-                    value={pctFor(id)}
-                    onChange={e => setSplitPct(prev => ({ ...prev, [id]: Math.max(0, Math.min(100, Number(e.target.value) || 0)) }))}
-                    className="w-20 h-8 text-right"
-                  />
-                  <span className="text-sm text-muted-foreground w-4">%</span>
-                </div>
-              ))}
-              <div className={`flex items-center justify-between text-xs pt-1 border-t ${splitTotal === 100 ? 'text-muted-foreground' : 'text-amber-600 dark:text-amber-400'}`}>
-                <span>Totali</span>
-                <span className="font-medium">{splitTotal}%{splitTotal !== 100 ? ' — duhet të jetë 100%' : ''}</span>
-              </div>
-            </div>
           )}
         </div>
       )}

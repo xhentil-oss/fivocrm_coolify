@@ -39,6 +39,8 @@ import { addFrequency, completeTask } from '../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { formatCurrency, formatCompactRange, toAll, canSeeFinancials, cn } from '../lib/utils';
 import { computeProjectLabor } from '../lib/finance/laborCost';
+import { useTeamSettingsData } from '../hooks/useTeamSettings';
+import ProjectFinancePanel from '../components/projects/ProjectFinancePanel';
 import { useMemberCompensation } from '../hooks/useMemberCompensation';
 import { applyValuedTaskSideEffects } from '../lib/finance/taskValue';
 import {
@@ -269,6 +271,8 @@ const ProjectDetailView: React.FC = () => {
   // A non-privileged user reads only their OWN comp row, so a colleague's rate
   // still resolves through the legacy fallback and no figure changes today.
   const { members: teamMembers } = useMemberCompensation(uniqueTeamMembers);
+  // Cost-rate rules + rate card (Cilësimet → Financat) for the burn-down and the plan-vs-actual panel.
+  const tenantSettings = useTeamSettingsData();
   // Team-scoped (not skipTeamFilter) so we don't download every team's comments
   // from the whole database; comments are then matched per task client-side.
   const { data: comments } = useCollection<any>('taskComments');
@@ -352,7 +356,7 @@ const ProjectDetailView: React.FC = () => {
     const budget = toAll(Number(project?.budget) || 0, project?.currency);
     const membersByUserId = new Map<string, TeamMember>();
     (teamMembers || []).forEach(m => { if (m.userId) membersByUserId.set(m.userId, m); });
-    const labor = computeProjectLabor(timeEntries || [], membersByUserId);
+    const labor = computeProjectLabor(timeEntries || [], membersByUserId, tenantSettings?.financeSettings);
     // The SHARED predicate — a plain reduce here counted rejected rows and
     // Salary-category rows, so this page disagreed with `project.spent` (written
     // by the project-spend-rollup cron) and with projectPnl's directCost on the
@@ -378,7 +382,7 @@ const ProjectDetailView: React.FC = () => {
       margin: budget > 0 ? budget - spent : labor.billableValue - spent,
       taskValueTotal, taskValueDone, valuedTaskCount: valued.length,
     };
-  }, [project?.budget, project?.currency, teamMembers, timeEntries, projectExpenses, allTasks]);
+  }, [project?.budget, project?.currency, teamMembers, timeEntries, projectExpenses, allTasks, tenantSettings?.financeSettings]);
 
   // Total hours logged for the project and per task
   const { totalHours, hoursByTask } = React.useMemo(() => {
@@ -1661,6 +1665,27 @@ const ProjectDetailView: React.FC = () => {
           )}
 
           {/* Financat — the budget and the billing panel that used to crowd the header */}
+          {viewMode === 'finances' && showFinancials && project && (
+            <div className="mb-4">
+              <ProjectFinancePanel
+                project={project}
+                entries={timeEntries}
+                members={teamMembers}
+                directExpensesToDate={budgetStats.expensesTotal}
+                invoices={projectInvoices}
+                settings={tenantSettings?.financeSettings}
+                rateCard={tenantSettings?.rateCard}
+                canEdit={!!(permissions.isAdmin || permissions.isManager || permissions.isOwner)}
+                onUpdateRemainingHours={async (hours) => {
+                  await projectMutation.update(project.id, {
+                    remainingHoursEstimate: hours ?? null,
+                    remainingHoursUpdatedAt: new Date(),
+                    remainingHoursUpdatedByUserId: user?.uid ?? null,
+                  } as any);
+                }}
+              />
+            </div>
+          )}
           {viewMode === 'finances' && showFinancials && (
             <div className="grid gap-4 lg:grid-cols-2">
               <section className={cn(CARD, 'px-6 py-5', budgetStats.overBudget && 'border-brand-neg-line')}>

@@ -20,7 +20,7 @@ vi.mock('../contexts/PermissionsContext', () => ({
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'owner-1' } }) }));
 
 const navigate = vi.fn();
-vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
+vi.mock('react-router-dom', () => ({ useNavigate: () => navigate, useSearchParams: () => [new URLSearchParams(), vi.fn()] }));
 // Hosting module off in these tests: the MRR card and the extra listeners stay out of the way.
 vi.mock('../hooks/useModules', () => ({ useModules: () => ({ isEnabled: () => false, blockReason: () => null, plan: 'pro', disabledModules: [], loading: false, canManage: false, modules: [], setModuleEnabled: async () => {} }) }));
 
@@ -49,6 +49,10 @@ const PREV_MONTH = MONTHS[(now.getMonth() + 11) % 12];
 
 const collections: Record<string, any[]> = {};
 const documents: Record<string, any> = {};
+// Cost-rate rules + rate card come from tenant settings (Cilësimet → Financat);
+// none here = the defaults, so every figure these tests assert on is unchanged.
+vi.mock('../hooks/useTeamSettings', () => ({ useTeamSettingsData: () => null, saveTeamSettings: vi.fn() }));
+
 vi.mock('../hooks/useFirestore', () => ({
   useCollection: (name: string) => ({ data: collections[name] ?? [], loading: false }),
   // `useMemberCompensation` reads a single `teamMemberComp` row for a
@@ -59,6 +63,7 @@ vi.mock('../hooks/useFirestore', () => ({
     data: id ? (documents[`${name}/${id}`] ?? null) : null,
     loading: false,
   }),
+  useMutation: () => ({ create: vi.fn(), update: vi.fn(), remove: vi.fn() }),
 }));
 
 import FinancesView from './FinancesView';
@@ -206,10 +211,11 @@ describe('FinancesView', () => {
     // The deeper cuts stay reachable, just folded away.
     expect(screen.getByText('Fitimi sipas projekti')).toBeInTheDocument();
 
-    // Tab 3 — clients
+    // Tab 3 — clients: ONE table (earned − hours × cost rate − direct = gross; overhead
+    // by hours; cash apart), with its basis said out loud when no hours were logged.
     selectTab('Klientët');
-    expect(screen.getByText('Klientët më fitimprurës')).toBeInTheDocument();
-    expect(screen.getByText('Klientët me humbje')).toBeInTheDocument();
+    expect(screen.getByText(/Fitimi për klient/)).toBeInTheDocument();
+    expect(screen.getByText(/Asnjë orë e regjistruar/)).toBeInTheDocument();
   });
 
   it('scopes the profit panels with one shared period + basis control', () => {
@@ -220,7 +226,8 @@ describe('FinancesView', () => {
     // cash that arrived, not on a plan.
     expect(screen.getByRole('button', { name: 'Viti', pressed: true })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Paguar', pressed: true })).toBeInTheDocument();
-    expect(screen.getByText(new RegExp(`Viti ${now.getFullYear()}`))).toBeInTheDocument();
+    // The label appears once per panel that reads the period (filter row, capacity card).
+    expect(screen.getAllByText(new RegExp(`Viti ${now.getFullYear()}`)).length).toBeGreaterThan(0);
     expect(screen.getByText(/vetëm faturat e paguara/)).toBeInTheDocument();
 
     // Switching the basis re-labels the summary line, proving the single control

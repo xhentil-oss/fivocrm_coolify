@@ -1241,6 +1241,9 @@ function weekdayInZone(d: Date, timeZone: string): number {
   const w = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' }).format(d);
   return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(w);
 }
+function dayOfMonthInZone(d: Date, timeZone: string): number {
+  return Number(new Intl.DateTimeFormat('en-US', { timeZone, day: 'numeric' }).format(d));
+}
 function partsInZone(d: Date, timeZone: string): { day: string; hour: number; minute: number } {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone, hour12: false,
@@ -1385,6 +1388,13 @@ function startCronSchedulers(): void {
   });
   scheduleDailyInZone(CRON_LOCAL_TZ, 18, 35, () => {
     void triggerCronJob('daily-report-check', { stage: 'escalate' });
+  });
+  // ── Client profitability: "last month's table is ready — review and close" ──
+  // Day 2 of every month, 08:05 local, to the tenant's managers. A wall-clock
+  // promise to a person, so scheduleDailyInZone; NOT in run-all (it notifies).
+  // Idempotent per tenant/period (financeReportRuns), so a restart-day double fire is silent.
+  scheduleDailyInZone(CRON_LOCAL_TZ, 8, 5, () => {
+    if (dayOfMonthInZone(new Date(), CRON_LOCAL_TZ) === 2) void triggerCronJob('client-profitability-report');
   });
 
   // ── Evergreen WhatsApp rules (dormancy re-engagement) ──

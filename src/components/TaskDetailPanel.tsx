@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { dayKeyOf as timeEntryDayKey } from '../lib/finance/timeEntries';
 import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { TaskLabels, LabelEditor } from './TaskLabels';
 import { useCollection, useMutation } from '../hooks/useFirestore';
@@ -708,9 +709,15 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       // the "Duke punuar" badge and the running-timer views for every entry.
       endTime: null,
       projectId: task.projectId,
+      // The client the hour serves, and whether it is client work at all. Both
+      // writers used to hardcode `isBillable: false`, so utilisation and
+      // billable value were structurally zero for every tenant.
+      customerId: (task as any).customerId || undefined,
       description: `Working on: ${task.title}`,
       startTime: new Date(),
-      isBillable: false,
+      date: timeEntryDayKey(new Date()),
+      source: 'timer',
+      isBillable: !!task.projectId && !!(task as any).customerId,
       isPomodoroSession: false,
     });
   };

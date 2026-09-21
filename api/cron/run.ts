@@ -36,6 +36,7 @@ import {
 import { notifyUser, getUserPrefs, isDndActive, isSilenced, escapeHtml, BASE_URL } from '../_push.js';
 import { runChatScheduled } from '../_chatScheduled.js';
 import { isTypeMutedByPrefs } from '../_notificationTypes.js';
+import { costRateFor, resolveFinanceSettings, nextBudgetAlert, type FinanceSettings } from '../_profitabilityCore.js';
 // `.js` is NOT optional here: package.json declares "type": "module", so the
 // deployed function runs as native ESM, where a relative specifier without an
 // extension throws ERR_MODULE_NOT_FOUND at LOAD time — taking down every job in
@@ -5824,7 +5825,18 @@ async function runProjectSpendRollup(opts?: { full?: boolean }) {
     return (amount || 0) * (rates[(currency || 'ALL').toUpperCase()] ?? 1);
   };
 
+  // Cost-rate rules per team (Cilësimet → Financat): loaded salary / practical
+  // capacity — the same core the browser uses (api/_profitabilityCore.ts is the
+  // byte-identical mirror of src/lib/finance/profitabilityCore.ts).
+  const financeByTeam = new Map<string, { settings: FinanceSettings; rateCard: Array<{ role: string; defaultCapacityHours?: number }> }>();
+  for (const d of tsSnap.docs) {
+    const x = d.data() as any;
+    financeByTeam.set(d.id, { settings: resolveFinanceSettings(x.financeSettings), rateCard: Array.isArray(x.rateCard) ? x.rateCard : [] });
+  }
+  const financeFor = (teamId?: string) => financeByTeam.get(teamId || '') || { settings: resolveFinanceSettings(null), rateCard: [] };
+
   const costByUser = new Map<string, number>();
+  const roleByUser = new Map<string, string>();
   for (const m of membersSnap.docs) {
     const d = m.data();
     // Dual read: the comp document states a field or says nothing about it
@@ -5833,10 +5845,16 @@ async function runProjectSpendRollup(opts?: { full?: boolean }) {
     const c = compFor(m.id, d) || {};
     const hourly = c.hourlyCostRate === undefined ? d.hourlyCostRate : (c.hourlyCostRate ?? undefined);
     const salary = c.monthlySalary === undefined ? d.monthlySalary : (c.monthlySalary ?? undefined);
-    const rate = (hourly && hourly > 0)
-      ? hourly
-      : (salary && salary > 0 ? salary / 160 : 0);
-    if (d.userId) costByUser.set(d.userId, rate);
+    const fin = financeFor(d.teamId);
+    const role = String(d.costRole || d.position || 'Pa rol');
+    const card = fin.rateCard.find(r => String(r.role || '').trim().toLowerCase() === role.toLowerCase());
+    const rate = costRateFor({
+      monthlySalary: Number(salary) || 0,
+      hourlyCostRateOverride: Number(hourly) || 0,
+      capacityHours: (Number(d.clientCapacityHours) > 0 ? Number(d.clientCapacityHours) : card?.defaultCapacityHours) || null,
+      settings: fin.settings,
+    }).rate;
+    if (d.userId) { costByUser.set(d.userId, rate); roleByUser.set(d.userId, role); }
   }
   const billByUser = new Map<string, number>();
   for (const m of membersSnap.docs) {
@@ -5844,15 +5862,17 @@ async function runProjectSpendRollup(opts?: { full?: boolean }) {
     if (d.userId) billByUser.set(d.userId, (d.hourlyBillRate && d.hourlyBillRate > 0) ? d.hourlyBillRate : (costByUser.get(d.userId) || 0));
   }
 
-  const labor = new Map<string, { cost: number; billableValue: number; hours: number }>();
+  const labor = new Map<string, { cost: number; billableValue: number; hours: number; byRole: Record<string, number> }>();
   for (const doc of entriesSnap.docs) {
     const e = doc.data();
     if (!e.projectId) continue;
     const h = entryHours(e);
     if (h <= 0) continue;
-    const agg = labor.get(e.projectId) || { cost: 0, billableValue: 0, hours: 0 };
+    const agg = labor.get(e.projectId) || { cost: 0, billableValue: 0, hours: 0, byRole: {} };
     agg.cost += h * (costByUser.get(e.userId) || 0);
     agg.hours += h;
+    const role = String(e.costRole || roleByUser.get(e.userId) || 'Pa rol');
+    agg.byRole[role] = (agg.byRole[role] || 0) + h;
     if (e.isBillable) agg.billableValue += h * ((e.hourlyRate && e.hourlyRate > 0) ? e.hourlyRate : (billByUser.get(e.userId) || 0));
     labor.set(e.projectId, agg);
   }
@@ -5869,29 +5889,75 @@ async function runProjectSpendRollup(opts?: { full?: boolean }) {
   const now = admin.firestore.Timestamp.now();
   let updated = 0;
   const ops: Promise<any>[] = [];
+  let alertsSent = 0;
   for (const doc of projectsSnap.docs) {
     const p = doc.data();
-    const l = labor.get(doc.id) || { cost: 0, billableValue: 0, hours: 0 };
+    const l = labor.get(doc.id) || { cost: 0, billableValue: 0, hours: 0, byRole: {} };
     const spent = Math.round(l.cost + (expByProject.get(doc.id) || 0));
     const laborCost = Math.round(l.cost);
     const billableValue = Math.round(l.billableValue);
     const loggedHours = Math.round(l.hours * 10) / 10;
+    const hoursByRole: Record<string, number> = {};
+    for (const [r, h] of Object.entries(l.byRole)) hoursByRole[r] = Math.round(h * 10) / 10;
+    const rolesChanged = JSON.stringify(p.hoursByRole || {}) !== JSON.stringify(hoursByRole);
     const changed = (p.spent || 0) !== spent
       || (p.laborCost || 0) !== laborCost
-      || (p.billableValue || 0) !== billableValue;
+      || (p.billableValue || 0) !== billableValue
+      || rolesChanged;
+
+    // ── Budget alarms (70 / 85 / 100 % of the staffing plan), each once ──
+    // Consumed = spent / (planned labour + planned direct); hours-only when the plan
+    // has no cost. `budgetAlertsSent` is the idempotency token, so a threshold is
+    // announced exactly once however many runs cross it.
+    const plannedCost = (Number(p.plannedLaborCost) || 0) + (Number(p.plannedDirectExpenses) || 0);
+    const plannedHours = Number(p.plannedHours) || 0;
+    const consumedPct = plannedCost > 0 ? (spent / plannedCost) * 100 : plannedHours > 0 ? (l.hours / plannedHours) * 100 : null;
+    const fin = financeFor(p.teamId);
+    const terminal = p.status === 'Completed' || p.status === 'Cancelled' || p.status === 'Archived';
+    const alert = terminal ? null : nextBudgetAlert(consumedPct, fin.settings.budgetAlertThresholds, Array.isArray(p.budgetAlertsSent) ? p.budgetAlertsSent : []);
+
     // Clear the recompute flag even when nothing changed, or the project stays
     // in the dirty set and is re-read on every single run from now on.
-    if (changed || p.spendRollupDirty) {
+    if (changed || p.spendRollupDirty || alert != null) {
       // Deliberately NOT touching `updatedAt`: projectPnl.projectDate() falls back
       // to it to decide which period a project belongs to, so bumping it here made
       // a single logged hour drag an un-completed one-time project into the current
       // month's P&L (and out of the month it was actually delivered in).
       ops.push(doc.ref.update({
-        spent, laborCost, billableValue, loggedHours,
+        spent, laborCost, billableValue, loggedHours, hoursByRole,
         spendRolledUpAt: now,
         spendRollupDirty: admin.firestore.FieldValue.delete(),
+        ...(alert != null ? { budgetAlertsSent: admin.firestore.FieldValue.arrayUnion(alert) } : {}),
       }));
       if (changed) updated++;
+    }
+    if (alert != null) {
+      alertsSent++;
+      const pctTxt = `${Math.round(consumedPct || 0)} %`;
+      const overRoles = Object.entries(hoursByRole)
+        .filter(([role, h]) => {
+          const plan = (Array.isArray(p.plannedRoles) ? p.plannedRoles : []).filter((r: any) => String(r.role) === role).reduce((a: number, r: any) => a + (Number(r.plannedHours) || 0), 0);
+          return plan > 0 && h > plan;
+        }).map(([role]) => role);
+      const title = alert >= 100
+        ? `🔴 Buxheti i projektit u konsumua: ${p.name}`
+        : alert >= 85 ? `🟠 ${pctTxt} e buxhetit: ${p.name}` : `🟡 ${pctTxt} e buxhetit: ${p.name}`;
+      const message = `${formatMoney(spent, 'ALL')} kosto nga ${formatMoney(plannedCost || 0, 'ALL')} të planifikuara (${Math.round(l.hours * 10) / 10} h nga ${plannedHours} h).`
+        + (overRoles.length ? ` Mbi plan: ${overRoles.join(', ')}.` : '')
+        + (alert >= 100 ? ' Asnjë orë shtesë pa aprovim.' : alert >= 85 ? ' PM duhet ta analizojë.' : '');
+      const recipients = new Set<string>();
+      if (p.responsibleUserId) recipients.add(String(p.responsibleUserId));
+      else if (p.createdByUserId) recipients.add(String(p.createdByUserId));
+      if (alert >= 100) {
+        try { for (const id of await managerIdsForBusiness(p.businessId || null, p.teamId || null)) recipients.add(id); } catch { /* recipients stay as-is */ }
+      }
+      for (const userId of recipients) {
+        ops.push(notifyUser({
+          userId, type: 'project_budget_alert', title, message,
+          actionUrl: `/app/projects/${doc.id}?tab=finances`, actionLabel: 'Hap projektin',
+          businessId: p.businessId ?? null, teamId: p.teamId ?? null, projectId: doc.id,
+        }));
+      }
     }
   }
   await settleAll(ops, 'project-spend-rollup');
@@ -5901,7 +5967,116 @@ async function runProjectSpendRollup(opts?: { full?: boolean }) {
       : { lastRunAt: scanStartedAt },
     { merge: true },
   );
-  return { updated, projects: projectsSnap.size, mode };
+  return { updated, projects: projectsSnap.size, mode, budgetAlerts: alertsSent };
+}
+
+// ── JOB: client-profitability-report ─────────────────────────────────────────
+// Day 2 of the month, 08:05 local (vps/server.ts): "the client-profitability table
+// for LAST month is ready — review it and close the month". The heavy maths lives
+// in ONE place (src/lib/finance/clientProfitability.ts, in the browser); the cron
+// only gathers what it can read cheaply and honestly: whose timesheet has gaps,
+// which fixed-fee projects logged hours without a staffing plan, and — when the
+// owner already closed the month — the headline numbers from that close's snapshot.
+// Idempotent per tenant/period via `financeReportRuns/{businessId}_{period}`.
+function previousMonthKeyInZone(timeZone: string, now = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit' }).formatToParts(now);
+  const y = Number(parts.find(x => x.type === 'year')?.value);
+  const m = Number(parts.find(x => x.type === 'month')?.value);
+  const prev = new Date(Date.UTC(y, m - 2, 1));
+  return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+function workingDaysInMonth(period: string): string[] {
+  const [y, m] = period.split('-').map(Number);
+  const out: string[] = [];
+  const days = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  for (let d = 1; d <= days; d++) {
+    const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+    if (dow >= 1 && dow <= 5) out.push(`${period}-${String(d).padStart(2, '0')}`);
+  }
+  return out;
+}
+async function runClientProfitabilityReport(opts?: { businessId?: string | null; period?: string }) {
+  const period = opts?.period && /^\d{4}-\d{2}$/.test(opts.period) ? opts.period : previousMonthKeyInZone('Europe/Tirane');
+  const businessIds: string[] = [];
+  if (opts?.businessId) businessIds.push(opts.businessId);
+  else {
+    const bizSnap = await db.collection('businesses').get();
+    for (const b of bizSnap.docs) {
+      // A suspended tenant is not reported to (same law as every money job).
+      if ((b.data() as any)?.status === 'suspended') continue;
+      businessIds.push(b.id);
+    }
+  }
+  const workDays = workingDaysInMonth(period);
+  const [y, m] = period.split('-').map(Number);
+  let tenants = 0, notified = 0, skipped = 0;
+  for (const businessId of businessIds) {
+    try {
+      const stateRef = db.collection('financeReportRuns').doc(`${businessId}_${period}`);
+      if ((await stateRef.get()).exists) { skipped++; continue; }
+      const [membersSnap, entriesSnap, projectsSnap, closeSnap] = await Promise.all([
+        db.collection('teamMembers').where('businessId', '==', businessId).where('status', '==', 'Active').get(),
+        db.collection('timeEntries').where('businessId', '==', businessId).where('date', '>=', `${period}-01`).where('date', '<=', `${period}-31`).get(),
+        db.collection('projects').where('businessId', '==', businessId).get(),
+        db.collection('financeMonthCloses').doc(`${businessId}_${period}`).get(),
+      ]);
+      if (membersSnap.empty) continue;
+      tenants++;
+      const daysByUser = new Map<string, Set<string>>();
+      const hoursByProject = new Map<string, number>();
+      let totalHours = 0;
+      for (const d of entriesSnap.docs) {
+        const e = d.data() as any;
+        const h = typeof e.duration === 'number' && e.duration > 0 ? e.duration / 60 : 0;
+        if (h <= 0 || !e.userId) continue;
+        totalHours += h;
+        if (typeof e.date === 'string') { const set = daysByUser.get(e.userId) || new Set<string>(); set.add(e.date); daysByUser.set(e.userId, set); }
+        if (e.projectId) hoursByProject.set(e.projectId, (hoursByProject.get(e.projectId) || 0) + h);
+      }
+      const gaps: Array<{ name: string; missing: number }> = [];
+      for (const d of membersSnap.docs) {
+        const mm = d.data() as any;
+        if (!mm.userId) continue;
+        const logged = daysByUser.get(mm.userId)?.size || 0;
+        const missing = Math.max(0, workDays.length - logged);
+        if (missing > 0) gaps.push({ name: mm.displayName || mm.email || mm.userId, missing });
+      }
+      gaps.sort((a, b) => b.missing - a.missing);
+      const noPlan: string[] = [];
+      for (const d of projectsSnap.docs) {
+        const pr = d.data() as any;
+        const oneTime = (pr.billingType || (pr.isRecurring ? 'monthly' : 'one-time')) === 'one-time';
+        if (oneTime && (hoursByProject.get(d.id) || 0) > 0 && !(Number(pr.plannedHours) > 0)) noPlan.push(pr.name || d.id);
+      }
+      const close = closeSnap.exists ? (closeSnap.data() as any) : null;
+      const snapT = close?.snapshot?.totals;
+      const monthLabel = `${['Janar', 'Shkurt', 'Mars', 'Prill', 'Maj', 'Qershor', 'Korrik', 'Gusht', 'Shtator', 'Tetor', 'Nëntor', 'Dhjetor'][m - 1]} ${y}`;
+      const lines: string[] = [];
+      if (snapT) {
+        lines.push(`Fituar ${formatMoney(snapT.earned || 0, 'ALL')} · bruto ${formatMoney(snapT.grossProfit || 0, 'ALL')}${snapT.grossMarginPct != null ? ` (${Math.round(snapT.grossMarginPct)} %)` : ''} · neto ${formatMoney(snapT.netProfit || 0, 'ALL')}. Muaji është i mbyllur.`);
+      } else {
+        lines.push(totalHours > 0
+          ? `${Math.round(totalHours)} orë të regjistruara. Hap tabelën, kontrollo klientët me 🔴 dhe mbyll muajin.`
+          : 'Asnjë orë e regjistruar — tabela e klientëve është vlerësim. Plotësoni orët para mbylljes.');
+      }
+      if (gaps.length) lines.push(`Ditë pune pa orë: ${gaps.slice(0, 3).map(g => `${g.name} (${g.missing})`).join(', ')}${gaps.length > 3 ? ` +${gaps.length - 3}` : ''}.`);
+      if (noPlan.length) lines.push(`${noPlan.length} projekt${noPlan.length === 1 ? '' : 'e'} fiks me orë por pa buxhet orësh: ${noPlan.slice(0, 3).join(', ')}${noPlan.length > 3 ? '…' : ''}.`);
+      const recipients = await managerIdsForBusiness(businessId, null);
+      const ops = recipients.map(userId => notifyUser({
+        userId, type: 'client_profitability_report',
+        title: `📊 Fitimi për klient · ${monthLabel}`,
+        message: lines.join(' '),
+        actionUrl: `/app/finances?tab=clients&period=${y}-${m - 1}`, actionLabel: 'Hap tabelën',
+        businessId, teamId: null,
+      }));
+      await settleAll(ops, 'client-profitability-report');
+      notified += recipients.length;
+      await stateRef.set({ businessId, period, notifiedAt: admin.firestore.Timestamp.now(), recipients: recipients.length, hours: Math.round(totalHours * 10) / 10, gaps: gaps.length, projectsWithoutPlan: noPlan.length, closed: !!close });
+    } catch (err) {
+      console.error(`[CRON:client-profitability-report] ${businessId} dështoi:`, err);
+    }
+  }
+  return { period, tenants, notified, skipped };
 }
 
 // ── Social media analytics — monthly pull ────────────────────────────────────
@@ -6233,6 +6408,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'project-spend-rollup':
         result = await runProjectSpendRollup({ full: req.query.full === '1' });
         break;
+      case 'client-profitability-report': {
+        // Day 2 of the month from the VPS (NOT in run-all — it notifies people). A
+        // manual run is scoped to the caller's own tenant, super-admin excepted.
+        const scopeId = await manualScopeId(req, isManual);
+        if (scopeId === MANUAL_SCOPE_UNRESOLVED) return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — ekzekutimi manual u ndal.' });
+        result = await runClientProfitabilityReport({ businessId: scopeId, period: (req.query.period as string) || undefined });
+        break;
+      }
       case 'lead-cadence-steps':
         result = await runLeadCadenceSteps();
         break;

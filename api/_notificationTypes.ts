@@ -48,6 +48,7 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   project_status_changed: 'projects',
   project_open_reminder: 'projects',
   project_cycle_reset: 'projects',
+  project_budget_alert: 'projects',
   lead_created: 'projects',
   lead_assigned: 'projects',
   lead_converted: 'projects',
@@ -93,6 +94,7 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   report: 'reports',
   daily_report_due: 'reports',
   daily_report_missing: 'reports',
+  client_profitability_report: 'reports',
   // system
   billing: 'system',
   recurring_project_no_budget: 'system',

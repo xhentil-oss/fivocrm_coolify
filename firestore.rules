@@ -982,10 +982,57 @@ service cloud.firestore {
       allow update, delete: if canManageBusinessDoc();
     }
 
+    // Logged hours — the base of every cost figure in Financat. A person writes
+    // their OWN hours (an admin/manager anyone's), and nothing dated inside a CLOSED
+    // month (`financeMonthCloses/{businessId}_{YYYY-MM}` with locked: true) can be
+    // created, edited or deleted any more: the month's client table was signed off
+    // on those hours. `date` is the local YYYY-MM-DD day (src/lib/finance/timeEntries.ts).
+    function monthLockedFor(bid, day) {
+      return day is string && day.size() >= 7
+        && exists(/databases/$(database)/documents/financeMonthCloses/$(bid + '_' + day[0:7]))
+        && get(/databases/$(database)/documents/financeMonthCloses/$(bid + '_' + day[0:7])).data.get('locked', false) == true;
+    }
     match /timeEntries/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateBusinessDoc();
-      allow update, delete: if canManageBusinessDoc();
+      allow create: if canCreateBusinessDoc()
+        && (isSuperAdmin()
+            || request.resource.data.get('userId', '') == request.auth.uid
+            || isBusinessAdmin(request.resource.data.businessId))
+        && !monthLockedFor(request.resource.data.businessId, request.resource.data.get('date', ''));
+      allow update: if canManageBusinessDoc()
+        && keepsBusinessId()
+        && (isSuperAdmin()
+            || isBusinessAdmin(resource.data.businessId)
+            // Own row: edit it, but never hand it to somebody else.
+            || (resource.data.get('userId', '') == request.auth.uid
+                && request.resource.data.get('userId', '') == request.auth.uid))
+        && !monthLockedFor(resource.data.businessId, resource.data.get('date', ''))
+        && !monthLockedFor(resource.data.businessId, request.resource.data.get('date', ''));
+      allow delete: if canManageBusinessDoc()
+        && (isSuperAdmin()
+            || resource.data.get('userId', '') == request.auth.uid
+            || isBusinessAdmin(resource.data.businessId))
+        && !monthLockedFor(resource.data.businessId, resource.data.get('date', ''));
+    }
+
+    // The month close: written by an admin of the business only, at the id the
+    // lock rule above looks up; never deleted (re-opening is an update with
+    // locked: false + reopenedAt, so the audit trail survives).
+    match /financeMonthCloses/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if (isSuperAdmin() || isBusinessAdmin(request.resource.data.businessId))
+        && tenantActive(request.resource.data.businessId)
+        && docId == request.resource.data.businessId + '_' + request.resource.data.get('periodKey', '');
+      allow update: if (isSuperAdmin() || isBusinessAdmin(resource.data.businessId))
+        && keepsBusinessId()
+        && request.resource.data.get('periodKey', '') == resource.data.get('periodKey', '');
+      allow delete: if false;
+    }
+
+    // Monthly report idempotency (cron-written).
+    match /financeReportRuns/{docId} {
+      allow read: if isBusinessAdmin(resource.data.businessId) || isSuperAdmin();
+      allow write: if false;
     }
 
     match /projects/{docId} {

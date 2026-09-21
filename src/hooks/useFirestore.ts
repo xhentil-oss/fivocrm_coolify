@@ -206,7 +206,7 @@ const businessIsolatedAlways = new Set<string>([
   'leads', 'projects', 'invoices', 'invoiceItems', 'customers', 'deals', 'leadActivities',
   'services', 'expenses', 'goals', 'quotes', 'contracts', 'tasks', 'taskComments',
   'taskCollaborators', 'milestones', 'projectComments', 'clientRequests', 'serviceInquiries',
-  'timeEntries', 'standups', 'dailyReports', 'dailyFocus', 'productivitySettings', 'weeklyReviews', 'customIndustries', 'expenseCategories', 'activities',
+  'timeEntries', 'financeMonthCloses', 'standups', 'dailyReports', 'dailyFocus', 'productivitySettings', 'weeklyReviews', 'customIndustries', 'expenseCategories', 'activities',
   'payments',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',
   'crmAutomationRules', 'crmAutomationRuns',

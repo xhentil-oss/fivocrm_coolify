@@ -67,7 +67,8 @@
 | `teamMembers` | Team roles & permissions |
 | `goals` | OKR goals |
 | `expenses` | Business expenses |
-| `timeEntries` | Time tracking |
+| `timeEntries` | Logged hours — Klient → Projekt → Detyrë → Orë; `date` (local day), `costRole`, `customerId`, `source`; frozen inside a closed month |
+| `financeMonthCloses` / `financeReportRuns` | Month close (Admin-written lock + client-table snapshot) / day-2 report idempotency (cron-written, `write: if false`) |
 | `services` | Service catalog |
 | `products` | Shop products (variants, inventory, SEO) |
 | `productCategories` / `productBrands` | Shop catalog taxonomy |
@@ -491,6 +492,55 @@ permission `canAccessHosting`.
   **Financat "Rrogat" + "Shpenzime të tjera" == the Shpenzimet page total for the
   same month**, except in a `profile`-basis month. `scripts/audit-expense-totals*.mjs`
   verify it against live data (read-only).
+
+### Client & project profitability (orë × kosto/orë — the owner's "sa fitoj nga çdo klient")
+
+Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
+
+- **`src/lib/finance/profitabilityCore.ts` is the import-free core** (settings, cost
+  rate, revenue recognition, EAC, alarms, margin bands) and `api/_profitabilityCore.ts`
+  is its **byte-identical copy** (test-enforced). The typed engines wrap it:
+  `costRates` → `laborAllocation` → `revenueRecognition` → `clientProfitability`,
+  `projectBudget`, `capacity`. `projectPeriod.ts` holds the helpers projectPnl and
+  departmentPnl used to own (`retainerEarningEnd`, `billingTypeOf`, …).
+- **Cost/hour = loaded salary ÷ PRACTICAL client capacity**: `memberSalaryForMonth × (1 +
+  employerCostPct)` / (`clientCapacityHours` ‖ rate-card role default ‖ 120). Never
+  `salary / 160` again — `laborCost.memberHourlyCost` and the rollup cron both go through
+  the core. `hourlyCostRate` stays an explicit override. Settings live in
+  `teamSettings.financeSettings` (+ `rateCard`), edited in Cilësimet → **Financat**.
+- **`allocateLabor()` is the ONE allocation of people's cost to projects**, by logged
+  hours. Invariant: `absorbed + internal.cost + unabsorbed == payrollBetween().total`.
+  Unabsorbed payroll (bench, meetings, nobody logged) is overhead, never dropped; hours ×
+  rates above real payroll is `overAbsorbed` (the rates are wrong), never a phantom loss.
+  `computeProjectPnl` / `computeDepartmentPnl` accept `opts.labor` (+ `timeEntries`) and
+  switch to hours (`laborBasis: 'hours'`, overhead by labour hours, one-time revenue by
+  effort); without it they are byte-for-byte the legacy engines. **No hours in the period
+  ⇒ `basis: 'none'`, shown as "vlerësim"** — same law as payroll's `basis`.
+- **Revenue is EARNED, not invoiced**: retainer = fee × months; fixed fee = `contract ×
+  min(1, hoursToDate / hoursAtCompletion)` (POC by effort; `remainingHoursEstimate`
+  stretches the denominator; Completed trues up; an overrun never inflates revenue);
+  no plan but dates → straight-line; nothing → completion month (legacy). Four figures
+  side by side: contract / earned / invoiced / collected (`projectWip`).
+- **Gross first, overhead after**: earned − pass-through − labour − direct = GROSS (🟢 ≥55 %
+  · 🟡 ≥40 % · 🔴), − overhead (other fixed + unabsorbed payroll, by labour hours) = NET.
+  Cash is a separate column set. Σ client net + unallocated == company operating profit.
+- **Projects are budgeted before they are sold**: `plannedRoles[]` (role, hours, cost
+  rate SNAPSHOTTED, optional person) + `plannedDirectExpenses` + `targetMarginPct` →
+  price = cost / (1 − margin). `project-spend-rollup` writes `hoursByRole` and fires the
+  70/85/100 % alarms once each (`budgetAlertsSent`, type `project_budget_alert`).
+  `profitSplit` and `staffRevenue.ts` are gone: staff are cost allocated by hours, not
+  shareholders of revenue.
+- **Hours enter three ways, one shape**: the daily report's task rows (`hours` →
+  `timeEntries` id `${uid}_${taskId}_${date}`, `source: 'daily-report'`), `/app/timesheet`
+  + `TimeLogDialog` (`source: 'manual'`), the task timer / Focus (`timer` / `pomodoro`).
+  Every row carries `date` (Europe/Tirane day), `costRole`, `customerId`, `isBillable` =
+  client work. Rules: own rows only (admin/manager anyone's), nothing in a closed month.
+- **Month close** = `financeMonthCloses/{bid}_{YYYY-MM}` (`locked`, snapshot, acknowledged
+  warnings), Admin-written, never deleted; `monthCloseChecks()` is the pre-close list.
+  `client-profitability-report` (day 2, 08:05 local, VPS, NOT in run-all) nudges managers
+  with timesheet gaps + unplanned projects and deep-links `/app/finances?tab=clients`.
+- Adding a cost figure anywhere? → read hours through `allocateLabor`/`laborForEntries`,
+  never `project.spent`/`laborCost` (those are the cron's denormalised, current-salary copies).
 
 ### WhatsApp via Baileys (VPS): agent lifecycle & honest send status
 
@@ -1176,6 +1226,7 @@ META_ACCESS_TOKEN        — Meta WhatsApp API
 - `workspace/REPORTING_MODULE.md` — Reporting & accountability module (ERD, security, runbook)
 - `workspace/FINANCE_AUDIT_2026_09.md` — Finance/recurring-billing audit (anchor drift, period claims, tenant scoping)
 - `workspace/HOSTING_MODULE.md` — Hosting & domains module (cPanel/WHM + Dynadot): architecture, lifecycle table, endpoint actions, deploy steps
+- `workspace/CLIENT_PROFITABILITY.md` — Client & project profitability (hours × cost rate, earned revenue, gross→net, plan vs actual, month close): model, capture paths, cron, deploy
 
 ---
 

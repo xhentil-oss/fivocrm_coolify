@@ -169,6 +169,12 @@ export interface TeamSettings {
   // Follow-up playbooks: label (service interest) → cadence steps with templates.
   // Validated by src/lib/crm/playbooks.ts (`resolvePlaybooks`); mirror api/_playbooks.ts.
   followUpPlaybooks?: import('../lib/crm/playbooks').Playbook[];
+  // ── Client & project profitability (src/lib/finance/profitabilityCore.ts) ──
+  /** Cost-rate, margin and overhead rules; every field optional, validated by
+   *  `resolveFinanceSettings` (defaults there). */
+  financeSettings?: Partial<import('../lib/finance/profitabilityCore').FinanceSettings>;
+  /** Internal rate card: role → default capacity + selling rate. Never shown to clients. */
+  rateCard?: Array<{ role: string; defaultCapacityHours?: number; sellRate?: number }>;
   // Custom business categories typed in the lead form, merged with the built-in
   // list. Best-effort write (only admins may write teamSettings) — the category
   // also lives on the lead itself, so the dropdown re-derives it either way.

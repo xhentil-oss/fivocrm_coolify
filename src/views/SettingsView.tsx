@@ -30,6 +30,7 @@ import {
   Sparkles,
   Mail,
   Boxes,
+  Coins,
 } from 'lucide-react';
 import { WhatsAppAccount, TeamMember, UserProfile } from '../types';
 import { MetaChannel } from '../hooks/useTeamSettings';
@@ -43,6 +44,7 @@ import { Separator } from '../components/ui/separator';
 import WhatsAppStatusBadge from '../components/WhatsAppStatusBadge';
 import ModulesSettingsPanel from '../components/ModulesSettingsPanel';
 import FollowUpSettingsPanel from '../components/settings/FollowUpSettingsPanel';
+import FinanceSettingsPanel from '../components/settings/FinanceSettingsPanel';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Checkbox } from '../components/ui/checkbox';
@@ -769,7 +771,21 @@ const SettingsView: React.FC = () => {
               <span className="hidden sm:inline">Modulet</span>
             </TabsTrigger>
           )}
+          {(isAdmin || isOwner) && (
+            <TabsTrigger value="finance" className="data-[state=active]:bg-background data-[state=active]:text-primary min-w-fit">
+              <Coins className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">Financat</span>
+            </TabsTrigger>
+          )}
         </TabsList>
+
+        {(isAdmin || isOwner) && (
+          <TabsContent value="finance" className="space-y-6">
+            {/* Cost rates, margin thresholds, overhead basis, rate card — the rules
+                behind Financat → Klientët and every project budget. */}
+            <FinanceSettingsPanel teamId={teamId} settings={firestoreSettings} canEdit={isAdmin || isOwner} />
+          </TabsContent>
+        )}
 
         {(isAdmin || isOwner) && (
           <TabsContent value="modules" className="space-y-6">

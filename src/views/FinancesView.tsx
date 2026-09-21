@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useCollection } from '../hooks/useFirestore';
 import { Skeleton } from '../components/ui/skeleton';
@@ -14,12 +14,11 @@ import {
   ResponsiveContainer, ComposedChart, Area, Line, BarChart, Bar, XAxis, YAxis,
   Tooltip, CartesianGrid, ReferenceLine, LabelList,
 } from 'recharts';
-import type { Invoice, Expense, Customer, Project, TeamMember, Team, Subscription, Domain } from '../types';
+import type { Invoice, Expense, Customer, Project, TeamMember, Team, Subscription, Domain, TimeEntry, FinanceMonthClose } from '../types';
 import { hostingMonthlyRecurringRevenue, hostingRenewalsInWindow } from '../lib/hosting/finance';
 import { useModules } from '../hooks/useModules';
 import {
   getInvoiceCollectedBetween,
-  getInvoiceCollectedAll,
   getInvoiceOutstandingAll,
   calculateExpensesBetween,
   calculateAccountsReceivable,
@@ -37,6 +36,16 @@ import { forecastNextMonth } from '../lib/finance/forecast';
 import { computeDepartmentPnl, buildDepartmentProfitTrend } from '../lib/finance/departmentPnl';
 import { attributeCollectedRevenue, resolveCollectionWindow } from '../lib/finance/revenueAttribution';
 import { useMemberCompensation } from '../hooks/useMemberCompensation';
+import { useTeamSettingsData } from '../hooks/useTeamSettings';
+import { useMutation } from '../hooks/useFirestore';
+import { useAuth } from '../contexts/AuthContext';
+import { allocateLabor } from '../lib/finance/laborAllocation';
+import { computeClientProfitability, monthCloseChecks, snapshotForClose } from '../lib/finance/clientProfitability';
+import { computeCapacity } from '../lib/finance/capacity';
+import { monthCloseId } from '../lib/finance/timeEntries';
+import ClientProfitabilityPanel from '../components/finance/ClientProfitabilityPanel';
+import CapacityCard from '../components/finance/CapacityCard';
+import MonthCloseDialog from '../components/finance/MonthCloseDialog';
 
 // ── Financat — owner dashboard ────────────────────────────────────────────────
 // Rebuilt against the hifi design reference "Financat FivoCRM.dc.html".
@@ -190,9 +199,18 @@ const FinancesView: React.FC = () => {
   // `project.department` the P&L groups by — without it a cost tagged to one
   // department is spread by revenue weight across all of them.
   const { data: teams } = useCollection<Team>('teams');
+  // Logged hours — the base of every cost figure per client/project (laborAllocation.ts).
+  const { data: timeEntries } = useCollection<TimeEntry>('timeEntries', { skipTeamFilter: true });
+  const { data: monthCloses } = useCollection<FinanceMonthClose>('financeMonthCloses', { skipTeamFilter: true });
+  const tenantSettings = useTeamSettingsData();
+  const { user } = useAuth();
+  const closeMutation = useMutation<FinanceMonthClose>('financeMonthCloses');
 
   const now = useMemo(() => new Date(), []);
-  const [tab, setTab] = useState('overview');
+  // `?tab=clients&period=2026-8` — the day-2 report notification lands here.
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab');
+  const [tab, setTab] = useState(initialTab && ['overview', 'profit', 'clients', 'risk'].includes(initialTab) ? initialTab : 'overview');
   const [monthMode, setMonthMode] = useState<MonthMode>('auto');
   const usePrev = monthMode === 'auto' ? now.getDate() < 15 : monthMode === 'prev';
 
@@ -325,29 +343,6 @@ const FinancesView: React.FC = () => {
     return { outstanding, overdueAmount, overdueCount };
   }, [invoices, now]);
 
-  // ── Per-client P&L (cash received − project cost) ──
-  const clientPnl = useMemo(() => {
-    const inv = invoices || [];
-    const projs = projects || [];
-    const rows = (customers || []).map(c => {
-      // Profit counts only money actually RECEIVED — an issued-but-unpaid invoice
-      // (Pending/Overdue) is a receivable, not profit. Partials count their paid part.
-      const revenue = inv
-        .filter(i => i.customerId === c.id)
-        .reduce((s, i) => s + getInvoiceCollectedAll(i), 0);
-      const cost = projs
-        .filter(p => p.customerId === c.id)
-        .reduce((s, p) => s + (Number((p as any).spent) || 0), 0);
-      const margin = revenue - cost;
-      const marginPct = revenue > 0 ? Math.round((margin / revenue) * 100) : 0;
-      return { id: c.id, name: c.name || 'Pa emër', revenue, cost, margin, marginPct };
-    }).filter(r => r.revenue > 0 || r.cost > 0);
-
-    const winners = [...rows].sort((a, b) => b.margin - a.margin).slice(0, 3);
-    const losers = rows.filter(r => r.margin < 0).sort((a, b) => a.margin - b.margin).slice(0, 3);
-    return { winners, losers };
-  }, [invoices, projects, customers]);
-
   // ── Recurring-invoice health: which "repeats" failed to generate ──
   // Mirrors the cron's own generation guard (api/cron/run.ts runRecurringInvoices):
   // a PARENT recurring invoice should have spawned a child, but didn't.
@@ -403,7 +398,10 @@ const FinancesView: React.FC = () => {
   // ── ONE period + ONE revenue basis for every P&L breakdown ──
   // Rendered as one control row above the panels it scopes, never buried inside
   // a card that silently governs the cards below it.
-  const [period, setPeriod] = useState<Period>('year');
+  const [period, setPeriod] = useState<Period>(() => {
+    const p = searchParams.get('period');
+    return p && (p === 'month' || p === 'year' || p === 'all' || isPickedMonth(p)) ? p : 'year';
+  });
   // Default to the money actually COLLECTED ("Paguar"): profit should reflect cash
   // that arrived, not a plan. "Buxhet" stays available as the planning view.
   const [revenueBasis, setRevenueBasis] = useState<'budget' | 'invoiced'>('invoiced');
@@ -452,13 +450,65 @@ const FinancesView: React.FC = () => {
     return opts;
   }, [now]);
 
+  // ── The period as a concrete window (the client table and the labour allocation need one) ──
+  const periodRange = useMemo(() => {
+    if (periodOpts.range) return periodOpts.range;
+    if (periodOpts.allTime) {
+      const times = (projects || []).map(p => parseDate(p.createdAt)?.getTime()).filter((t): t is number => !!t);
+      return { start: times.length ? new Date(Math.min(...times)) : new Date(now.getFullYear(), 0, 1), end: now };
+    }
+    return { start: new Date(now.getFullYear(), 0, 1), end: now };
+  }, [periodOpts, projects, now]);
+  /** `YYYY-MM` when the period is exactly one month — what "Mbyll muajin" locks. */
+  const periodMonthKey = useMemo(() => {
+    if (period === 'month') return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    if (isPickedMonth(period)) { const [y, m] = period.split('-').map(Number); return `${y}-${String(m + 1).padStart(2, '0')}`; }
+    return null;
+  }, [period, now]);
+
+  // ── ONE labour allocation: hours × cost rate per project, unabsorbed payroll → overhead ──
+  // Every engine below takes this object, so a project's labour is the same number on
+  // every panel (client table, project P&L, department P&L). With no hours in the
+  // period it says `basis: 'none'` and the engines fall back to their legacy split.
+  const labor = useMemo(() => allocateLabor({
+    timeEntries, members: teamMembers, expenses, period: periodRange,
+    settings: tenantSettings?.financeSettings, rateCard: tenantSettings?.rateCard,
+    clientProjectIds: new Set((projects || []).filter(p => !!p.customerId).map(p => p.id)),
+  }), [timeEntries, teamMembers, expenses, periodRange, tenantSettings?.financeSettings, tenantSettings?.rateCard, projects]);
+
   // ── Per-project P&L (revenue − direct cost − allocated fixed overhead) ──
-  // Full-absorption: the fixed pool (salaries + non-project expenses) is spread
-  // across projects by revenue weight. See lib/finance/projectPnl.ts.
+  // With logged hours: each project's own labour is direct cost and the pool is
+  // shared by hours. Without: the legacy full-absorption model by revenue weight.
   const projectPnl = useMemo(
-    () => computeProjectPnl(projects, teamMembers, expenses, { ...periodOpts, revenueBasis, invoices }),
-    [projects, teamMembers, expenses, invoices, periodOpts, revenueBasis],
+    () => computeProjectPnl(projects, teamMembers, expenses, { ...periodOpts, revenueBasis, invoices, labor, timeEntries }),
+    [projects, teamMembers, expenses, invoices, periodOpts, revenueBasis, labor, timeEntries],
   );
+
+  // ── Per-client profitability: earned − labour − direct = gross; − overhead = net; cash apart ──
+  const clientProfit = useMemo(() => computeClientProfitability({
+    customers, projects, timeEntries, members: teamMembers, expenses, invoices, period: periodRange,
+    settings: tenantSettings?.financeSettings, rateCard: tenantSettings?.rateCard, labor,
+  }), [customers, projects, timeEntries, teamMembers, expenses, invoices, periodRange, tenantSettings?.financeSettings, tenantSettings?.rateCard, labor]);
+  const capacity = useMemo(() => computeCapacity(labor, teamMembers, tenantSettings?.rateCard), [labor, teamMembers, tenantSettings?.rateCard]);
+  const currentClose = useMemo(
+    () => (periodMonthKey ? (monthCloses || []).find(c => c.periodKey === periodMonthKey) || null : null),
+    [monthCloses, periodMonthKey],
+  );
+  const [closeOpen, setCloseOpen] = useState(false);
+  const closeChecks = useMemo(() => monthCloseChecks(clientProfit), [clientProfit]);
+  const businessIdForClose = (teamMembers || []).find(m => (m as any).businessId)?.['businessId' as keyof TeamMember] as string | undefined;
+  const confirmClose = useCallback(async (acknowledged: string[]) => {
+    if (!periodMonthKey || !businessIdForClose) return;
+    await closeMutation.create({
+      businessId: businessIdForClose,
+      periodKey: periodMonthKey,
+      locked: true,
+      closedAt: new Date(),
+      closedByUserId: user?.uid ?? null,
+      snapshot: snapshotForClose(clientProfit),
+      warnings: acknowledged,
+    } as any, monthCloseId(businessIdForClose, periodMonthKey));
+  }, [periodMonthKey, businessIdForClose, closeMutation, user?.uid, clientProfit]);
 
   // ── Collected cash, attributed to a department and a person ──
   // The accrual columns (budget/invoiced) say what was EARNED; this says what
@@ -472,8 +522,8 @@ const FinancesView: React.FC = () => {
   const [expandedDept, setExpandedDept] = useState<string | null>(null);
   const [showPnlHelp, setShowPnlHelp] = useState(false);
   const departmentPnl = useMemo(
-    () => computeDepartmentPnl(projects, teamMembers, expenses, { ...periodOpts, revenueBasis, invoices, teams }),
-    [projects, teamMembers, expenses, invoices, periodOpts, revenueBasis, teams],
+    () => computeDepartmentPnl(projects, teamMembers, expenses, { ...periodOpts, revenueBasis, invoices, teams, labor, timeEntries }),
+    [projects, teamMembers, expenses, invoices, periodOpts, revenueBasis, teams, labor, timeEntries],
   );
 
   /**
@@ -662,15 +712,15 @@ const FinancesView: React.FC = () => {
         text: `${recurringHealth.misconfigured.length} faturë recurring e konfiguruar keq — s'do gjenerohet kurrë.`,
       });
     }
-    for (const l of clientPnl.losers) {
+    for (const l of clientProfit.rows.filter(r => r.netProfit < 0).slice(0, 5)) {
       items.push({
         tag: 'Marzh',
         tone: 'amber',
-        text: `Klienti "${l.name}" po humb para: ${formatALL(l.margin)} marzh.`,
+        text: `Klienti "${l.name}" po humb para: ${formatALL(Math.round(l.netProfit))} neto (${periodLabel}).`,
       });
     }
     return items;
-  }, [receivables, hero, clientPnl, recurringHealth]);
+  }, [receivables, hero, clientProfit, recurringHealth, periodLabel]);
 
   // Badge on the "Rreziqet" tab — that tab holds everything broken.
   const riskCount = alarms.length + cashflow.alarms.length;
@@ -682,10 +732,11 @@ const FinancesView: React.FC = () => {
       bits.push(`${receivables.overdueCount} fatura të vonuara (${formatALL(receivables.overdueAmount)})`);
     }
     if (recurringHealth.stuck.length > 0) bits.push(`${recurringHealth.stuck.length} recurring ngeci`);
-    if (clientPnl.losers.length > 0) bits.push(`${clientPnl.losers.length} klientë në humbje`);
+    const losing = clientProfit.rows.filter(r => r.netProfit < 0).length;
+    if (losing > 0) bits.push(`${losing} klientë në humbje`);
     if (cashflow.gap < 0) bits.push(`mungesë mujore ${formatALL(Math.abs(cashflow.gap))}`);
     return bits.join(' · ');
-  }, [receivables, recurringHealth, clientPnl, cashflow]);
+  }, [receivables, recurringHealth, clientProfit, cashflow]);
 
   // ── CSV export of exactly what is on screen ──
   const exportCsv = useCallback(() => {
@@ -711,9 +762,11 @@ const FinancesView: React.FC = () => {
       ['Përgjegjësi', 'Të ardhura', 'Kosto', 'Fitimi', 'Arkëtuar'],
       ...staffRevenue.rows.map(r => [r.name, Math.round(r.revenue), Math.round(r.cost), Math.round(r.profit), Math.round(r.collected)]),
       [],
-      ['Klienti', 'Të ardhura', 'Kosto', 'Marzhi'],
-      ...[...clientPnl.winners, ...clientPnl.losers].map(c => [
-        c.name, Math.round(c.revenue), Math.round(c.cost), Math.round(c.margin),
+      [`Klienti (${periodLabel})`, 'Të ardhura të fituara', 'Orë', 'Punë direkte', 'Kosto direkte', 'Fitimi bruto', 'Marzhi bruto %', 'Overhead', 'Fitimi neto', 'Faturuar', 'Arkëtuar', 'Pa arkëtuar'],
+      ...clientProfit.rows.map(c => [
+        c.name, Math.round(c.earned), Math.round(c.hours * 10) / 10, Math.round(c.directLabor), Math.round(c.directExpenses),
+        Math.round(c.grossProfit), c.grossMarginPct == null ? '' : Math.round(c.grossMarginPct), Math.round(c.overhead),
+        Math.round(c.netProfit), Math.round(c.invoiced), Math.round(c.collected), Math.round(c.outstanding),
       ]),
     ];
     const csv = rows
@@ -726,7 +779,7 @@ const FinancesView: React.FC = () => {
     void saveOrShareFile(blob, `financat-${hero.title.toLowerCase().replace(/\s+/g, '-')}.csv`, {
       shareTitle: 'Financat - FivoCRM',
     });
-  }, [hero, receivables, departmentRows, staffRevenue, clientPnl, periodLabel]);
+  }, [hero, receivables, departmentRows, staffRevenue, clientProfit, periodLabel]);
 
   if (!allowed) {
     return (
@@ -1088,6 +1141,9 @@ const FinancesView: React.FC = () => {
                 {periodLabel} · {revenueBasis === 'invoiced' ? 'vetëm faturat e paguara' : 'buxheti i projekteve'}
               </p>
             </div>
+
+            {/* ── Team capacity — the same hours the P&L costs, as utilisation ── */}
+            <CapacityCard capacity={capacity} periodLabel={periodLabel} bands={labor.settings.utilizationBands} />
 
             {/* ── Departments ── */}
             <section className={cn(CARD, 'overflow-hidden')}>
@@ -1484,77 +1540,49 @@ const FinancesView: React.FC = () => {
             </Fold>
           </TabsContent>
 
-          {/* ── TAB 3 · Clients — a different revenue basis, so it gets its own tab ── */}
-          <TabsContent value="clients" className="mt-4">
-            <div className="grid gap-4 lg:grid-cols-2">
-              <section className={cn(CARD, 'px-5 py-5 sm:px-6')}>
-                <h2 className={cn('flex items-center gap-2 text-[15px] font-extrabold', INK_POS)}>
-                  <TrendingUp className="h-4 w-4" />
-                  Klientët më fitimprurës
-                </h2>
-                {clientPnl.winners.length === 0 ? (
-                  <div className="mt-3"><EmptyState text="Ende pa të dhëna klientësh." /></div>
-                ) : clientPnl.winners.map((w, i) => (
-                  <div key={w.id} className="flex items-center gap-3.5 border-b border-[#eef2f8] py-3 last:border-0">
-                    <span className={cn('w-6 shrink-0 text-xs font-bold text-[#94a5bd]', NUM)}>
-                      {String(i + 1).padStart(2, '0')}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className={cn('truncate text-[13.5px] font-bold', INK_NAVY)}>{w.name}</p>
-                      <p className={cn('mt-px truncate text-[11.5px]', INK_MUTED)}>
-                        Ardhura {formatALL(w.revenue)} · Kosto {formatALL(w.cost)}
-                      </p>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <p className={cn('text-[13.5px] font-bold', NUM, w.margin >= 0 ? INK_POS : INK_NEG)}>
-                        {w.margin >= 0 ? '+' : ''}{formatALL(w.margin)}
-                      </p>
-                      <p className="text-[11.5px] font-extrabold text-[#6bbd97]">{w.marginPct}% marzh</p>
-                    </div>
-                  </div>
-                ))}
-              </section>
-
-              <section className={cn(CARD, 'px-5 py-5 sm:px-6')}>
-                <h2 className={cn('flex items-center gap-2 text-[15px] font-extrabold', INK_NEG)}>
-                  <TrendingDown className="h-4 w-4" />
-                  Klientët me humbje
-                </h2>
-                {clientPnl.losers.length === 0 ? (
-                  <div className="mt-3"><EmptyState text="Asnjë klient në humbje. 👍" /></div>
-                ) : clientPnl.losers.map(w => (
-                  <div key={w.id} className="flex items-center gap-3.5 border-b border-[#eef2f8] py-3 last:border-0">
-                    <AlertTriangle className={cn('h-4 w-4 shrink-0', INK_NEG)} />
-                    <div className="min-w-0 flex-1">
-                      <p className={cn('truncate text-[13.5px] font-bold', INK_NAVY)}>{w.name}</p>
-                      <p className={cn('mt-px truncate text-[11.5px]', INK_MUTED)}>
-                        Ardhura {formatALL(w.revenue)} · Kosto {formatALL(w.cost)}
-                      </p>
-                    </div>
-                    <p className={cn('shrink-0 whitespace-nowrap text-[13.5px] font-bold', NUM, INK_NEG)}>
-                      {formatALL(w.margin)}
-                    </p>
-                  </div>
-                ))}
-                <p className={cn('mt-3.5 text-xs leading-relaxed', INK_MUTED)}>
-                  Fitimi këtu numëron vetëm paranë e arkëtuar realisht — faturat e papaguara janë
-                  llogari e arkëtueshme, jo fitim.
-                </p>
-              </section>
+          {/* ── TAB 3 · Clients — earned revenue − hours × cost rate − direct = gross; overhead by hours; cash apart ── */}
+          <TabsContent value="clients" className="mt-4 space-y-3.5">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-[14px] border border-[#e3e9f2] bg-white px-4 py-2.5">
+              <span className={cn('text-[11px] font-extrabold uppercase tracking-[.1em]', INK_MUTED)}>Periudha</span>
+              <Segmented
+                value={isPickedMonth(period) ? '' : period}
+                onChange={setPeriod}
+                options={[['month', 'Ky muaj'], ['year', 'Viti'], ['all', 'Gjithë']] as const}
+                size="sm"
+              />
+              <select
+                value={isPickedMonth(period) ? period : ''}
+                onChange={(e) => { if (e.target.value) setPeriod(e.target.value); }}
+                aria-label="Zgjidh një muaj të caktuar"
+                className={cn(
+                  'h-[30px] rounded-lg border px-2 text-xs font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2f6fe0]',
+                  isPickedMonth(period) ? 'border-[#2f6fe0] bg-[#e3ecfb] text-[#2258bb]' : 'border-[#e3e9f2] bg-white text-[#7286a3]',
+                )}
+              >
+                <option value="">Muaj i caktuar…</option>
+                {monthOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <p className={cn('ml-auto text-xs font-semibold', INK_MUTED)}>
+                {periodLabel} · orët nga <button type="button" className="underline" onClick={() => navigate('/app/timesheet')}>Orët</button>
+              </p>
             </div>
 
-            <div className={cn(CARD, 'mt-4 px-5 py-4 sm:px-6')}>
-              <Explain label="Pse numrat këtu nuk përputhen me tabin 'Fitimi'">
-                <p>
-                  Baza këtu: <strong>faturë e arkëtuar − kosto e projektit</strong> (punë + shpenzime), për
-                  gjithë historikun e klientit.
-                </p>
-                <p>
-                  Baza te "Fitimi": <strong>buxhet ose faturuar − overhead i alokuar</strong>, brenda
-                  periudhës që zgjodhe. Dy pyetje të ndryshme, dy përgjigje të ndryshme.
-                </p>
-              </Explain>
-            </div>
+            <ClientProfitabilityPanel
+              result={clientProfit}
+              periodLabel={periodLabel}
+              monthKey={periodMonthKey}
+              closeState={currentClose ? { locked: !!currentClose.locked, closedAt: parseDate(currentClose.closedAt) } : null}
+              canClose={!!(permissions.isAdmin || permissions.isOwner)}
+              onCloseMonth={() => setCloseOpen(true)}
+              onOpenCustomer={(id) => navigate(`/app/customers/${id}`)}
+            />
+            <MonthCloseDialog
+              open={closeOpen}
+              onClose={() => setCloseOpen(false)}
+              periodLabel={periodLabel}
+              checks={closeChecks}
+              onConfirm={confirmClose}
+            />
           </TabsContent>
 
           {/* ── TAB 4 · Everything that is broken or at risk ── */}

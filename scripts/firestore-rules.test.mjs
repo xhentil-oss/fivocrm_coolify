@@ -102,6 +102,17 @@ before(async () => {
     });
     await setDoc(doc(db, 'userProfiles', 'profVictim'), { userId: 'vstaff', displayName: 'V Staff', businessId: VICTIM_BIZ });
 
+    // ── seed for time entries + month close (55+) ──
+    await setDoc(doc(db, 'financeMonthCloses', `${MY_BIZ}_2026-01`), {
+      businessId: MY_BIZ, periodKey: '2026-01', locked: true, closedAt: new Date(), closedByUserId: 'alice',
+    });
+    await setDoc(doc(db, 'timeEntries', 'teJanBob'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, userId: 'bob', date: '2026-01-15', duration: 60, projectId: 'p1',
+    });
+    await setDoc(doc(db, 'timeEntries', 'teFebBob'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, userId: 'bob', date: '2026-02-10', duration: 60, projectId: 'p1',
+    });
+
     // ── seed for the shop module (24+) ──
     // A published product in MY tenant (what a portal client of bizMine may read),
     // a DRAFT one in the same tenant (which they must not), and a published one in
@@ -1962,4 +1973,66 @@ test('53b. expenseCategories: tenant taxonomy, not a shared one', async () => {
   // A create must stamp the writer's OWN business (useFirestore does it now).
   await assertSucceeds(setDoc(doc(alice, 'expenseCategories', 'catNew'), { businessId: MY_BIZ, teamId: MY_TEAM, label: 'Transport' }));
   await assertFails(setDoc(doc(alice, 'expenseCategories', 'catForged'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, label: 'Forged' }));
+});
+
+test('55a. timeEntries: I log my own hours; a plain member cannot log a colleague\'s; another tenant cannot log into mine', async () => {
+  const bob = staffOf('bob', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(setDoc(doc(bob, 'timeEntries', 'teBobNew'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, userId: 'bob', date: '2026-03-03', duration: 90, projectId: 'p1', source: 'manual',
+  }));
+  await assertFails(setDoc(doc(bob, 'timeEntries', 'teBobForAlice'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, userId: 'alice', date: '2026-03-03', duration: 90,
+  }));
+  // A manager may log on behalf of someone (the timesheet team view).
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(setDoc(doc(alice, 'timeEntries', 'teAliceForBob'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, userId: 'bob', date: '2026-03-04', duration: 30,
+  }));
+  await assertFails(setDoc(doc(outsider(), 'timeEntries', 'teMallory'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, userId: 'mallory', date: '2026-03-03', duration: 60,
+  }));
+  // Own row: edit + delete fine; a colleague's row (as a member): no.
+  await assertSucceeds(updateDoc(doc(bob, 'timeEntries', 'teFebBob'), { duration: 120 }));
+  await assertFails(updateDoc(doc(bob, 'timeEntries', 'teAliceForBob'), { userId: 'alice' }));
+});
+
+test('55b. a closed month freezes its hours — create, edit, delete and re-dating INTO it are all refused', async () => {
+  const bob = staffOf('bob', MY_BIZ, MY_TEAM, ['member']);
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(bob, 'timeEntries', 'teJanNew'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, userId: 'bob', date: '2026-01-20', duration: 60,
+  }));
+  await assertFails(updateDoc(doc(bob, 'timeEntries', 'teJanBob'), { duration: 600 }));
+  await assertFails(deleteDoc(doc(bob, 'timeEntries', 'teJanBob')));
+  // Even the admin: the lock is the lock.
+  await assertFails(updateDoc(doc(alice, 'timeEntries', 'teJanBob'), { duration: 600 }));
+  // Moving an open-month row into the closed month is refused too.
+  await assertFails(updateDoc(doc(bob, 'timeEntries', 'teFebBob'), { date: '2026-01-31' }));
+  // The open month stays open.
+  await assertSucceeds(updateDoc(doc(bob, 'timeEntries', 'teFebBob'), { duration: 45 }));
+});
+
+test('55c. financeMonthCloses: admin-only, id pinned to business + period, never deleted, never re-pointed', async () => {
+  const bob = staffOf('bob', MY_BIZ, MY_TEAM, ['member']);
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(getDoc(doc(bob, 'financeMonthCloses', `${MY_BIZ}_2026-01`)));
+  await assertFails(setDoc(doc(bob, 'financeMonthCloses', `${MY_BIZ}_2026-02`), {
+    businessId: MY_BIZ, periodKey: '2026-02', locked: true, closedAt: new Date(), closedByUserId: 'bob',
+  }));
+  await assertSucceeds(setDoc(doc(alice, 'financeMonthCloses', `${MY_BIZ}_2026-02`), {
+    businessId: MY_BIZ, periodKey: '2026-02', locked: true, closedAt: new Date(), closedByUserId: 'alice',
+  }));
+  await assertFails(setDoc(doc(alice, 'financeMonthCloses', 'wrong-id'), {
+    businessId: MY_BIZ, periodKey: '2026-03', locked: true, closedAt: new Date(), closedByUserId: 'alice',
+  }));
+  await assertFails(setDoc(doc(alice, 'financeMonthCloses', `${VICTIM_BIZ}_2026-02`), {
+    businessId: VICTIM_BIZ, periodKey: '2026-02', locked: true, closedAt: new Date(), closedByUserId: 'alice',
+  }));
+  // Re-opening is an update that keeps the period and the tenant.
+  await assertSucceeds(updateDoc(doc(alice, 'financeMonthCloses', `${MY_BIZ}_2026-02`), { locked: false, reopenedAt: new Date(), reopenedByUserId: 'alice' }));
+  await assertFails(updateDoc(doc(alice, 'financeMonthCloses', `${MY_BIZ}_2026-02`), { periodKey: '2026-03' }));
+  await assertFails(deleteDoc(doc(alice, 'financeMonthCloses', `${MY_BIZ}_2026-02`)));
+  await assertFails(getDoc(doc(outsider(), 'financeMonthCloses', `${MY_BIZ}_2026-01`)));
+  // Cron-only report ledger.
+  await assertFails(setDoc(doc(alice, 'financeReportRuns', `${MY_BIZ}_2026-01`), { businessId: MY_BIZ }));
 });

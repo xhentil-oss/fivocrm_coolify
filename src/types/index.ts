@@ -450,6 +450,19 @@ export interface EmailTemplate {
   createdByUserId?: string | null;
 }
 
+/** One line of a project's staffing budget — see `Project.plannedRoles`. */
+export interface ProjectPlannedRole {
+  /** Rate-card role label (`TeamMember.costRole`). */
+  role: string;
+  /** Optional named person; the role alone is enough to budget. */
+  userId?: string;
+  plannedHours: number;
+  /** Cost per hour SNAPSHOTTED when planned (ALL) — a later raise must not rewrite the quote. */
+  costRate: number;
+  /** Optional selling rate per hour (ALL), from the rate card. */
+  sellRate?: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -479,12 +492,46 @@ export interface Project {
   /** Expected/actual start date. Used by the next-month forecast to count a
    *  one-time project's budget as revenue in the month it kicks off. */
   startDate?: Date;
+  /** Planned end of the engagement — the other bound of straight-line revenue
+   *  recognition and of the staffing plan. */
+  endDate?: Date;
+  /**
+   * How `budget` becomes EARNED revenue over time (src/lib/finance/revenueRecognition.ts):
+   *   'monthly'       fee × months active (retainers; implied by billingType 'monthly')
+   *   'effort'        contract × hours to date / hours at completion (fixed-fee work
+   *                   with `plannedRoles` — percentage of completion)
+   *   'straight-line' contract × elapsed share of startDate..endDate
+   *   'on-completion' the whole fee in the month the project is Completed (legacy)
+   * Unset = the best method the project's data supports, in that order.
+   */
+  recognitionMethod?: 'monthly' | 'effort' | 'straight-line' | 'on-completion';
+  /**
+   * The staffing BUDGET decided before the sale: hours per role (optionally a
+   * named person) at the cost rate snapshotted when planned. Plan vs actual,
+   * EAC and the 70/85/100 % alarms compare logged hours against this.
+   */
+  plannedRoles?: ProjectPlannedRole[];
+  /** Σ plannedRoles.plannedHours (denormalised for queries and the cron). */
+  plannedHours?: number;
+  /** Σ plannedRoles hours × costRate, ALL. */
+  plannedLaborCost?: number;
+  /** Freelancers, production, travel… budgeted for the project, ALL. */
+  plannedDirectExpenses?: number;
+  /** Gross-margin target used to suggest the price (`suggestedPrice`). */
+  targetMarginPct?: number;
+  /** PM's latest estimate of hours still to go; feeds EAC and effort recognition. */
+  remainingHoursEstimate?: number;
+  remainingHoursUpdatedAt?: Date;
+  remainingHoursUpdatedByUserId?: string | null;
   spent?: number;
   responsibleUserId?: string;
   memberUserIds?: string[];
   guestUserIds?: string[];  // Users with read-only + comment access to this project
-  // Manual revenue split among staff. When empty/unset, 100% of the project value
-  // (budget) is credited to responsibleUserId. When set, percents should sum to 100.
+  /**
+   * @deprecated Never read. Staff are COST allocated by logged hours, not
+   * shareholders of a project's revenue (src/lib/finance/laborAllocation.ts). Kept
+   * only so old documents still type-check; the form no longer writes it.
+   */
   profitSplit?: Array<{ userId: string; percent: number }>;
   sourceQuestionnaireId?: string; // ServiceInquiry that this project was created from
   // Recurring project support
@@ -527,6 +574,10 @@ export interface Project {
   laborCost?: number;
   billableValue?: number;
   loggedHours?: number;
+  /** Logged hours per rate-card role (`costRole`), for plan-vs-actual at a glance. */
+  hoursByRole?: Record<string, number>;
+  /** Budget-consumed thresholds (70/85/100…) already announced — each fires once. */
+  budgetAlertsSent?: number[];
   /** Last rollup pass. Separate from `updatedAt` on purpose — the P&L period
    *  falls back to `updatedAt`, so the rollup must not bump it. */
   spendRolledUpAt?: Date;
@@ -747,6 +798,20 @@ export interface TeamMember {
   /** Optional billing rate per hour (ALL) — what the client is charged for this
    *  member's time. Used for realization (billable value vs logged cost). */
   hourlyBillRate?: number;
+  /**
+   * The rate-card role this person's hours are costed under ("Graphic Designer",
+   * "SMM", "Photographer", "PM"…). Free text; defaults to `position`. Groups hours
+   * and cost per role in project budgets and the client P&L
+   * (src/lib/finance/costRates.ts).
+   */
+  costRole?: string;
+  /**
+   * PRACTICAL client-facing hours per month for this person (not contracted
+   * hours): meetings, admin, leave and internal work are already out. The cost
+   * rate is loaded monthly cost / this figure. Unset = the tenant default
+   * (`financeSettings.defaultClientCapacityHours`, 120).
+   */
+  clientCapacityHours?: number;
   /**
    * The member's CRAFT — what they actually do: 'social', 'design', 'web',
    * 'photo-video', 'regjia', 'seo', 'ads', 'dev', 'content', 'sales'.
@@ -2312,8 +2377,43 @@ export interface TimeEntry {
   hourlyRate?: number;
   tags?: string[];
   pomodoroCount?: number;
+  /** Tenant key (stamped by useMutation / the server). */
+  businessId?: string;
+  /** Denormalised from the project at write time — the client this hour served. */
+  customerId?: string;
+  /** Rate-card role the hour is costed under, copied from the member at write time. */
+  costRole?: string;
+  /** Local calendar day (Europe/Tirane) `YYYY-MM-DD` — the timesheet grid key and
+   *  the month-lock key (`financeMonthCloses`). */
+  date?: string;
+  /** Where the entry came from. `daily-report` rows are keyed `${uid}_${taskId}_${date}`. */
+  source?: 'timer' | 'manual' | 'pomodoro' | 'daily-report';
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * `financeMonthCloses/{businessId}_{YYYY-MM}` — the month is CLOSED. Time entries
+ * dated inside a locked month can no longer be created, edited or deleted
+ * (firestore.rules), and the client-profitability snapshot taken at close is what
+ * the owner signed off on. Written by an Admin of the business only.
+ */
+export interface FinanceMonthClose {
+  id: string;
+  businessId: string;
+  /** `YYYY-MM`. */
+  periodKey: string;
+  locked: boolean;
+  closedAt: Date;
+  closedByUserId: string | null;
+  reopenedAt?: Date | null;
+  reopenedByUserId?: string | null;
+  /** Compact copy of the client table at close (see clientProfitability.ts `snapshotForClose`). */
+  snapshot?: Record<string, unknown>;
+  /** Pre-close checks that were still failing when the owner closed anyway. */
+  warnings?: string[];
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export interface TeamInvite {
