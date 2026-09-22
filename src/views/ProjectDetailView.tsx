@@ -1027,6 +1027,8 @@ const ProjectDetailView: React.FC = () => {
         createTask: (data) => taskMutation.create(data as any),
         updateTask: (id, data) => handleTaskUpdate(id, data),
         allTasks: allTasksFlat,
+        // An archived/cancelled project stops the series (no next cycle).
+        projects: project ? [project] : undefined,
         claimNextCycle: claimTaskNextCycle,
         releaseNextCycle: releaseTaskNextCycle,
       });

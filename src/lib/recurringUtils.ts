@@ -307,6 +307,9 @@ export type CompleteTaskOutcome =
   | { kind: 'completed' }
   | { kind: 'recurring-created' }
   | { kind: 'recurring-ended' }
+  /** The series is not over, but its PROJECT is (archived / cancelled): the task
+   *  closes and no next cycle is spawned. Restoring the project resumes it. */
+  | { kind: 'recurring-stopped'; reason: ProjectRecurrenceBlockReason }
   | { kind: 'error'; error: unknown };
 
 export interface CompleteTaskDeps {
@@ -314,6 +317,10 @@ export interface CompleteTaskDeps {
   updateTask: (id: string, data: Partial<Task>) => Promise<unknown>;
   /** All tasks in scope — used to enforce the dependency (blocker) guard. */
   allTasks?: Task[];
+  /** Projects in scope — a task whose project is archived/cancelled must not
+   *  spawn its next cycle (`projectRecurrenceBlockReason`). Omitted = unknown =
+   *  no block; every real caller has the list and passes it. */
+  projects?: ReadonlyArray<RecurrenceProject> | null;
   /** Atomically reserve the next cycle (see `claimTaskNextCycle`). Returns false
    *  when another completion already reserved it — the caller then skips
    *  creating a child. Omitted only in unit tests / non-Firestore callers. */
@@ -347,6 +354,18 @@ export async function completeTask(task: Task, deps: CompleteTaskDeps): Promise<
   // `task.nextCycleCreated` here is a possibly stale snapshot, so it is only a
   // cheap pre-filter — the authoritative check is the atomic claim below.
   if (task.isRecurring && task.recurringFrequency && !task.nextCycleCreated) {
+    // A task inside an archived (or cancelled) project closes WITHOUT a next
+    // cycle. The claim is deliberately NOT taken and `nextCycleCreated` stays
+    // false: the tip keeps its `nextRecurringDate`, so if the project is ever
+    // restored the cron backstop (which applies the same rule) resumes the
+    // series from the first future occurrence. Claiming it here would kill the
+    // series for good — the exact mistake `archiveProjectPatch` exists to avoid
+    // for recurring billing.
+    const projectBlock = projectRecurrenceBlockReason(task, deps.projects);
+    if (projectBlock) {
+      await deps.updateTask(task.id, { status: 'Done' });
+      return { kind: 'recurring-stopped', reason: projectBlock };
+    }
     // Reserve the cycle BEFORE creating anything. Losing the race means another
     // completion already spawned the child; we must not spawn a second one.
     if (deps.claimNextCycle) {
@@ -388,4 +407,41 @@ export function recurrenceHasEnded(task: Task): boolean {
   const sod = startOfRecurrenceDay;
   const next = buildNextRecurringTask(task);
   return sod(parse(next.startDate)) > sod(parse(task.recurringEndDate));
+}
+
+// ── Project status stops task recurrence ─────────────────────────────────────
+//
+// Archiving a project puts it on a shelf; its tasks stay (nothing is deleted)
+// and a recurring one keeps its `isRecurring: true`. Neither `completeTask` nor
+// the cron backstop used to look at the project at all, so completing such a
+// task — or the cron noticing a Done tip — spawned the next occurrence into an
+// archived project, forever. The rule now lives here and is MIRRORED in
+// api/cron/run.ts (`runRecurringTasks`) — keep the two in sync.
+//
+// The statuses are the billing engine's `TERMINAL_PROJECT_STATUSES`
+// (finance/recurringBilling.ts). That module imports from this one, so the list
+// is repeated here rather than imported; `recurringUtils.test.ts` pins the two
+// together.
+export const RECURRENCE_STOPPING_PROJECT_STATUSES: ReadonlyArray<string> = ['Archived', 'Cancelled'];
+
+/** The slice of a project the recurrence guard needs. */
+export type RecurrenceProject = { id: string; status?: string | null };
+
+export type ProjectRecurrenceBlockReason = 'project-archived' | 'project-cancelled';
+
+/**
+ * Why a task's project forbids the next cycle, or null when it does not.
+ * A task without a project, or whose project is not in the given list, is never
+ * blocked — an unknown project must not silently kill a series.
+ */
+export function projectRecurrenceBlockReason(
+  task: Pick<Task, 'projectId'>,
+  projects: ReadonlyArray<RecurrenceProject> | null | undefined,
+): ProjectRecurrenceBlockReason | null {
+  if (!task.projectId || !projects) return null;
+  const project = projects.find(p => p.id === task.projectId);
+  if (!project) return null;
+  if (project.status === 'Archived') return 'project-archived';
+  if (project.status === 'Cancelled') return 'project-cancelled';
+  return null;
 }

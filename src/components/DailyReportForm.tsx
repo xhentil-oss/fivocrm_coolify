@@ -341,6 +341,8 @@ const DailyReportForm: React.FC<DailyReportFormProps> = ({
               createTask: (data) => taskMutation.create(data as any),
               updateTask: (id, data) => taskMutation.update(id, data),
               allTasks: myTasks || [],
+              // An archived/cancelled project stops the series (no next cycle).
+              projects: projects || [],
               claimNextCycle: claimTaskNextCycle,
               releaseNextCycle: releaseTaskNextCycle,
             }).then(outcome => {

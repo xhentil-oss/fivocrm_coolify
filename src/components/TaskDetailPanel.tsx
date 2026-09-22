@@ -158,7 +158,7 @@ interface TaskDetailPanelProps {
   onToggleReaction?: (commentId: string, emoji: string) => void | Promise<any>;
   onUpdate: (id: string, data: any) => Promise<any>;
   onDelete: (id: string) => Promise<any>;
-  projects?: { id: string; name: string }[];
+  projects?: { id: string; name: string; status?: string }[];
   projectsLoading?: boolean;
   allTasks?: Task[];
   onSelectSubtask?: (subtask: Task) => void;
@@ -1173,6 +1173,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
         createTask: (data) => taskMutation.create(data as any),
         updateTask: (id, data) => onUpdate(id, data),
         allTasks,
+        // An archived/cancelled project stops the series (no next cycle).
+        projects,
         claimNextCycle: claimTaskNextCycle,
         releaseNextCycle: releaseTaskNextCycle,
       });
@@ -1192,6 +1194,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           return;
         case 'recurring-ended':
           toast({ title: '✅ Detyrë e kryer', description: 'Cikli i fundit i përsëritjes — nuk u krijua tjetër.' });
+          return;
+        case 'recurring-stopped':
+          toast({ title: '✅ Detyrë e kryer', description: outcome.reason === 'project-archived' ? 'Projekti është i arkivuar — përsëritja ndalon derisa të kthehet nga Arkiva.' : 'Projekti është anuluar — nuk u krijua cikël tjetër.' });
           return;
         case 'error':
           console.error('[Recurring] krijimi i ciklit tjetër dështoi:', outcome.error);

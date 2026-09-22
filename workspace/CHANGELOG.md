@@ -19,6 +19,11 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
+### [2026-09-22] — Detyrat periodike ndalojnë kur projekti arkivohet/anulohet
+- Bug: as `completeTask` (`src/lib/recurringUtils.ts`) as backstop-i `recurring-tasks` (`api/cron/run.ts`) s'e shihnin projektin — një detyrë periodike në projekt të arkivuar krijonte ciklin tjetër përgjithmonë
+- I ri `projectRecurrenceBlockReason()` + `RECURRENCE_STOPPING_PROJECT_STATUSES` (= `TERMINAL_PROJECT_STATUSES`, pin me test); outcome i ri `recurring-stopped` me toast; 5 thirrësit kalojnë `projects`; kalendari (TasksView ghosts) nuk projekton seri të arkivuara; cron-i numëron `projectTerminalSkipped`
+- Kontrolli bëhet PARA claim-it: tip-i mbetet Done me `nextCycleCreated:false`, që kthimi nga Arkiva ta rifillojë serinë (jo vrasje e përhershme)
+- Verifikim: 48/48 teste (5 të reja), typecheck 196 = baseline, `typecheck:api` 0, lint 0 errors
 ### [2026-09-18] — Financat/Fitimi: tabela shpjegon vetveten (`src/views/FinancesView.tsx`)
 - Kolona `Arkëtuar` → `Kosto` te "Fitimi sipas departamentit" + "…sipas përgjegjësit": në bazën default ("Paguar") arkëtimi ËSHTË kolona e të ardhurave nga vetë ndërtimi (`revenueAttribution` dhe `departmentPnl` lexojnë të njëjtat fatura të paguara), pra ishin dy kolona identike dhe kostoja askund — fitimi dukej se vinte nga hiçi. Arkëtimi tani është nënrresht nën emrin e rreshtit, i shfaqur vetëm kur ndryshon (baza "Buxhet"); CSV-ja i nxjerr të dyja
 - I ri `ProjectLines` + `PnlLine`: projektet pa të ardhura palosen në një rresht të vetëm ("18 projekte pa të ardhura") me arsyen përpara listës — kostoja e tyre është feta e pagës (`departmentPnl` e ndan pagën barazi mes projekteve të një personi), jo humbje e re. Hapet vetë kur s'ka asnjë projekt fitimprurës, përndryshe drill-down-i do të zbulonte vetëm përmbledhjen. Shkaku #1 është faturë e paguar pa `projectId` → lidhje te `/app/invoices?project=none`

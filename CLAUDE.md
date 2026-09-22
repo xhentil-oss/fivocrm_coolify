@@ -367,6 +367,14 @@ permission `canAccessHosting`.
   their leftover overdue tasks stop colouring "në rrezik" red.
 - Both entry points (the row button / detail-page menu AND the edit dialog's status
   select) go through the same two patches — that is the point of the module.
+- **An archived (or cancelled) project's recurring TASKS stop too.**
+  `projectRecurrenceBlockReason()` in `src/lib/recurringUtils.ts` runs BEFORE the
+  claim in `completeTask` (every caller passes `projects`) and is mirrored in the
+  `recurring-tasks` cron; the calendar ghosts skip such series. The tip is left
+  Done with `nextCycleCreated: false`, so restoring the project resumes the
+  series via the cron — claiming it would kill it for good, the same trap
+  `wasRecurringBeforeArchive` exists for. `RECURRENCE_STOPPING_PROJECT_STATUSES`
+  is pinned to the billing `TERMINAL_PROJECT_STATUSES` by a test.
 
 ### Recurring EXPENSES (same period-key law as project billing)
 

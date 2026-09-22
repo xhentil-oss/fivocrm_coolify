@@ -974,6 +974,23 @@ async function runRecurringTasks() {
     if (s && !isNaN(s.getTime())) existingOccurrences.add(occurrenceKey(t, s));
   }
 
+  // MIRRORS RECURRENCE_STOPPING_PROJECT_STATUSES in src/lib/recurringUtils.ts —
+  // keep in sync. A Done tip inside an archived/cancelled project is left as it
+  // is (nextCycleCreated stays false, nextRecurringDate kept): the series is
+  // paused, not killed, so restoring the project resumes it on the next run.
+  // Before this the backstop spawned occurrences into the archive forever.
+  const RECURRENCE_STOPPING_PROJECT_STATUSES = ['Archived', 'Cancelled'];
+  let projectTerminalSkipped = 0;
+  const projectCache = new Map<string, { businessId: string | null; status: string | null } | null>();
+  const loadProject = async (projectId: string) => {
+    if (!projectCache.has(projectId)) {
+      const p = await db.collection('projects').doc(projectId).get();
+      const data = p.exists ? p.data()! : null;
+      projectCache.set(projectId, data ? { businessId: data.businessId ?? null, status: data.status ?? null } : null);
+    }
+    return projectCache.get(projectId) ?? null;
+  };
+
   const bizCache = new Map<string, string | null>();
   for (const doc of tasksSnap.docs) {
     const task = doc.data();
@@ -984,11 +1001,7 @@ async function runRecurringTasks() {
     if (!task.businessId) {
       let bid: string | null = null;
       if (task.projectId) {
-        if (!bizCache.has('p:' + task.projectId)) {
-          const p = await db.collection('projects').doc(task.projectId).get();
-          bizCache.set('p:' + task.projectId, p.exists ? (p.data()!.businessId ?? null) : null);
-        }
-        bid = bizCache.get('p:' + task.projectId) ?? null;
+        bid = (await loadProject(task.projectId))?.businessId ?? null;
       }
       if (!bid && task.teamId) {
         if (!bizCache.has('t:' + task.teamId)) {
@@ -1007,6 +1020,13 @@ async function runRecurringTasks() {
     if (task.nextCycleCreated) continue;
     // Skip if the task hasn't been completed yet — no pile-up of duplicates
     if (task.status !== 'Done') continue;
+    // MIRRORS projectRecurrenceBlockReason (src/lib/recurringUtils.ts): an
+    // archived/cancelled project spawns no next cycle. Checked only on Done
+    // tips so a live series costs no project read.
+    if (task.projectId) {
+      const project = await loadProject(task.projectId);
+      if (project?.status && RECURRENCE_STOPPING_PROJECT_STATUSES.includes(project.status)) { projectTerminalSkipped++; continue; }
+    }
     const nextRecurringDate: Date = task.nextRecurringDate?.toDate ? task.nextRecurringDate.toDate() : new Date(task.nextRecurringDate);
     if (isNaN(nextRecurringDate.getTime()) || nextRecurringDate > now) continue;
     // Tolerate a missing date anchor the way the UI does (parseDate falls back):
@@ -1083,7 +1103,8 @@ async function runRecurringTasks() {
   }
 
   await settleAll(ops, 'recurring-tasks');
-  return { created, skippedDuplicate, toggledOffSkipped };
+  if (projectTerminalSkipped) console.log(`[recurring-tasks] ${projectTerminalSkipped} tip(s) inside archived/cancelled projects — no cycle spawned`);
+  return { created, skippedDuplicate, toggledOffSkipped, projectTerminalSkipped };
 }
 
 // ── helpers for recurring-invoices ───────────────────────────────────────────

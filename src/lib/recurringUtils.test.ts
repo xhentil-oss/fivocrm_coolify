@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { buildNextRecurringTask, completeTask, recurrenceHasEnded, addFrequency, startOfRecurrenceDay } from './recurringUtils';
+import { buildNextRecurringTask, completeTask, recurrenceHasEnded, addFrequency, startOfRecurrenceDay, projectRecurrenceBlockReason, RECURRENCE_STOPPING_PROJECT_STATUSES } from './recurringUtils';
+import { TERMINAL_PROJECT_STATUSES } from './finance/recurringBilling';
 import type { Task } from '../types';
 
 const baseTask = (over: Partial<Task> = {}): Task => ({
@@ -143,6 +144,72 @@ describe('completeTask — no duplicate cycle', () => {
     const outcome = await completeTask(baseTask({ dependsOn: ['b1'] }), { ...d, allTasks: [blocker] } as any);
     expect(outcome.kind).toBe('blocked');
     expect(d.created).toHaveLength(0);
+  });
+});
+
+// Archiving a project keeps its tasks; a recurring one used to keep spawning
+// cycles into the archive because nothing looked at the project. The guard runs
+// BEFORE the claim so the tip is left re-armable: restoring the project makes
+// the cron backstop resume the series.
+describe('completeTask — archived / cancelled project stops the series', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-08-09T12:00:00Z')); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const harness = () => {
+    const created: any[] = [];
+    const updates: any[] = [];
+    let claims = 0;
+    return {
+      created, updates, claims: () => claims,
+      createTask: async (d: any) => { created.push(d); return {}; },
+      updateTask: async (id: string, d: any) => { updates.push({ id, d }); return {}; },
+      claimNextCycle: async () => { claims++; return true; },
+      releaseNextCycle: async () => {},
+    };
+  };
+
+  it('closes the task, spawns nothing and does NOT claim the cycle for an archived project', async () => {
+    const h = harness();
+    const outcome = await completeTask(baseTask({ projectId: 'p1' }), {
+      ...h, projects: [{ id: 'p1', status: 'Archived' }],
+    } as any);
+    expect(outcome).toEqual({ kind: 'recurring-stopped', reason: 'project-archived' });
+    expect(h.created).toHaveLength(0);
+    expect(h.claims()).toBe(0);
+    expect(h.updates).toEqual([{ id: 't1', d: { status: 'Done' } }]);
+    // nextCycleCreated must stay false so a restored project can resume.
+    expect(h.updates[0].d).not.toHaveProperty('nextCycleCreated');
+  });
+
+  it('a cancelled project stops it too, with its own reason', async () => {
+    const h = harness();
+    const outcome = await completeTask(baseTask({ projectId: 'p1' }), {
+      ...h, projects: [{ id: 'p1', status: 'Cancelled' }],
+    } as any);
+    expect(outcome).toEqual({ kind: 'recurring-stopped', reason: 'project-cancelled' });
+    expect(h.created).toHaveLength(0);
+  });
+
+  it('a live project still spawns the next cycle', async () => {
+    const h = harness();
+    const outcome = await completeTask(baseTask({ projectId: 'p1' }), {
+      ...h, projects: [{ id: 'p1', status: 'Completed' }],
+    } as any);
+    expect(outcome.kind).toBe('recurring-created');
+    expect(h.created).toHaveLength(1);
+  });
+
+  it('never blocks on an unknown project or a task without one (fail open)', async () => {
+    expect(projectRecurrenceBlockReason({ projectId: 'ghost' }, [{ id: 'p1', status: 'Archived' }])).toBeNull();
+    expect(projectRecurrenceBlockReason({ projectId: undefined }, [{ id: 'p1', status: 'Archived' }])).toBeNull();
+    expect(projectRecurrenceBlockReason({ projectId: 'p1' }, undefined)).toBeNull();
+    const h = harness();
+    const outcome = await completeTask(baseTask({ projectId: 'ghost' }), { ...h, projects: [] } as any);
+    expect(outcome.kind).toBe('recurring-created');
+  });
+
+  it('stops for exactly the statuses the billing engine calls terminal', () => {
+    expect([...RECURRENCE_STOPPING_PROJECT_STATUSES].sort()).toEqual([...TERMINAL_PROJECT_STATUSES].sort());
   });
 });
 

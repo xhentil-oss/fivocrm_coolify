@@ -469,6 +469,8 @@ const StaffDashboard: React.FC = () => {
       createTask: (data) => taskMutation.create(data as any),
       updateTask: (id, data) => taskMutation.update(id, data),
       allTasks: rawTasks || [],
+      // An archived/cancelled project stops the series (no next cycle).
+      projects: rawProjects || [],
       claimNextCycle: claimTaskNextCycle,
       releaseNextCycle: releaseTaskNextCycle,
     });

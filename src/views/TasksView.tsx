@@ -4,7 +4,7 @@ import { DndContext, DragOverlay, closestCorners, MouseSensor, TouchSensor, useS
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { getTaskStatusLabel } from '../lib/statusColors';
-import { completeTask, addFrequency, startOfRecurrenceDay, hasLiveSeriesSibling } from '../lib/recurringUtils';
+import { completeTask, addFrequency, startOfRecurrenceDay, hasLiveSeriesSibling, projectRecurrenceBlockReason } from '../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
@@ -720,6 +720,8 @@ const TasksView: React.FC = () => {
       // filter narrows Member/Viewer to their own tasks, so a blocker assigned
       // to a colleague would look "missing" — i.e. closed — to the guard.
       allTasks: rawTasks || [],
+      // An archived/cancelled project stops the series (no next cycle).
+      projects: projects || [],
       claimNextCycle: claimTaskNextCycle,
       releaseNextCycle: releaseTaskNextCycle,
     });
@@ -733,6 +735,8 @@ const TasksView: React.FC = () => {
         toast({ title: '✅ Detyrë e kryer + cikli i ri!', description: `"${task.title}" u rigjenerua automatikisht.` });
       } else if (outcome.kind === 'recurring-ended') {
         toast({ title: '✅ Detyrë e kryer', description: 'Cikli i fundit i përsëritjes — nuk u krijua tjetër.' });
+      } else if (outcome.kind === 'recurring-stopped') {
+        toast({ title: '✅ Detyrë e kryer', description: outcome.reason === 'project-archived' ? 'Projekti është i arkivuar — përsëritja ndalon derisa të kthehet nga Arkiva.' : 'Projekti është anuluar — nuk u krijua cikël tjetër.' });
       } else {
         toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
       }
@@ -740,7 +744,7 @@ const TasksView: React.FC = () => {
     logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
     return true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawTasks, taskMutation, user]);
+  }, [rawTasks, projects, taskMutation, user]);
 
   // Re-opening a Done task: a recurring tip gets its spawn flag back ONLY when
   // the series has no live occurrence left (child deleted by mistake → revive).
@@ -1659,7 +1663,7 @@ const TasksView: React.FC = () => {
           )}
 
           {viewMode === 'calendar' && (
-            <CalendarView tasks={tasks} onTaskClick={setSelectedTask} />
+            <CalendarView tasks={tasks} projects={projects} onTaskClick={setSelectedTask} />
           )}
         </div>
 
@@ -1759,8 +1763,11 @@ const TasksView: React.FC = () => {
 // Calendar View Component
 const CalendarView: React.FC<{
   tasks: Task[];
+  /** For the recurrence ghosts: a series inside an archived/cancelled project
+   *  projects nothing (the engine spawns nothing there). */
+  projects?: Pick<Project, 'id' | 'status'>[] | null;
   onTaskClick: (task: Task) => void;
-}> = ({ tasks, onTaskClick }) => {
+}> = ({ tasks, projects, onTaskClick }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
 
   const daysInMonth = new Date(
@@ -1812,6 +1819,9 @@ const CalendarView: React.FC<{
     tasks.forEach((task) => {
       const t = task as any;
       if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true) return;
+      // The engine spawns nothing inside an archived/cancelled project, so the
+      // calendar must not promise occurrences that will never exist.
+      if (projectRecurrenceBlockReason(task, projects)) return;
       const anchor = task.endDate || task.startDate;
       if (!anchor) return;
       let occ = new Date(anchor);
@@ -1847,7 +1857,7 @@ const CalendarView: React.FC<{
       }
     });
     return map;
-  }, [tasks, currentDate]);
+  }, [tasks, projects, currentDate]);
 
   const days = [];
   for (let i = 0; i < firstDay; i++) {
