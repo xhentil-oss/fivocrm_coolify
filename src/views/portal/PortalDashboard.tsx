@@ -241,11 +241,28 @@ const PortalDashboard: React.FC = () => {
     const seen = new Set<string>();
     return all.filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; });
   }, [projectsByCustomer, projectsByMember]);
-  const { data: allTasks } = useCollection<Task>('tasks', {
+  const { data: allTasksByCustomer } = useCollection<Task>('tasks', {
     skip: !customerId,
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });
+  // Tasks of the projects this user was INVITED to (memberUserIds) — they carry
+  // another customer's id, so the query above never returned them and every such
+  // project read 0/0. Provable per doc by isPortalProjectMember; `in` takes ≤ 30.
+  const memberProjectIds = React.useMemo(
+    () => (projectsByMember || []).filter(p => !customerId || p.customerId !== customerId).map(p => p.id).slice(0, 30),
+    [projectsByMember, customerId],
+  );
+  const { data: allTasksByMembership } = useCollection<Task>('tasks', {
+    skip: memberProjectIds.length === 0,
+    where: [{ field: 'projectId', operator: 'in', value: memberProjectIds.length ? memberProjectIds : ['__none__'] }],
+    skipTeamFilter: true,
+  });
+  const allTasks = React.useMemo(() => {
+    const all = [...(allTasksByCustomer || []), ...(allTasksByMembership || [])];
+    const seen = new Set<string>();
+    return all.filter(t => { if (seen.has(t.id)) return false; seen.add(t.id); return true; });
+  }, [allTasksByCustomer, allTasksByMembership]);
 
   const customerProjects = React.useMemo(() => {
     if (!rawProjects) return [];

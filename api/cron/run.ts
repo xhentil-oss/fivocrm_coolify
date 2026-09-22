@@ -1,4 +1,4 @@
-import { safeSenderAddress } from '../_emailIdentity.js';
+import { safeSenderAddress, senderHeader } from '../_emailIdentity.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 import { buildInvoiceEmail, publicInvoicePayUrl } from '../_invoiceEmail.js';
@@ -349,13 +349,15 @@ function addFrequency(date: Date, frequency: string, dayOfWeek?: number, dayOfMo
       if (diff !== 0) d.setUTCDate(d.getUTCDate() + ((diff + 7) % 7));
     }
   } else if (frequency === 'monthly') {
-    d.setUTCMonth(d.getUTCMonth() + step);
-    if (dayOfMonth !== undefined && dayOfMonth !== null) {
-      const maxDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-      d.setUTCDate(Math.min(dayOfMonth, maxDay));
-    }
+    // NEVER `setUTCMonth(+step)`: it overflows BEFORE any clamp (31 Jan → "31 Feb"
+    // = 3 Mar → clamped to 31 MAR), so every short month vanished from a
+    // month-end series. Zone-clamped, anchor day kept — same as the client.
+    return addZonedMonthsClamped(date, step, dayOfMonth ?? undefined);
   } else if (frequency === 'yearly') {
-    d.setUTCFullYear(d.getUTCFullYear() + step);
+    // 29 Feb + 1 year is 28 Feb, not 1 Mar.
+    const p = zonedParts(date);
+    const lastDay = daysInZonedMonth(p.year + step, p.month);
+    return zonedDate(p.year + step, p.month, Math.min(p.day, lastDay), p.hours, p.minutes, p.seconds, p.ms);
   }
   return fromRecurrenceZone(d);
 }
@@ -398,16 +400,58 @@ async function tenantScopedDocs(
   return out;
 }
 
+/**
+ * Tenants the cron must leave alone. `tenantActive()` in the rules protects
+ * nothing the Admin SDK does, so every job that notifies or writes for a tenant
+ * has to exclude `businesses.status == 'suspended'` itself (finance jobs already
+ * did; the task/project jobs never had the check).
+ */
+async function loadSuspendedBusinessIds(): Promise<Set<string>> {
+  const out = new Set<string>();
+  try {
+    const snap = await db.collection('businesses').where('status', '==', 'suspended').get();
+    snap.docs.forEach(d => out.add(d.id));
+  } catch (err) {
+    console.warn('[cron] suspended-tenant lookup failed — proceeding without the exclusion:', err);
+  }
+  return out;
+}
+
+/** `projects/{id}` → { status, businessId } with a per-run cache; null when missing. */
+function projectStatusCache() {
+  const cache = new Map<string, { status: string | null; businessId: string | null } | null>();
+  return async (projectId: string) => {
+    if (!cache.has(projectId)) {
+      const p = await db.collection('projects').doc(projectId).get();
+      const data = p.exists ? p.data()! : null;
+      cache.set(projectId, data ? { status: data.status ?? null, businessId: data.businessId ?? null } : null);
+    }
+    return cache.get(projectId) ?? null;
+  };
+}
+/** Project statuses under which a task neither recurs nor alerts (mirrors
+ *  RECURRENCE_STOPPING_PROJECT_STATUSES in src/lib/recurringUtils.ts). */
+const TASK_SILENT_PROJECT_STATUSES = ['Archived', 'Cancelled'];
+
 // ── JOB: task-deadline-alerts ─────────────────────────────────────────────────
-async function runTaskDeadlineAlerts() {
+// `opts.businessId` = a manual run from one tenant's Cilësimet: only that
+// tenant's tasks are alerted. Unscoped, one Admin's "Ekzekuto tani" emailed
+// EVERY tenant's staff — the same law `recurring-invoices` already follows.
+async function runTaskDeadlineAlerts(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const transporter = makeTransporter();
   const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const alertsEnabledFor = cronToggleReader('task_alerts');
+  const suspended = await loadSuspendedBusinessIds();
+  const projectOf = projectStatusCache();
   let toggledOffSkipped = 0;
+  let suspendedSkipped = 0;
+  let projectSilentSkipped = 0;
+  let noRecipient = 0;
   const now = new Date();
-  const alertThreshold = new Date(now);
-  alertThreshold.setDate(alertThreshold.getDate() + 2);
-  alertThreshold.setHours(23, 59, 59, 999);
+  // "Within 2 days" ends at the end of the SECOND DAY in the business zone —
+  // `setHours(23,59,59)` on a UTC process ended the window at 01:59 Tirane.
+  const alertThreshold = endOfBillingDay(new Date(now.getTime() + 2 * 86_400_000));
 
   // Fetch tasks not yet fully alerted. We use TWO stage flags so a task that was
   // alerted as "due soon" still gets a fresh "overdue" alert once it passes its
@@ -432,10 +476,18 @@ async function runTaskDeadlineAlerts() {
 
   for (const doc of tasksSnap.docs) {
     const task = doc.data();
+    if (scopeId && task.businessId !== scopeId) continue;
+    if (task.businessId && suspended.has(task.businessId)) { suspendedSkipped++; continue; }
     if (!(await alertsEnabledFor(task.teamId))) { toggledOffSkipped++; continue; }
     if (!task.endDate || task.status === 'Done') continue;
+    // A project the owner shelved (archived) or cancelled must not keep nagging
+    // about its tasks — same rule the recurrence engine applies.
+    if (task.projectId) {
+      const project = await projectOf(task.projectId);
+      if (project?.status && TASK_SILENT_PROJECT_STATUSES.includes(project.status)) { projectSilentSkipped++; continue; }
+    }
     const recipientId = task.assignedToUserId || task.createdByUserId;
-    if (!recipientId) continue;
+    if (!recipientId) { noRecipient++; continue; }
     const endDate: Date = task.endDate?.toDate ? task.endDate.toDate() : new Date(task.endDate);
     if (isNaN(endDate.getTime())) continue;
 
@@ -456,11 +508,15 @@ async function runTaskDeadlineAlerts() {
     // returned ≥1 for any future time-of-day, so "skadon sot" was unreachable
     // (a task due later today always said "për 1 ditë").
     const dayDiff = Math.round((startOfRecurrenceDay(endDate) - startOfRecurrenceDay(now)) / 86400000);
-    const overdueByDays = Math.max(1, -dayDiff);
+    // A task due at 09:00 is overdue by 10:00 the same day — "prej 1 ditë" was a
+    // lie for it (`Math.max(1, …)`); it has passed its deadline TODAY.
+    const overdueByDays = Math.max(0, -dayDiff);
     const isOverdueAlert = stage === 'overdue';
     const notifTitle = isOverdueAlert ? `⚠️ Detyrë e skaduara: ${task.title}` : `⏰ Afati afrohet: ${task.title}`;
     const notifMessage = isOverdueAlert
-      ? `Detyra "${task.title}" ka kaluar afatin prej ${overdueByDays} ditë.`
+      ? (overdueByDays === 0
+          ? `Detyra "${task.title}" e ka kaluar afatin sot.`
+          : `Detyra "${task.title}" ka kaluar afatin prej ${overdueByDays} ditë.`)
       : `Detyra "${task.title}" skadon ${dayDiff <= 0 ? 'sot' : `për ${dayDiff} ditë`}.`;
 
     // Doc + push (every registered device), through the shared preference gates.
@@ -492,7 +548,7 @@ async function runTaskDeadlineAlerts() {
       try {
         const userRecord = await admin.auth().getUser(recipientId);
         if (userRecord.email) {
-          ops.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: userRecord.email, subject: notifTitle, html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;"><h2 style="color:${isOverdueAlert ? '#ef4444' : '#f59e0b'}">${notifTitle}</h2><p>${notifMessage}</p><p style="color:#9ca3af;font-size:12px">FivoCRM – Njoftime automatike</p></div>` }));
+          ops.push(transporter.sendMail({ from: senderHeader('FivoCRM', smtpUser), to: userRecord.email, subject: notifTitle, html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;"><h2 style="color:${isOverdueAlert ? '#ef4444' : '#f59e0b'}">${notifTitle}</h2><p>${notifMessage}</p><p style="color:#9ca3af;font-size:12px">FivoCRM – Njoftime automatike</p></div>` }));
         }
       } catch { /* skip */ }
     }
@@ -500,7 +556,8 @@ async function runTaskDeadlineAlerts() {
   }
 
   await settleAll(ops, 'task-deadline-alerts');
-  return { notified, toggledOffSkipped };
+  if (noRecipient) console.warn(`[task-deadline-alerts] ${noRecipient} task(s) with neither assignee nor creator — nobody to alert`);
+  return { notified, toggledOffSkipped, suspendedSkipped, projectSilentSkipped, noRecipient, scoped: !!scopeId };
 }
 
 // ── JOB: task-reminders ("Më kujto") ─────────────────────────────────────────
@@ -541,8 +598,11 @@ async function runTaskReminders() {
   const ops: Promise<any>[] = [];
   const sqMonths = ['jan', 'shk', 'mar', 'pri', 'maj', 'qer', 'kor', 'gus', 'sht', 'tet', 'nën', 'dhj'];
 
+  const suspended = await loadSuspendedBusinessIds();
+  let suspendedSkipped = 0;
   for (const doc of snap.docs) {
     const task = doc.data();
+    if (task.businessId && suspended.has(task.businessId)) { suspendedSkipped++; continue; }
     if (!(await remindersEnabledFor(task.teamId))) { toggledOffSkipped++; continue; }
     const reason = taskReminderBlockReason(task, now);
     if (reason) { blocked[reason] = (blocked[reason] || 0) + 1; continue; }
@@ -591,7 +651,7 @@ async function runTaskReminders() {
   }
 
   await settleAll(ops, 'task-reminders');
-  return { scanned: snap.size, sent, blocked, toggledOffSkipped };
+  return { scanned: snap.size, sent, blocked, toggledOffSkipped, suspendedSkipped };
 }
 
 // ── JOB: invoice-reminders ───────────────────────────────────────────────────
@@ -964,15 +1024,48 @@ async function runRecurringTasks() {
   // faithfully spawn one child EACH, every cycle, forever — that is how a single
   // double-click in July turned into a permanently doubled weekly series.
   // The set also absorbs children created earlier in this same run.
-  const occurrenceKey = (t: any, start: Date) =>
-    [t.businessId || '-', (t.title || '').toLowerCase().replace(/\s+/g, ' ').trim(),
-     t.assignedToUserId || '-', t.projectId || '-', start.toISOString().slice(0, 10)].join('||');
+  // MIRRORS `seriesIdOf` / `sameSeries` in src/lib/recurringUtils.ts. A row
+  // that carries `seriesId` is identified by it; the legacy title|assignee|
+  // project|day key is kept ONLY for rows that predate the field — two distinct
+  // series with the same title ("Postim Instagram" 09:00 and 15:00, same
+  // person) used to collide on it and the second parent was closed with no
+  // child and no reason.
+  const seriesIdOf = (t: any, id: string) => t.seriesId || id;
+  const occurrenceKey = (t: any, id: string, start: Date) =>
+    t.seriesId
+      ? ['s', t.seriesId, start.toISOString().slice(0, 10)].join('||')
+      : [t.businessId || '-', (t.title || '').toLowerCase().replace(/\s+/g, ' ').trim(),
+         t.assignedToUserId || '-', t.projectId || '-', start.toISOString().slice(0, 10)].join('||');
   const existingOccurrences = new Set<string>();
+  const allRecurring: Array<{ id: string; data: any }> = [];
   for (const d of tasksSnap.docs) {
     const t = d.data();
+    allRecurring.push({ id: d.id, data: t });
     const s: Date | null = t.startDate?.toDate ? t.startDate.toDate() : (t.startDate ? new Date(t.startDate) : null);
-    if (s && !isNaN(s.getTime())) existingOccurrences.add(occurrenceKey(t, s));
+    if (s && !isNaN(s.getTime())) existingOccurrences.add(occurrenceKey(t, d.id, s));
   }
+  // MIRRORS `remapDependsOnForNextCycle` (client): a Done recurring blocker is
+  // re-pointed to its live sibling, a Done one-off blocker is dropped, anything
+  // unknown/open is kept. This set holds recurring rows only, so a one-off
+  // blocker is "unknown" here and kept — harmless (Done ids never block).
+  const sameSeries = (a: { id: string; data: any }, b: { id: string; data: any }) => {
+    if (a.data.seriesId || b.data.seriesId) return seriesIdOf(a.data, a.id) === seriesIdOf(b.data, b.id);
+    return a.data.title === b.data.title &&
+      (a.data.assignedToUserId ?? '') === (b.data.assignedToUserId ?? '') &&
+      (a.data.projectId ?? '') === (b.data.projectId ?? '');
+  };
+  const remapDependsOn = (deps: string[] | null | undefined): string[] | null => {
+    if (!deps || deps.length === 0) return deps ?? null;
+    const out: string[] = [];
+    for (const id of deps) {
+      const dep = allRecurring.find(r => r.id === id);
+      if (!dep || dep.data.status !== 'Done') { out.push(id); continue; }
+      const live = allRecurring.find(r => r.id !== dep.id && r.data.status !== 'Done' && sameSeries(dep, r));
+      if (live && !out.includes(live.id)) out.push(live.id);
+    }
+    return out;
+  };
+  let skippedNoDates = 0;
 
   // MIRRORS RECURRENCE_STOPPING_PROJECT_STATUSES in src/lib/recurringUtils.ts —
   // keep in sync. A Done tip inside an archived/cancelled project is left as it
@@ -1015,7 +1108,7 @@ async function runRecurringTasks() {
         ops.push(doc.ref.update({ businessId: bid, updatedAt: admin.firestore.Timestamp.now() }));
       }
     }
-    if (!task.nextRecurringDate || !task.recurringFrequency) continue;
+    if (!task.nextRecurringDate || !task.recurringFrequency) { if (task.status === 'Done' && !task.nextCycleCreated) skippedNoDates++; continue; }
     // Skip if frontend already created the next cycle ("after completion" model)
     if (task.nextCycleCreated) continue;
     // Skip if the task hasn't been completed yet — no pile-up of duplicates
@@ -1032,7 +1125,7 @@ async function runRecurringTasks() {
     // Tolerate a missing date anchor the way the UI does (parseDate falls back):
     // a tip with only one of startDate/endDate used to be skipped here forever —
     // a silently dead series the user could never see or fix.
-    if (!task.startDate && !task.endDate) continue;
+    if (!task.startDate && !task.endDate) { skippedNoDates++; continue; }
     const rawStart: Date = task.startDate?.toDate ? task.startDate.toDate() : new Date(task.startDate ?? NaN);
     const rawEnd: Date = task.endDate?.toDate ? task.endDate.toDate() : new Date(task.endDate ?? NaN);
     const startDate: Date = !isNaN(rawStart.getTime()) ? rawStart : rawEnd;
@@ -1075,9 +1168,11 @@ async function runRecurringTasks() {
 
     // Someone else (the UI, or a duplicated sibling parent) already produced this
     // exact occurrence — close this parent out instead of doubling the series.
-    const key = occurrenceKey(task, newStart);
+    const key = occurrenceKey(task, doc.id, newStart);
     if (existingOccurrences.has(key)) {
-      ops.push(doc.ref.update({ nextCycleCreated: true, updatedAt: admin.firestore.Timestamp.now() }));
+      // Named, visible reason (never a silent close): the row says why it has
+      // no child of its own.
+      ops.push(doc.ref.update({ nextCycleCreated: true, recurringSkippedReason: 'duplicate-occurrence', updatedAt: admin.firestore.Timestamp.now() }));
       skippedDuplicate++;
       continue;
     }
@@ -1089,7 +1184,7 @@ async function runRecurringTasks() {
     // child used to drop labels/section/collaborators/estimate/blockers, so a
     // series degraded (lost its board column, capacity estimate, 🔒 deps)
     // whenever THIS engine spawned the cycle instead of the UI.
-    ops.push(newTaskRef.set({ title: task.title, description: task.description ?? null, status: 'Todo', priority: task.priority ?? null, projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null, labels: task.labels ?? null, section: task.section ?? null, collaboratorIds: task.collaboratorIds ?? null, estimatedHours: task.estimatedHours ?? null, dependsOn: task.dependsOn ?? null, startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd), isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1, recurringDayOfWeek: task.recurringDayOfWeek ?? null, recurringDayOfMonth: task.recurringDayOfMonth ?? null, recurringDaysOfWeek: task.recurringDaysOfWeek ?? null, recurringEndDate: recEnd ? admin.firestore.Timestamp.fromDate(recEnd) : null, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), nextCycleCreated: false, dueNotificationSent: false, ...(task.reminderOffsetMinutes !== null && task.reminderOffsetMinutes !== undefined ? { reminderOffsetMinutes: task.reminderOffsetMinutes, reminderAt: admin.firestore.Timestamp.fromDate(new Date(newEnd.getTime() - Math.max(0, Number(task.reminderOffsetMinutes)) * 60_000)), reminderSentAt: null } : {}), parentTaskId: task.parentTaskId ?? null, createdByUserId: task.createdByUserId ?? null, teamId: task.teamId ?? null, businessId: task.businessId ?? null, customerId: task.customerId ?? null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
+    ops.push(newTaskRef.set({ title: task.title, description: task.description ?? null, status: 'Todo', priority: task.priority ?? null, projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null, labels: task.labels ?? null, section: task.section ?? null, collaboratorIds: task.collaboratorIds ?? null, estimatedHours: task.estimatedHours ?? null, dependsOn: remapDependsOn(task.dependsOn), seriesId: seriesIdOf(task, doc.id), startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd), isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1, recurringDayOfWeek: task.recurringDayOfWeek ?? null, recurringDayOfMonth: task.recurringDayOfMonth ?? null, recurringDaysOfWeek: task.recurringDaysOfWeek ?? null, recurringEndDate: recEnd ? admin.firestore.Timestamp.fromDate(recEnd) : null, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), nextCycleCreated: false, dueNotificationSent: false, ...(task.reminderOffsetMinutes !== null && task.reminderOffsetMinutes !== undefined ? { reminderOffsetMinutes: task.reminderOffsetMinutes, reminderAt: admin.firestore.Timestamp.fromDate(new Date(newEnd.getTime() - Math.max(0, Number(task.reminderOffsetMinutes)) * 60_000)), reminderSentAt: null } : {}), parentTaskId: task.parentTaskId ?? null, createdByUserId: task.createdByUserId ?? null, teamId: task.teamId ?? null, businessId: task.businessId ?? null, customerId: task.customerId ?? null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
     ops.push(doc.ref.update({ nextCycleCreated: true, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), updatedAt: admin.firestore.Timestamp.now() }));
     const notifRecipient = task.assignedToUserId || task.createdByUserId;
     if (notifRecipient) {
@@ -1104,7 +1199,8 @@ async function runRecurringTasks() {
 
   await settleAll(ops, 'recurring-tasks');
   if (projectTerminalSkipped) console.log(`[recurring-tasks] ${projectTerminalSkipped} tip(s) inside archived/cancelled projects — no cycle spawned`);
-  return { created, skippedDuplicate, toggledOffSkipped, projectTerminalSkipped };
+  if (skippedNoDates) console.warn(`[recurring-tasks] ${skippedNoDates} Done tip(s) skipped: missing nextRecurringDate/frequency or both date anchors`);
+  return { created, skippedDuplicate, toggledOffSkipped, projectTerminalSkipped, skippedNoDates };
 }
 
 // ── helpers for recurring-invoices ───────────────────────────────────────────
@@ -1885,10 +1981,12 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
 }
 
 // ── JOB: project-completion-reminder ─────────────────────────────────────────
-async function runProjectCompletionReminder() {
+async function runProjectCompletionReminder(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const transporter = makeTransporter();
   const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const now = new Date();
+  const suspended = await loadSuspendedBusinessIds();
 
   const projectsSnap = await db.collection('projects').where('status', 'in', ['Active', 'Planning', 'On Hold']).get();
   if (projectsSnap.empty) return { notified: 0 };
@@ -1900,6 +1998,8 @@ async function runProjectCompletionReminder() {
   for (const doc of projectsSnap.docs) {
     const p = doc.data();
     if (!p.responsibleUserId) continue;
+    if (scopeId && p.businessId !== scopeId) continue;
+    if (p.businessId && suspended.has(p.businessId)) continue;
     const existing = userProjectMap.get(p.responsibleUserId) || [];
     existing.push({ name: p.name || 'Pa emër', status: p.status });
     userProjectMap.set(p.responsibleUserId, existing);
@@ -1911,9 +2011,11 @@ async function runProjectCompletionReminder() {
   let notified = 0;
   const ops: Promise<any>[] = [];
 
-  // Dedup window: don't send a second open-projects reminder while the user still
-  // has a recent unread one (guards against the job running more than once/week).
-  const DEDUP_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+  // Dedup window: this is the WEEKLY open-projects reminder but the job rides
+  // the DAILY run-all, so the window is what makes it weekly. It used to be 3
+  // days AND only honour an UNREAD reminder — reading yesterday's earned a new
+  // one (plus email) today.
+  const DEDUP_MS = 7 * 24 * 60 * 60 * 1000 - 60 * 60 * 1000; // ~7 days (an hour of slack for the daily tick)
   const cutoffMs = now.getTime() - DEDUP_MS;
 
   for (const [userId, userProjects] of userProjectMap) {
@@ -1931,7 +2033,6 @@ async function runProjectCompletionReminder() {
       .get();
     const hasRecentReminder = existing.docs.some(d => {
       const n = d.data();
-      if (n.isRead) return false;
       const ms = typeof n.createdAt?.toMillis === 'function' ? n.createdAt.toMillis() : 0;
       return ms >= cutoffMs;
     });
@@ -1945,8 +2046,8 @@ async function runProjectCompletionReminder() {
       try {
         const userRecord = await admin.auth().getUser(userId);
         if (userRecord.email) {
-          const projectListHtml = userProjects.map(p => `<li><strong>${p.name}</strong> – <span style="color:#6b7280">${p.status}</span></li>`).join('');
-          ops.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: userRecord.email, subject: `📋 Kujtesë javore: ${userProjects.length} projekt të hapur`, html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px"><h2 style="color:#667eea">📋 Kujtesë Javore e Projekteve</h2><ul>${projectListHtml}</ul><p style="color:#9ca3af;font-size:12px">FivoCRM – Kujtesë automatike javore</p></div>` }));
+          const projectListHtml = userProjects.map(p => `<li><strong>${escapeHtml(p.name)}</strong> – <span style="color:#6b7280">${escapeHtml(p.status)}</span></li>`).join('');
+          ops.push(transporter.sendMail({ from: senderHeader('FivoCRM', smtpUser), to: userRecord.email, subject: `📋 Kujtesë javore: ${userProjects.length} projekt të hapur`, html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px"><h2 style="color:#667eea">📋 Kujtesë Javore e Projekteve</h2><ul>${projectListHtml}</ul><p style="color:#9ca3af;font-size:12px">FivoCRM – Kujtesë automatike javore</p></div>` }));
         }
       } catch { /* skip */ }
     }
@@ -1958,24 +2059,35 @@ async function runProjectCompletionReminder() {
 }
 
 // ── JOB: recurring-project-reset ─────────────────────────────────────────────
-async function runRecurringProjectReset() {
+async function runRecurringProjectReset(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const now = new Date();
+  const suspended = await loadSuspendedBusinessIds();
   const projectsSnap = await db.collection('projects').where('isRecurring', '==', true).get();
   if (projectsSnap.empty) return { reset: 0 };
 
   let resetCount = 0;
+  let skippedStatus = 0;
   const ops: Promise<any>[] = [];
 
   for (const projectDoc of projectsSnap.docs) {
     const project = projectDoc.data();
+    if (scopeId && project.businessId !== scopeId) continue;
+    if (project.businessId && suspended.has(project.businessId)) continue;
     const lastCompletedAt: Date | null = project.lastCompletedAt?.toDate ? project.lastCompletedAt.toDate() : project.lastCompletedAt ? new Date(project.lastCompletedAt) : null;
     if (!lastCompletedAt) continue;
+    // Only a project that IS completed starts a new cycle. `status: 'Active'` used
+    // to be written unconditionally — a Cancelled / On Hold / Archived retainer
+    // (isRecurring stays true until the billing cron clears it) was re-activated
+    // and its tasks re-opened by this job.
+    if (project.status !== 'Completed') { skippedStatus++; continue; }
 
     const frequency = project.recurringFrequency || 'monthly';
-    const d = new Date(lastCompletedAt);
-    let nextCycle: Date;
-    if (frequency === 'weekly') { d.setDate(d.getDate() + 7); nextCycle = d; }
-    else { d.setDate(1); d.setMonth(d.getMonth() + 1); d.setHours(0, 0, 0, 0); nextCycle = d; }
+    // Zone-explicit, clamped (never setMonth(+1)): the next cycle starts a week
+    // later, or on the 1st of the next month in Europe/Tirane.
+    const nextCycle: Date = frequency === 'weekly'
+      ? addZonedDays(lastCompletedAt, 7)
+      : (() => { const p = zonedParts(lastCompletedAt); return zonedDate(p.year, p.month + 1, 1); })();
 
     if (now < nextCycle) continue;
 
@@ -1984,15 +2096,37 @@ async function runRecurringProjectReset() {
     if (!tasksSnap.docs.every(t => t.data().status === 'Done')) continue;
 
     // BOTH alert flags reset — clearing only dueNotificationSent left reused
-    // tasks unable to overdue-alert ever again.
-    for (const taskDoc of tasksSnap.docs) ops.push(taskDoc.ref.update({ status: 'Todo', updatedAt: admin.firestore.Timestamp.now(), dueNotificationSent: false, overdueNotificationSent: false }));
+    // tasks unable to overdue-alert ever again. The task DATES move by one cycle
+    // too: re-opened with last cycle's endDate (necessarily in the past by now)
+    // every task fired "ka kaluar afatin" at the very next run, every cycle.
+    const shift = (v: any): admin.firestore.Timestamp | null => {
+      const d: Date | null = v?.toDate ? v.toDate() : v ? new Date(v) : null;
+      if (!d || isNaN(d.getTime())) return null;
+      const moved = frequency === 'weekly' ? addZonedDays(d, 7) : addZonedMonthsClamped(d, 1);
+      return admin.firestore.Timestamp.fromDate(moved);
+    };
+    for (const taskDoc of tasksSnap.docs) {
+      const t = taskDoc.data();
+      const newStart = shift(t.startDate);
+      const newEnd = shift(t.endDate);
+      ops.push(taskDoc.ref.update({
+        status: 'Todo', updatedAt: admin.firestore.Timestamp.now(),
+        dueNotificationSent: false, overdueNotificationSent: false,
+        ...(newStart ? { startDate: newStart } : {}),
+        ...(newEnd ? { endDate: newEnd, ...(t.dueDate ? { dueDate: newEnd } : {}) } : {}),
+        // A relative reminder follows the deadline; an absolute one belonged to last cycle.
+        ...(newEnd && t.reminderOffsetMinutes !== null && t.reminderOffsetMinutes !== undefined
+          ? { reminderAt: admin.firestore.Timestamp.fromMillis(newEnd.toMillis() - Math.max(0, Number(t.reminderOffsetMinutes)) * 60_000), reminderSentAt: null }
+          : {}),
+      }));
+    }
     ops.push(projectDoc.ref.update({ status: 'Active', nextRecurringDate: nextCycle, updatedAt: admin.firestore.Timestamp.now() }));
     if (project.responsibleUserId) ops.push(notifyUser({ userId: project.responsibleUserId, type: 'project_cycle_reset', title: `🔄 Projekti "${project.name}" u riaktivizua`, message: `Cikli i ri ka filluar. Të gjitha detyrat janë rivendosur te "Për të bërë".`, actionUrl: `/app/projects/${projectDoc.id}`, actionLabel: 'Shiko Projektin', businessId: project.businessId ?? null, teamId: project.teamId ?? null, customerId: project.customerId ?? null, projectId: projectDoc.id }));
     resetCount++;
   }
 
   await settleAll(ops, 'recurring-project-reset');
-  return { reset: resetCount };
+  return { reset: resetCount, skippedStatus, scoped: !!scopeId };
 }
 
 // ── Recurring EXPENSES ───────────────────────────────────────────────────────
@@ -6179,9 +6313,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let result: Record<string, unknown>;
 
     switch (job) {
-      case 'task-deadline-alerts':
-        result = await runTaskDeadlineAlerts();
+      case 'task-deadline-alerts': {
+        // Notifies staff → one tenant when triggered by hand (see recurring-invoices).
+        const scopeId = await manualScopeId(req, isManual);
+        if (scopeId === MANUAL_SCOPE_UNRESOLVED) {
+          return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — alarmet manuale u ndalën.' });
+        }
+        result = await runTaskDeadlineAlerts({ businessId: scopeId });
         break;
+      }
       case 'task-reminders':
         result = await runTaskReminders();
         break;
@@ -6332,12 +6472,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         result = await runSyncTenantClaims({ dryRun: req.query.dryRun === '1' });
         break;
       }
-      case 'project-completion-reminder':
-        result = await runProjectCompletionReminder();
+      case 'project-completion-reminder': {
+        const scopeId = await manualScopeId(req, isManual);
+        if (scopeId === MANUAL_SCOPE_UNRESOLVED) {
+          return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — kujtesa manuale u ndal.' });
+        }
+        result = await runProjectCompletionReminder({ businessId: scopeId });
         break;
-      case 'recurring-project-reset':
-        result = await runRecurringProjectReset();
+      }
+      case 'recurring-project-reset': {
+        // Re-opens tasks and re-activates projects → never across tenants by hand.
+        const scopeId = await manualScopeId(req, isManual);
+        if (scopeId === MANUAL_SCOPE_UNRESOLVED) {
+          return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — rivendosja manuale u ndal.' });
+        }
+        result = await runRecurringProjectReset({ businessId: scopeId });
         break;
+      }
       case 'goal-overdue-alerts':
         result = await runGoalOverdueAlerts();
         break;

@@ -915,6 +915,9 @@ export interface Task {
   recurringEndDate?: Date; // optional "repeat until" — no occurrences after this date
   nextRecurringDate?: Date;
   nextCycleCreated?: boolean;
+  /** Root parent id shared by every occurrence of one recurring series
+   *  (`seriesIdOf` in recurringUtils). Absent on rows that predate it. */
+  seriesId?: string;
   dueNotificationSent?: boolean;
   overdueNotificationSent?: boolean;
   /**

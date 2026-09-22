@@ -35,7 +35,8 @@ import { portalProjectCommentDeepLink, taskDeepLink } from '../lib/deepLinks';
 import { taskCompletedNotifications } from '../lib/taskNotifications';
 import { compareTasksBySectionThenDue, compareTasksByPriorityThenDue } from '../lib/taskSort';
 import { resolvePortalUserId } from '../lib/notifyClient';
-import { addFrequency, completeTask } from '../lib/recurringUtils';
+import { completeTask, recurringOccurrencesInMonth } from '../lib/recurringUtils';
+import { reminderAtFromOffset } from '../lib/taskReminders';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { formatCurrency, formatCompactRange, toAll, canSeeFinancials, cn } from '../lib/utils';
 import { computeProjectLabor } from '../lib/finance/laborCost';
@@ -497,15 +498,16 @@ const ProjectDetailView: React.FC = () => {
   }, []);
   useBackDismiss(!!selectedTask, closeSelectedTask);
 
-  // Keep selectedTask in sync with live Firestore data
+  // Keep selectedTask in sync with live Firestore data — from the RAW list, so
+  // a task opened outside the role filter still re-syncs after each write.
   useEffect(() => {
-    if (selectedTask && allTasks) {
-      const updated = allTasks.find(t => t.id === selectedTask.id);
+    if (selectedTask && rawProjectTasks) {
+      const updated = rawProjectTasks.find(t => t.id === selectedTask.id);
       if (updated && JSON.stringify(updated) !== JSON.stringify(selectedTask)) {
         setSelectedTask(updated);
       }
     }
-  }, [allTasks, selectedTask]);
+  }, [rawProjectTasks, selectedTask]);
 
   // Progress uses ALL top-level tasks from the RAW (unfiltered) project tasks —
   // the role-filtered `allTasks` would make a Member who only sees their own Done
@@ -614,6 +616,13 @@ const ProjectDetailView: React.FC = () => {
       return;
     }
     const assignedToUserId = formData.get('assignedToUserId') as string || user?.uid || '';
+    // "Më kujto" preset (minutes before the deadline) — same resolution as
+    // TasksView.handleCreateTask. This handler used to ignore the field, so a
+    // reminder chosen from the project page was silently never armed.
+    const reminderOffsetRaw = formData.get('reminderOffsetMinutes') as string;
+    const reminderOffsetMinutes = reminderOffsetRaw !== null && reminderOffsetRaw !== '' && !isNaN(Number(reminderOffsetRaw))
+      ? Math.max(0, Number(reminderOffsetRaw)) : undefined;
+    const reminderAt = reminderOffsetMinutes !== undefined ? reminderAtFromOffset(endDate, reminderOffsetMinutes) : undefined;
     const section = (formData.get('section') as string || '').trim();
     const priority = formData.get('priority') as string || 'medium';
     const status = formData.get('status') as string || 'Todo';
@@ -644,6 +653,7 @@ const ProjectDetailView: React.FC = () => {
       status,
       priority,
       collaboratorIds: [],
+      ...(reminderOffsetMinutes !== undefined && reminderAt ? { reminderOffsetMinutes, reminderAt } : {}),
       ...(!isNaN(estimatedHours) && estimatedHours > 0 ? { estimatedHours } : {}),
       ...(labels.length > 0 ? { labels } : {}),
       ...(section ? { section } : {}),
@@ -1662,7 +1672,7 @@ const ProjectDetailView: React.FC = () => {
           {/* Kalendar */}
           {viewMode === 'calendar' && (
             <div className={cn(CARD, 'overflow-hidden')}>
-              <ProjectCalendarView tasks={tasks} onTaskClick={setSelectedTask} />
+              <ProjectCalendarView tasks={tasks} projects={project ? [project] : undefined} onTaskClick={setSelectedTask} />
             </div>
           )}
 
@@ -1885,6 +1895,11 @@ const ProjectDetailView: React.FC = () => {
                 toast({ title: 'Detyra nuk u fshi', description: err?.message, variant: 'destructive' });
               })}
               projects={project ? [project] : undefined}
+              // Without this the panel's blocker guard was off and re-opening a
+              // Done recurring tip re-armed it while its child was alive (double
+              // series). Project scope: a blocker in ANOTHER project is unknown
+              // here and treated as non-blocking.
+              allTasks={rawProjectTasks || []}
               onSelectSubtask={(subtask) => setSelectedTask(subtask)}
               isProjectGuest={isGuestOnProject}
             />
@@ -2179,41 +2194,24 @@ const ProjectGuestForm: React.FC<{
 // Calendar View
 const ProjectCalendarView: React.FC<{
   tasks: Task[];
+  /** The project itself — an archived/cancelled one projects no future cycles. */
+  projects?: Pick<Project, 'id' | 'status'>[] | null;
   onTaskClick: (task: Task) => void;
-}> = ({ tasks, onTaskClick }) => {
+}> = ({ tasks, projects, onTaskClick }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
 
   const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
   // Monday-first (matches the Tasks calendar and Albanian convention).
   const firstDay = (new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay() + 6) % 7;
 
-  const sod = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
-  const monthStart = sod(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1));
-  const monthEnd = sod(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0));
-  // Project future recurring occurrences (which materialise only on completion) so
-  // they're visible on the calendar ahead of time — see TasksView for the rationale.
-  const projectionsByDay = React.useMemo(() => {
-    const map = new Map<number, Task[]>();
-    tasks.forEach((task) => {
-      const t = task as any;
-      if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true || task.status === 'Done' || !task.endDate) return;
-      const recEnd = t.recurringEndDate ? sod(new Date(t.recurringEndDate)) : null;
-      let d = new Date(task.endDate);
-      let guard = 0;
-      while (guard++ < 500) {
-        d = addFrequency(d, t.recurringFrequency, t.recurringDayOfWeek, t.recurringDayOfMonth, t.recurringInterval, t.recurringDaysOfWeek);
-        const ds = sod(d);
-        if (ds > monthEnd) break;
-        if (recEnd && ds > recEnd) break; // stop at the "repeat until" date
-        if (ds >= monthStart) {
-          const dayNum = new Date(ds).getDate();
-          if (!map.has(dayNum)) map.set(dayNum, []);
-          map.get(dayNum)!.push(task);
-        }
-      }
-    });
-    return map;
-  }, [tasks, monthStart, monthEnd]);
+  // Recurring occurrences — the SAME engine as the Tasks calendar
+  // (`recurringOccurrencesInMonth`): this copy used machine-local day math,
+  // ignored the interval, hid Done tips and promised cycles inside an archived
+  // project. Recurring rows render only through this map (see dayTasks).
+  const projectionsByDay = React.useMemo(
+    () => recurringOccurrencesInMonth(tasks, currentDate.getFullYear(), currentDate.getMonth(), { projects }),
+    [tasks, projects, currentDate],
+  );
 
   const days = [];
   for (let i = 0; i < firstDay; i++) {
@@ -2223,6 +2221,8 @@ const ProjectCalendarView: React.FC<{
   for (let day = 1; day <= daysInMonth; day++) {
     const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
     const dayTasks = tasks.filter(task => {
+      if ((task as any).isRecurring) return false; // recurring → projectionsByDay (anchor day included)
+      if (!task.endDate) return false;
       const taskDate = new Date(task.endDate);
       return taskDate.toDateString() === date.toDateString();
     });

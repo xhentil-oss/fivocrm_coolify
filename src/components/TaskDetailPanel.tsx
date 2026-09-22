@@ -187,6 +187,11 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const { user } = useAuth();
   const permissions = usePermissions();
   const isGuestMode = permissions.isGuest || isProjectGuest;
+  // Read-only for a portal/project guest AND for the Viewer role: every control
+  // below used to gate on `isGuestMode` alone, so a Viewer (canEdit: false) could
+  // mark Done, retitle, reassign and redate from the panel while the list hid
+  // the same actions — and the rules accept any member's write.
+  const readOnly = isGuestMode || !permissions.canEdit;
   // Deep link from a comment notification → scroll to that comment and flash it.
   const { registerComment, isFlashing } = useCommentFocus(focusCommentId);
   const { isConnected: isGoogleConnected } = useGoogleApi();
@@ -606,22 +611,33 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     if (!subtaskForm.title.trim() || !user) return;
 
     const subtaskAssignee = subtaskForm.assignedToUserId || user.uid;
-    const createdSubtask = await taskMutation.create({
-      title: subtaskForm.title,
-      description: subtaskForm.description,
-      status: subtaskForm.status,
-      priority: subtaskForm.priority,
-      startDate: subtaskForm.startDate,
-      endDate: subtaskForm.endDate,
-      assignedToUserId: subtaskAssignee,
-      projectId: task.projectId,
-      parentTaskId: task.id,
-      collaboratorIds: [],
-      // Inherit the parent task's tenancy scope so a subtask of a cross-department
-      // task lands in the parent's team/business, not the viewer's active context.
-      teamId: (task as any).teamId,
-      businessId: (task as any).businessId,
-    });
+    let createdSubtask: unknown;
+    try {
+      createdSubtask = await taskMutation.create({
+        title: subtaskForm.title,
+        description: subtaskForm.description,
+        status: subtaskForm.status,
+        priority: subtaskForm.priority,
+        startDate: subtaskForm.startDate,
+        endDate: subtaskForm.endDate,
+        assignedToUserId: subtaskAssignee,
+        projectId: task.projectId,
+        parentTaskId: task.id,
+        collaboratorIds: [],
+        // Inherit the parent task's tenancy scope so a subtask of a cross-department
+        // task lands in the parent's team/business, not the viewer's active context.
+        teamId: (task as any).teamId,
+        businessId: (task as any).businessId,
+        // …and the client it serves: `customerId` is the portal-visibility switch
+        // (rules + portal query key on it), so a subtask without it was invisible
+        // to the client and its "Dukshëm për klientin" checkbox never rendered.
+        ...((task as any).customerId ? { customerId: (task as any).customerId } : {}),
+      } as any);
+    } catch (err: any) {
+      console.error('[Tasks] krijimi i nën-detyrës dështoi:', err);
+      toast({ title: 'Nën-detyra nuk u krijua', description: err?.message, variant: 'destructive' });
+      return;
+    }
 
     // Notify assigned user for subtask
     if (subtaskAssignee !== user.uid) {
@@ -643,14 +659,50 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   };
 
   const handleUpdateSubtask = async (subtaskId: string, data: any) => {
-    await taskMutation.update(subtaskId, data);
-    setEditingSubtask(null);
+    try {
+      const sub = (subtasks || []).find(t => t.id === subtaskId);
+      // Closing a subtask is a completion like any other: it must run the shared
+      // flow (blocker guard, recurrence, task_completed notifications) instead of
+      // a raw status write. Everything else on the row is a plain update.
+      if (data?.status === 'Done' && sub && sub.status !== 'Done') {
+        const { status: _done, ...rest } = data;
+        if (Object.keys(rest).length) await taskMutation.update(subtaskId, rest);
+        const outcome = await completeTask({ ...sub, ...rest }, {
+          createTask: (d) => taskMutation.create(d as any),
+          updateTask: (id, d) => taskMutation.update(id, d),
+          allTasks: allTasks || subtasks || [],
+          projects,
+          claimNextCycle: claimTaskNextCycle,
+          releaseNextCycle: releaseTaskNextCycle,
+        });
+        if (outcome.kind === 'blocked') {
+          toast({ title: '⛔ Nën-detyrë e bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera.`, variant: 'destructive' });
+          return;
+        }
+        if (user?.uid) {
+          taskCompletedNotifications(sub, user.uid, user.displayName || undefined).forEach(n =>
+            notificationMutation.create(n as any).catch(err => console.error('[Notifications] task_completed (nën-detyrë) dërgim dështoi:', err)));
+        }
+      } else {
+        await taskMutation.update(subtaskId, data);
+      }
+    } catch (err: any) {
+      console.error('[Tasks] përditësimi i nën-detyrës dështoi:', err);
+      toast({ title: 'Nën-detyra nuk u përditësua', description: err?.message, variant: 'destructive' });
+    } finally {
+      setEditingSubtask(null);
+    }
   };
 
   const handleDeleteSubtask = async (subtaskId: string) => {
     // Cascade: the subtask's comments/collaborator records go with it, and any
     // logged hours are unlinked rather than left pointing at a dead id.
-    await deleteTaskCascade(subtaskId);
+    try {
+      await deleteTaskCascade(subtaskId);
+    } catch (err: any) {
+      console.error('[Tasks] fshirja e nën-detyrës dështoi:', err);
+      toast({ title: 'Nën-detyra nuk u fshi', description: err?.message, variant: 'destructive' });
+    }
   };
 
   const startEditingSubtask = (subtask: any) => {
@@ -684,20 +736,37 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     return hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
   };
 
+  // Two clicks (or two devices) before the snapshot landed both passed the
+  // "no running timer" check and both created an entry; the second ticked
+  // invisibly until the next Start closed it.
+  const timerBusyRef = useRef(false);
   const startTimer = async () => {
-    if (!user) return;
-
+    if (!user || timerBusyRef.current) return;
+    timerBusyRef.current = true;
+    try {
     // Enforce a single running timer per user: close any entry left open from a
     // previous session/task first. Overlapping running timers were the root cause
     // of corrupt totals (a stop computed its duration against the wrong start).
     const myRunning = (allActiveTimeEntries || []).filter(
       (e: any) => e.userId === user.uid && !e.endTime,
     );
+    let lockedOpen = 0;
     for (const e of myRunning) {
       const endTimeVal = new Date();
       const start = new Date(e.startTime?.toDate ? e.startTime.toDate() : e.startTime);
       const duration = Math.max(0, Math.floor((endTimeVal.getTime() - start.getTime()) / 60000));
-      await timeEntryMutation.update(e.id, { endTime: endTimeVal, duration });
+      try {
+        await timeEntryMutation.update(e.id, { endTime: endTimeVal, duration });
+      } catch (err) {
+        // A timer left running in a month that has since been CLOSED cannot be
+        // written (rules: nothing in a closed month). It used to throw here,
+        // before the create, so every Start failed silently forever.
+        lockedOpen++;
+        console.warn('[Timer] orë e hapur që s\'mund të mbyllet (muaj i mbyllur?):', e.id, err);
+      }
+    }
+    if (lockedOpen) {
+      toast({ title: 'Orë e hapur në muaj të mbyllur', description: `${lockedOpen} orë e vjetër mbeti e hapur dhe s'mund të mbyllet — njofto administratorin e financave.` });
     }
 
     await timeEntryMutation.create({
@@ -720,18 +789,29 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       isBillable: !!task.projectId && !!(task as any).customerId,
       isPomodoroSession: false,
     });
+    } catch (err: any) {
+      console.error('[Timer] nisja dështoi:', err);
+      toast({ title: 'Timer-i nuk u nis', description: err?.message, variant: 'destructive' });
+    } finally {
+      timerBusyRef.current = false;
+    }
   };
 
   const stopTimer = async () => {
     if (!runningEntry || !user) return;
 
     const endTimeVal = new Date();
-    const duration = Math.floor((endTimeVal.getTime() - new Date(runningEntry.startTime).getTime()) / 60000);
+    const duration = Math.max(0, Math.floor((endTimeVal.getTime() - new Date(runningEntry.startTime).getTime()) / 60000));
 
-    await timeEntryMutation.update(runningEntry.id, {
-      endTime: endTimeVal,
-      duration,
-    });
+    try {
+      await timeEntryMutation.update(runningEntry.id, {
+        endTime: endTimeVal,
+        duration,
+      });
+    } catch (err: any) {
+      console.error('[Timer] ndalimi dështoi:', err);
+      toast({ title: 'Timer-i nuk u ndal', description: err?.message || 'Ora mund të jetë në një muaj të mbyllur.', variant: 'destructive' });
+    }
   };
 
   const handleCommentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -914,8 +994,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           actionLabel: taskLabel,
         }));
       await Promise.allSettled(participantNotifPromises);
-    } catch {
-      // Comment failed to save — keep text so user can retry
+    } catch (err: any) {
+      // Comment failed to save — keep the text so the user can retry, and SAY so.
+      console.error('[Tasks] komenti nuk u ruajt:', err);
+      toast({ title: 'Komenti nuk u ruajt', description: err?.message, variant: 'destructive' });
     }
   };
 
@@ -1402,13 +1484,13 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           <div className="relative">
             <button
               type="button"
-              disabled={isGuestMode}
+              disabled={readOnly}
               onClick={(e) => { e.stopPropagation(); setAssignOpen(false); setProjectOpen(false); setStatusOpen(v => !v); }}
               className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold ${statusMeta.pill} disabled:cursor-default`}
             >
               {task.status === 'Done' && <Check className="h-3 w-3" />}
               {statusMeta.label}
-              {!isGuestMode && <span className="text-[9px]">▼</span>}
+              {!readOnly && <span className="text-[9px]">▼</span>}
             </button>
             {statusOpen && (
               <div
@@ -1487,7 +1569,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             <input
               ref={titleInputRef}
               value={titleText}
-              disabled={isGuestMode}
+              disabled={readOnly}
               onChange={(e) => setTitleText(e.target.value)}
               onBlur={handleSaveTitle}
               onKeyDown={(e) => {
@@ -1507,7 +1589,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               <div className="relative max-w-full justify-self-start">
                 <button
                   type="button"
-                  disabled={isGuestMode}
+                  disabled={readOnly}
                   onClick={(e) => { e.stopPropagation(); setStatusOpen(false); setAssignOpen(false); setProjectQuery(''); setProjectOpen(v => !v); }}
                   className={`flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 transition-colors disabled:cursor-default ${projectOpen ? 'border-primary bg-primary/10' : 'border-border bg-background hover:border-primary/50'}`}
                 >
@@ -1515,7 +1597,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                   <span className="truncate text-[13px] font-bold text-foreground">
                     {projectsLoading ? 'Duke ngarkuar…' : (currentProject?.name || 'Pa projekt')}
                   </span>
-                  {!isGuestMode && <span className="text-[10px] text-muted-foreground">{projectOpen ? '▲' : '▼'}</span>}
+                  {!readOnly && <span className="text-[10px] text-muted-foreground">{projectOpen ? '▲' : '▼'}</span>}
                 </button>
                 {projectOpen && (
                   <PickerPanel
@@ -1554,7 +1636,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               <div className="relative max-w-full justify-self-start">
                 <button
                   type="button"
-                  disabled={isGuestMode}
+                  disabled={readOnly}
                   onClick={(e) => { e.stopPropagation(); setStatusOpen(false); setProjectOpen(false); setAssignQuery(''); setAssignOpen(v => !v); }}
                   className={`flex max-w-full items-center gap-2 rounded-full border py-1 pl-1 pr-3 transition-colors disabled:cursor-default ${assignOpen ? 'border-primary bg-primary/10' : 'border-border bg-background hover:border-primary/50'}`}
                 >
@@ -1562,7 +1644,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                     {assigneeName.slice(0, 2).toUpperCase()}
                   </span>
                   <span className="truncate text-[13.5px] font-bold text-foreground">{assigneeName}</span>
-                  {!isGuestMode && <span className="text-[10px] text-muted-foreground">{assignOpen ? '▲' : '▼'}</span>}
+                  {!readOnly && <span className="text-[10px] text-muted-foreground">{assignOpen ? '▲' : '▼'}</span>}
                 </button>
                 {assignOpen && (
                   <PickerPanel
@@ -1616,19 +1698,19 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               <span className={rowLabelCls}>Afati</span>
               <div className="flex flex-wrap items-center gap-1.5">
                 {([['sot', 'Sot'], ['neser', 'Nesër'], ['jave', 'Kjo javë']] as const).map(([k, l]) => (
-                  <button key={k} type="button" disabled={isGuestMode} onClick={() => handleEndDateChange(quickDate(k))} className={chipCls(dueKey === k)}>
+                  <button key={k} type="button" disabled={readOnly} onClick={() => handleEndDateChange(quickDate(k))} className={chipCls(dueKey === k)}>
                     {l}
                   </button>
                 ))}
                 <Popover>
                   <PopoverTrigger asChild>
-                    <button type="button" disabled={isGuestMode} className={chipCls(dueKey === 'date')}>📅 {formatDateCompact(endDate)}</button>
+                    <button type="button" disabled={readOnly} className={chipCls(dueKey === 'date')}>📅 {formatDateCompact(endDate)}</button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
                     <Calendar mode="single" selected={endDate} onSelect={handleEndDateChange} initialFocus />
                   </PopoverContent>
                 </Popover>
-                {!isGuestMode && (
+                {!readOnly && (
                   <input
                     type="time"
                     value={timeStr(endDate)}
@@ -1647,7 +1729,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                   <button
                     key={p.key}
                     type="button"
-                    disabled={isGuestMode}
+                    disabled={readOnly}
                     onClick={() => handleReminderPreset(p.minutes)}
                     className={chipCls(reminderPreset?.key === p.key)}
                     title={p.minutes === 0 ? 'Njoftim në momentin e afatit' : `Njoftim ${p.label.toLowerCase()} afatit`}
@@ -1657,7 +1739,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 ))}
                 <Popover>
                   <PopoverTrigger asChild>
-                    <button type="button" disabled={isGuestMode} className={chipCls(reminderIsCustom)} title="Zgjidh datën dhe orën e kujtesës">
+                    <button type="button" disabled={readOnly} className={chipCls(reminderIsCustom)} title="Zgjidh datën dhe orën e kujtesës">
                       📅 {reminderIsCustom && reminderAt ? formatDateCompact(reminderAt) : 'Tjetër…'}
                     </button>
                   </PopoverTrigger>
@@ -1665,7 +1747,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                     <Calendar mode="single" selected={reminderAt ?? undefined} onSelect={handleReminderCustomDate} initialFocus />
                   </PopoverContent>
                 </Popover>
-                {!isGuestMode && reminderAt && (
+                {!readOnly && reminderAt && (
                   <input
                     type="time"
                     value={timeStr(reminderAt)}
@@ -1680,7 +1762,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                     {describeReminder(task)}
                   </span>
                 )}
-                {reminderAt && !isGuestMode && (
+                {reminderAt && !readOnly && (
                   <button type="button" onClick={handleReminderClear} className="text-xs font-bold text-muted-foreground hover:text-foreground" title="Hiq kujtesën">✕</button>
                 )}
               </div>
@@ -1691,19 +1773,19 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               <span className={rowLabelCls}>Fillimi</span>
               <div className="flex flex-wrap items-center gap-1.5">
                 {([['sot', 'Sot'], ['neser', 'Nesër']] as const).map(([k, l]) => (
-                  <button key={k} type="button" disabled={isGuestMode} onClick={() => handleStartDateChange(quickDate(k))} className={chipCls(startKey === k)}>
+                  <button key={k} type="button" disabled={readOnly} onClick={() => handleStartDateChange(quickDate(k))} className={chipCls(startKey === k)}>
                     {l}
                   </button>
                 ))}
                 <Popover>
                   <PopoverTrigger asChild>
-                    <button type="button" disabled={isGuestMode} className={chipCls(startKey === 'date' || startKey === 'jave')}>📅 {formatDateCompact(startDate)}</button>
+                    <button type="button" disabled={readOnly} className={chipCls(startKey === 'date' || startKey === 'jave')}>📅 {formatDateCompact(startDate)}</button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
                     <Calendar mode="single" selected={startDate} onSelect={handleStartDateChange} initialFocus />
                   </PopoverContent>
                 </Popover>
-                {!isGuestMode && (
+                {!readOnly && (
                   <input
                     type="time"
                     value={timeStr(startDate)}
@@ -1722,7 +1804,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                   <div className="flex flex-wrap items-center gap-1.5">
                     <button
                       type="button"
-                      disabled={isGuestMode || !permissions.canEdit}
+                      disabled={readOnly}
                       onClick={() => task.isRecurring && onUpdate(task.id, { isRecurring: false } as any)}
                       className={chipCls(!task.isRecurring)}
                     >
@@ -1732,7 +1814,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                       <button
                         key={k}
                         type="button"
-                        disabled={isGuestMode || !permissions.canEdit}
+                        disabled={readOnly}
                         onClick={() => (!task.isRecurring || task.recurringFrequency !== k) && enableRecurring(k)}
                         className={chipCls(!!task.isRecurring && task.recurringFrequency === k)}
                       >
@@ -1815,7 +1897,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             )}
 
             {/* Bllokohet nga */}
-            {(!isGuestMode || (task.dependsOn && task.dependsOn.length > 0)) && (
+            {(!readOnly || (task.dependsOn && task.dependsOn.length > 0)) && (
               <div className={`${rowCls} items-start`}>
                 <span className={`${rowLabelCls} pt-1`}>Bllokohet nga</span>
                 <div className="flex min-w-0 flex-col gap-1.5">
@@ -1834,7 +1916,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                         >
                           {isDone ? '✓' : '🔒'}
                           <span className="max-w-[160px] truncate">{dep?.title || depId.slice(0, 8) + '…'}</span>
-                          {!isGuestMode && (
+                          {!readOnly && (
                             <button type="button" onClick={() => onUpdate(task.id, { dependsOn: (task.dependsOn || []).filter((x) => x !== depId) } as any)} className="hover:opacity-70" aria-label="Hiq bllokuesin">
                               <X className="h-3 w-3" />
                             </button>
@@ -1842,7 +1924,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                         </span>
                       );
                     })}
-                    {!isGuestMode && (
+                    {!readOnly && (
                       <Popover>
                         <PopoverTrigger asChild>
                           <button type="button" className="rounded-full border-[1.5px] border-dashed border-border bg-background px-3 py-[5px] text-xs font-semibold text-muted-foreground transition-colors hover:border-primary">
@@ -1886,7 +1968,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                   <button
                     key={k}
                     type="button"
-                    disabled={isGuestMode}
+                    disabled={readOnly}
                     onClick={() => onUpdate(task.id, { priority: k })}
                     className={chipCls((task.priority || 'medium') === k)}
                   >
@@ -1900,7 +1982,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             <div className={`${rowCls} items-start border-b-0`}>
               <span className={`${rowLabelCls} pt-1.5`}>Etiketat</span>
               <div className="min-w-0 flex-1">
-                {isGuestMode ? (
+                {readOnly ? (
                   <TaskLabels labels={(task as any).labels} />
                 ) : (
                   <LabelEditor
@@ -1978,13 +2060,13 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               </div>
             ) : (
               <div
-                className={`min-h-[100px] text-sm p-3 rounded border border-dashed transition-colors ${!isGuestMode ? 'cursor-pointer hover:bg-muted/50 border-transparent hover:border-border' : 'border-transparent'}`}
-                onClick={() => !isGuestMode && setIsEditingDescription(true)}
+                className={`min-h-[100px] text-sm p-3 rounded border border-dashed transition-colors ${!readOnly ? 'cursor-pointer hover:bg-muted/50 border-transparent hover:border-border' : 'border-transparent'}`}
+                onClick={() => !readOnly && setIsEditingDescription(true)}
               >
                 {task.description ? (
                   <RichTextDisplay content={task.description} />
                 ) : (
-                  <span className="text-muted-foreground">{isGuestMode ? 'Nuk ka përshkrim.' : 'Kliko për të shtuar përshkrim...'}</span>
+                  <span className="text-muted-foreground">{readOnly ? 'Nuk ka përshkrim.' : 'Kliko për të shtuar përshkrim...'}</span>
                 )}
               </div>
             )}
@@ -2069,7 +2151,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 <h4 className="text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground">
                   Nën-detyra ({subtasks?.length || 0})
                 </h4>
-                {!isGuestMode && (
+                {!readOnly && (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -2320,7 +2402,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 <Paperclip className="w-4 h-4" />
                 Materiale ({attachments.length})
               </h4>
-              {!isGuestMode && (
+              {!readOnly && (
                 <div className="flex gap-1">
                   {isGoogleConnected && (
                     <Button variant="ghost" size="sm" onClick={() => setShowDrivePicker(true)} title="Google Drive">
@@ -2387,7 +2469,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                             <Download className="w-3 h-3" />
                           </a>
                         )}
-                        {!isGuestMode && (
+                        {!readOnly && (
                           <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Hiq materialin" aria-label={`Hiq ${file.name}`} onClick={() => handleRemoveAttachment(index)}>
                             <X className="w-3 h-3" />
                           </Button>
@@ -2746,7 +2828,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               {/* Client visibility is OPT-IN per comment: comments are internal
                   by default; checking this stamps customerId, which is what the
                   portal's query (and the rules) key client access on. */}
-              {!!(task as any).customerId && !isGuestMode && (
+              {!!(task as any).customerId && !readOnly && (
                 <label className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer select-none">
                   <input
                     type="checkbox"
@@ -2787,7 +2869,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           {/* Delete: manager rank or owning the task (creator/assignee) — the
               rules accept any member's delete, so the UI must not offer more
               than the role is meant to have. */}
-          {!isGuestMode && permissions.canEdit
+          {!readOnly && permissions.canEdit
             && (permissions.isAdmin || permissions.isManager
                 || task.createdByUserId === user?.uid || task.assignedToUserId === user?.uid) && (
             <button
@@ -2798,15 +2880,15 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               <Trash2 className="h-3.5 w-3.5" /> Fshi
             </button>
           )}
-          {isGuestMode && (
+          {readOnly && (
             <span className="flex items-center gap-1 text-xs text-amber-600">
               <Eye className="h-3 w-3" />
-              Vetëm shikimi + komente
+              {isGuestMode ? 'Vetëm shikimi + komente' : 'Roli juaj lejon vetëm shikim'}
             </span>
           )}
           <span className="flex-1" />
           <span className="hidden text-[11.5px] text-muted-foreground sm:block">{footerSummary}</span>
-          {!isGuestMode && (
+          {!readOnly && (
             <Button size="sm" className="rounded-[10px] text-[13px] font-extrabold" onClick={handleFooterSave}>
               ✓ Ruaj ndryshimet
             </Button>

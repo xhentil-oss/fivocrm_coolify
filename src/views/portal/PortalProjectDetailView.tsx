@@ -61,13 +61,22 @@ const PortalProjectDetailView: React.FC = () => {
   // (isPortalClientFor) holds for every returned doc. `skip` until customerId
   // resolves — the old projectId-only fallback was unprovable under the rule,
   // so every portal project open started with a denied listener.
+  // Member-access (projects.memberUserIds, not the paying customer): the tasks
+  // carry the OWNER's customerId, so the customerId-scoped query returned nothing
+  // and every invited member saw "asnjë detyrë". The rules prove a projectId-only
+  // query for a project member (isPortalProjectMember), so that is what they get.
+  const isProjectMember = !!(user?.uid && project && Array.isArray((project as any).memberUserIds)
+    && (project as any).memberUserIds.includes(user.uid));
+  const isProjectCustomer = !!(customerId && project && project.customerId === customerId);
   const { data: rawTasks } = useCollection<Task>('tasks', {
-    where: [
-      { field: 'projectId', operator: '==', value: projectId || '' },
-      { field: 'customerId', operator: '==', value: customerId || '' },
-    ],
+    where: isProjectMember && !isProjectCustomer
+      ? [{ field: 'projectId', operator: '==', value: projectId || '' }]
+      : [
+          { field: 'projectId', operator: '==', value: projectId || '' },
+          { field: 'customerId', operator: '==', value: customerId || '' },
+        ],
     skipTeamFilter: true,
-    skip: !customerId,
+    skip: !project || (!customerId && !isProjectMember),
   });
   const tasks = React.useMemo(() => {
     if (!rawTasks) return [];

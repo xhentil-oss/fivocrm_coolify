@@ -239,6 +239,26 @@ service cloud.firestore {
             || (hasUserDoc() && userDoc().get('customerId', '') == customerId));
     }
 
+    // A portal user who was added to a project as an explicit MEMBER
+    // (projects.memberUserIds) — not the paying customer. One get() on the
+    // project; the tasks rule uses it so member-access clients stop seeing
+    // "0 detyra / asnjë detyrë" on every project they were invited to.
+    function isPortalProjectMember(projectId) {
+      return isAuth()
+        && projectId is string
+        && projectId != ''
+        && exists(/databases/$(database)/documents/projects/$(projectId))
+        && get(/databases/$(database)/documents/projects/$(projectId)).data.get('memberUserIds', []) is list
+        && request.auth.uid in get(/databases/$(database)/documents/projects/$(projectId)).data.get('memberUserIds', []);
+    }
+
+    // The read-only staff role. Minted lowercased into the `roles` claim by
+    // api/_tenantClaims.ts; a token that predates the claim carries no roles and
+    // is not blocked here (fail-open for legacy tokens, tightened on refresh).
+    function isViewerRole() {
+      return 'viewer' in claimRoles();
+    }
+
     // Portal client reading their OWN customer doc, whose document id IS the
     // customerId (the customers collection has no self-referential customerId
     // field). Used by the customers read rule.
@@ -394,9 +414,11 @@ service cloud.firestore {
 
     match /tasks/{docId} {
       // Staff via businessId; portal client reads their own customer's tasks
-      // (customerId derived from the parent project — see backfill-customerid).
+      // (customerId derived from the parent project — see backfill-customerid)
+      // or the tasks of a project they are an explicit member of.
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
+        || isPortalProjectMember(resource.data.projectId)
         || isSuperAdmin();
       // STAFF ONLY. The portal has no legitimate task write (it only reads its
       // project's tasks; the sales follow-up task is minted server-side via
@@ -405,9 +427,11 @@ service cloud.firestore {
       // stamped into ANY tenant, and let a portal client complete or delete
       // internal work items from the browser console — same hole class that was
       // already closed for invoices.
-      allow create: if canCreateBusinessDoc();
-      allow update: if canManageBusinessDoc() && keepsBusinessId();
-      allow delete: if canManageBusinessDoc();
+      // A Viewer is read-only by role; until now the UI was the only gate and
+      // the detail panel did not even apply it (test 39d).
+      allow create: if canCreateBusinessDoc() && !isViewerRole();
+      allow update: if canManageBusinessDoc() && keepsBusinessId() && !isViewerRole();
+      allow delete: if canManageBusinessDoc() && !isViewerRole();
     }
 
     // ── Phase 4.3b: crown-jewel CRM records — server-side tenant RLS.

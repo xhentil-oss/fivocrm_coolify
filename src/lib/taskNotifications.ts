@@ -40,6 +40,56 @@ export function taskCompletionRecipients(task: Task, actorUid: string): string[]
   return [...targets];
 }
 
+export interface TaskAssignedNotification {
+  userId: string;
+  type: 'task_assigned';
+  title: string;
+  message: string;
+  isRead: boolean;
+  actionUrl: string;
+  actionLabel: string;
+}
+
+/**
+ * Re-assignment rows: the NEW assignee hears they got the task, the PREVIOUS one
+ * hears it moved. The actor never notifies themselves. Used by the detail panel
+ * and by the bulk "Cakto te" bar — the bar used to reassign in silence.
+ */
+export function taskAssignedNotifications(
+  task: Task,
+  newUserId: string,
+  actorUid: string,
+  opts: { actorName?: string; newAssigneeName?: string } = {},
+): TaskAssignedNotification[] {
+  const prev = task.assignedToUserId;
+  if (!newUserId || newUserId === prev) return [];
+  const link = taskDeepLink(task.id, task.projectId);
+  const rows: TaskAssignedNotification[] = [];
+  if (newUserId !== actorUid) {
+    rows.push({
+      userId: newUserId,
+      type: 'task_assigned',
+      title: 'Detyrë e Re e Caktuar',
+      message: `${opts.actorName || 'Dikush'} ju caktoi detyrën: ${task.title}`,
+      isRead: false,
+      actionUrl: link,
+      actionLabel: 'Shiko Detyrën',
+    });
+  }
+  if (prev && prev !== newUserId && prev !== actorUid) {
+    rows.push({
+      userId: prev,
+      type: 'task_assigned',
+      title: 'Detyrë e Ri-caktuar',
+      message: `Detyra "${task.title}" u ri-caktua te ${opts.newAssigneeName || 'një koleg'}`,
+      isRead: false,
+      actionUrl: link,
+      actionLabel: 'Shiko Detyrën',
+    });
+  }
+  return rows;
+}
+
 /** One notification row per recipient. Empty when the actor closed their own solo task. */
 export function taskCompletedNotifications(
   task: Task,

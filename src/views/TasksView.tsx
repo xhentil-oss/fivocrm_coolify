@@ -4,7 +4,7 @@ import { DndContext, DragOverlay, closestCorners, MouseSensor, TouchSensor, useS
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { getTaskStatusLabel } from '../lib/statusColors';
-import { completeTask, addFrequency, startOfRecurrenceDay, hasLiveSeriesSibling, projectRecurrenceBlockReason } from '../lib/recurringUtils';
+import { completeTask, startOfRecurrenceDay, hasLiveSeriesSibling, recurringOccurrencesInMonth } from '../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
@@ -67,7 +67,7 @@ import { Bell as ReminderBellIcon } from 'lucide-react';
 import { deleteTaskCascade } from '../lib/deleteCascade';
 import { applyValuedTaskSideEffects } from '../lib/finance/taskValue';
 import { taskDeepLink } from '../lib/deepLinks';
-import { taskCompletedNotifications } from '../lib/taskNotifications';
+import { taskCompletedNotifications, taskAssignedNotifications } from '../lib/taskNotifications';
 import SmartSuggestions from '../components/SmartSuggestions';
 import { TaskLabels } from '../components/TaskLabels';
 import TaskTimeline from '../components/TaskTimeline';
@@ -80,8 +80,10 @@ function isOverdueDate(endDate: any): boolean {
   if (!endDate) return false;
   const d = new Date(endDate);
   if (isNaN(d.getTime())) return false;
-  const sod = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
-  return sod(d) < sod(new Date());
+  // Calendar-day comparison in Europe/Tirane (the zone every deadline is a
+  // promise in) — machine-local midnight made a travelling browser and the
+  // cron disagree about "vonuar".
+  return startOfRecurrenceDay(d) < startOfRecurrenceDay(new Date());
 }
 
 /** Generate a deterministic HSL background colour from a name string */
@@ -345,15 +347,17 @@ const TasksView: React.FC = () => {
     setSearchParams({}, { replace: true });
   }, [searchParams, allTasks, rawTasks, setSearchParams]);
 
-  // Keep selectedTask in sync with live Firestore data
+  // Keep selectedTask in sync with live Firestore data. From the RAW list: a
+  // task opened by deep link outside the role filter (rawTasks fallback) never
+  // re-synced from the filtered one, so the panel showed pre-edit values.
   useEffect(() => {
-    if (selectedTask && allTasks) {
-      const updated = allTasks.find(t => t.id === selectedTask.id);
+    if (selectedTask && rawTasks) {
+      const updated = rawTasks.find(t => t.id === selectedTask.id);
       if (updated && JSON.stringify(updated) !== JSON.stringify(selectedTask)) {
         setSelectedTask(updated);
       }
     }
-  }, [allTasks, selectedTask]);
+  }, [rawTasks, selectedTask]);
 
 
 
@@ -648,8 +652,11 @@ const TasksView: React.FC = () => {
   // subset), so a manual move while a filter or search is active doesn't drop the
   // order of every hidden task to the end.
   const applyReorder = (taskId: string, overId: string) => {
-    const full = listOrder.length ? [...listOrder] : [];
-    for (const t of allTasks) if (!full.includes(t.id)) full.push(t.id);
+    // Start from the order the user SEES (unknown ids first — see taskSort),
+    // not "saved order + unknown appended": with a fresh task at the top, a row
+    // dropped onto it landed at the bottom of the saved order, i.e. last page.
+    const full = sortByOrder(allTasks).map(t => t.id);
+    for (const id of listOrder) if (!full.includes(id)) full.push(id);
     const oldIndex = full.indexOf(taskId);
     const newIndex = full.indexOf(overId);
     if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return;
@@ -803,7 +810,7 @@ const TasksView: React.FC = () => {
   );
 
   // Format date compactly — always show actual date; flag overdue with ⚠️
-  const formatDateCompact = (date: Date) => {
+  const formatDateCompact = (date: Date, status?: Task['status']) => {
     if (!date || isNaN(new Date(date).getTime())) {
       return { text: 'Pa afat', overdue: false, className: 'text-muted-foreground' };
     }
@@ -812,10 +819,13 @@ const TasksView: React.FC = () => {
     // Albanian month names — the UI is sq-AL, "May 5" amid Albanian labels was a leak.
     const months = ['Jan', 'Shk', 'Mar', 'Pri', 'Maj', 'Qer', 'Kor', 'Gush', 'Sht', 'Tet', 'Nën', 'Dhj'];
     const dateStr = `${taskDate.getDate()} ${months[taskDate.getMonth()]}`;
+    // A finished task is never "vonuar": it used to render red with ⚠️ in the
+    // Përfunduar column because only the calendar day was looked at.
+    if (status === 'Done') return { text: dateStr, overdue: false, className: 'text-muted-foreground' };
     // Compare CALENDAR days (ignore time-of-day) so a task due later today isn't
     // labeled "Nesër" — intra-day times made the hour-based diff round up.
-    const sod = (d: Date) => { const n = new Date(d); n.setHours(0, 0, 0, 0); return n.getTime(); };
-    const diffDays = Math.round((sod(taskDate) - sod(now)) / (1000 * 60 * 60 * 24));
+    // Days are Europe/Tirane days (see isOverdueDate).
+    const diffDays = Math.round((startOfRecurrenceDay(taskDate) - startOfRecurrenceDay(now)) / (1000 * 60 * 60 * 24));
     if (diffDays < 0) return { text: dateStr, overdue: true, className: 'text-destructive font-medium' };
     if (diffDays === 0) return { text: 'Sot · ' + dateStr, overdue: false, className: 'text-warning font-medium' };
     if (diffDays === 1) return { text: 'Nesër · ' + dateStr, overdue: false, className: 'text-warning' };
@@ -830,7 +840,7 @@ const TasksView: React.FC = () => {
   const taskGroups = useMemo(() => {
     if (groupBy === 'none') return [];
     const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayMs = startOfRecurrenceDay(now);
     const PRIORITY_LABEL: Record<string, string> = { urgent: 'Urgjente', high: 'I lartë', medium: 'Mesatar', low: 'I ulët' };
     const PRIORITY_ORDER = ['urgent', 'high', 'medium', 'low'];
     const groups = new Map<string, { key: string; label: string; sort: number; tasks: Task[]; total: number }>();
@@ -858,10 +868,9 @@ const TasksView: React.FC = () => {
         const dueMs = taskDueMs(task);
         if (task.status === 'Done') { add('e_done', 'Përfunduara', 4, task); continue; }
         if (dueMs === null) { add('z_none', 'Pa afat', 5, task); continue; }
-        const raw = new Date(dueMs);
-        const day = new Date(raw.getFullYear(), raw.getMonth(), raw.getDate());
-        const diff = Math.round((day.getTime() - startOfToday.getTime()) / 86400000);
-        if (day < startOfToday) add('a_overdue', 'Të vonuara', 0, task);
+        const dayMs = startOfRecurrenceDay(new Date(dueMs));
+        const diff = Math.round((dayMs - todayMs) / 86400000);
+        if (dayMs < todayMs) add('a_overdue', 'Të vonuara', 0, task);
         else if (diff === 0) add('b_today', 'Sot', 1, task);
         else if (diff > 0 && diff <= 7) add('c_week', 'Këtë javë', 2, task);
         else add('d_later', 'Më vonë', 3, task);
@@ -885,6 +894,19 @@ const TasksView: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const toggleSelect = (id: string) => setSelectedIds(prev => { const s = new Set(prev); if (s.has(id)) s.delete(id); else s.add(id); return s; });
   const clearSelection = () => setSelectedIds(new Set());
+  // A selection must never outlive its rows: a task deleted from its own menu
+  // (or by a colleague) stayed counted in "N të zgjedhura" and the next bulk
+  // action failed on it. Leaving the list view drops the selection too — the
+  // floating bar used to hover over the board with no checkboxes in sight.
+  useEffect(() => {
+    setSelectedIds(prev => {
+      if (prev.size === 0) return prev;
+      const live = new Set((rawTasks || []).map(t => t.id));
+      const next = new Set([...prev].filter(id => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [rawTasks]);
+  useEffect(() => { setSelectedIds(new Set()); }, [viewMode]);
   const bulkUpdate = async (patch: Partial<Task>) => {
     const ids = [...selectedIds];
     if (!ids.length) return;
@@ -901,6 +923,18 @@ const TasksView: React.FC = () => {
       }
       if (patch.status && patch.status !== 'Done' && t) {
         return taskMutation.update(id, { ...patch, ...reopenPatch(t, patch.status) });
+      }
+      // Bulk "Cakto te" is a reassignment like any other: the new assignee and
+      // the previous one hear about it (the panel's assignTo already did; the
+      // bar reassigned in silence). Notification failures never fail the update.
+      if (patch.assignedToUserId && t && user?.uid && patch.assignedToUserId !== t.assignedToUserId) {
+        return taskMutation.update(id, patch).then(res => {
+          taskAssignedNotifications(t, patch.assignedToUserId as string, user.uid, {
+            actorName: user.displayName || undefined,
+            newAssigneeName: getUserName(patch.assignedToUserId as string),
+          }).forEach(n => notificationMutation.create(n as any).catch(err => console.error('[Notifications] task_assigned (bulk) dërgim dështoi:', err)));
+          return res;
+        });
       }
       return taskMutation.update(id, patch);
     }));
@@ -928,7 +962,7 @@ const TasksView: React.FC = () => {
   };
 
   const renderTaskRow = (task: Task) => {
-    const dateInfo = formatDateCompact(new Date(task.endDate));
+    const dateInfo = formatDateCompact(new Date(task.endDate), task.status);
     const isSelected = selectedTask?.id === task.id;
     const isOverdue = isOverdueDate(task.endDate) && task.status !== 'Done';
     const isBlocked = blockedTaskIds.has(task.id);
@@ -1185,9 +1219,10 @@ const TasksView: React.FC = () => {
                 // Strip everything a copy must NOT inherit: recurrence & its
                 // bookkeeping (nextCycleCreated!), the billing idempotency flag
                 // (a copy's value was never invoiced/applied), collaborator ids
-                // (their taskCollaborators rows belong to the original), and
-                // notification flags.
-                const { id, isRecurring, recurringFrequency, recurringInterval, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, recurringEndDate, nextRecurringDate, nextCycleCreated, dueNotificationSent, overdueNotificationSent, parentTaskId, dependsOn, attachments, value, valueAppliedToBudget, collaboratorIds, ...rest } = task as any;
+                // (their taskCollaborators rows belong to the original),
+                // notification flags, and the reminder — a copied "1 orë para"
+                // made the cron fire two identical reminders.
+                const { id, isRecurring, recurringFrequency, recurringInterval, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, recurringEndDate, nextRecurringDate, nextCycleCreated, seriesId, recurringSkippedReason, dueNotificationSent, overdueNotificationSent, reminderAt, reminderOffsetMinutes, reminderSentAt, parentTaskId, dependsOn, attachments, value, valueAppliedToBudget, collaboratorIds, ...rest } = task as any;
                 await taskMutation.create({ ...rest, title: rest.title + ' (kopje)', status: 'Todo' });
                 toast({ title: 'Detyrë u kopjua' });
               }}>
@@ -1509,8 +1544,8 @@ const TasksView: React.FC = () => {
             </div>
           )}
 
-          {/* Bulk action bar (floating) */}
-          {selectedIds.size > 0 && (
+          {/* Bulk action bar (floating) — list view only, where the checkboxes are */}
+          {viewMode === 'list' && selectedIds.size > 0 && (
             <div className="fixed bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3 py-2 rounded-xl bg-card border shadow-lg flex-wrap max-w-[95vw]">
               <span className="text-sm font-medium px-1">{selectedIds.size} të zgjedhura</span>
               <Select onValueChange={(v) => bulkUpdate({ status: v as any })}>
@@ -1566,7 +1601,7 @@ const TasksView: React.FC = () => {
                       <SortableContext items={columnTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
                         <div className="space-y-2 flex-1 overflow-y-auto min-h-[60px]">
                           {columnTasks.map((task) => {
-                            const dateInfo = formatDateCompact(new Date(task.endDate));
+                            const dateInfo = formatDateCompact(new Date(task.endDate), task.status);
                             const isOverdue = isOverdueDate(task.endDate) && task.status !== 'Done';
                             const isBlocked = blockedTaskIds.has(task.id);
                             const projectName = getProjectName(task.projectId);
@@ -1792,72 +1827,14 @@ const CalendarView: React.FC<{
   const undatedTasks = tasks.filter(t => !t.endDate && !t.startDate);
   const [dayDetail, setDayDetail] = useState<{ label: string; items: Task[] } | null>(null);
 
-  // Projected recurring occurrences for the displayed month. Recurring tasks
-  // materialise one cycle at a time (only when the current one is completed), so
-  // future cycles have no doc yet and wouldn't otherwise appear on the calendar.
-  // Here we project the "tip" of each series (nextCycleCreated !== true) forward
-  // from its endDate using the same recurrence rule and show those dates as
-  // lightweight ghosts — so e.g. a monthly task is visible in July before it's
-  // generated. Clicking opens the source task.
-  // A recurring task shows on EVERY occurrence day in the visible month that its
-  // rule matches (weekly→its weekday, monthly→its day, daily→selected weekdays,
-  // yearly→its day). Bounded below by the series start and above by the
-  // "repeat-until" date. NOT suppressed by status=Done — a recurring series must
-  // stay visible on the calendar even after the current cycle is completed.
-  // Old cycles that already spawned their successor (nextCycleCreated) are hidden
-  // so the same series doesn't render twice.
-  const projectionsByDay = React.useMemo(() => {
-    const map = new Map<number, Task[]>();
-    const y = currentDate.getFullYear();
-    const mo = currentDate.getMonth();
-    const daysInMo = new Date(y, mo + 1, 0).getDate();
-    // Cell keys via the recurrence zone (noon-local can't flip across a day
-    // boundary for any real browser offset) — the old weekday/date matching ran
-    // on the MACHINE's zone, so ghosts shifted a day for non-Tirane browsers.
-    const cellKeys = Array.from({ length: daysInMo }, (_, i) => startOfRecurrenceDay(new Date(y, mo, i + 1, 12)));
-    const monthEndKey = cellKeys[daysInMo - 1];
-    tasks.forEach((task) => {
-      const t = task as any;
-      if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true) return;
-      // The engine spawns nothing inside an archived/cancelled project, so the
-      // calendar must not promise occurrences that will never exist.
-      if (projectRecurrenceBlockReason(task, projects)) return;
-      const anchor = task.endDate || task.startDate;
-      if (!anchor) return;
-      let occ = new Date(anchor);
-      if (isNaN(occ.getTime())) return;
-      const recEndKey = t.recurringEndDate ? startOfRecurrenceDay(new Date(t.recurringEndDate)) : null;
-      // Fast-forward a stale anchor arithmetically (whole pattern-periods only,
-      // so the phase is preserved) — otherwise the 500-step walk below exhausts
-      // itself before ever reaching the viewed month for an old daily series.
-      const interval = Math.max(1, t.recurringInterval ?? 1);
-      const periodMs = t.recurringFrequency === 'daily' && interval === 1
-        ? 7 * 86400000
-        : t.recurringFrequency === 'weekly' ? interval * 7 * 86400000
-        : 0;
-      if (periodMs > 0) {
-        const behindMs = cellKeys[0] - periodMs - occ.getTime();
-        if (behindMs > 0) occ = new Date(occ.getTime() + Math.floor(behindMs / periodMs) * periodMs);
-      }
-      // Walk the ACTUAL occurrence chain with the same engine that spawns the
-      // cycles — pattern-matching cells by weekday/date ignored the interval,
-      // so an "every 2 weeks" task painted phantom ghosts on every week.
-      let guard = 0;
-      while (guard++ < 500) {
-        const key = startOfRecurrenceDay(occ);
-        if (recEndKey != null && key > recEndKey) break;
-        if (key > monthEndKey) break;
-        const dayIdx = cellKeys.indexOf(key);
-        if (dayIdx >= 0) {
-          const day = dayIdx + 1;
-          if (!map.has(day)) map.set(day, []);
-          map.get(day)!.push(task);
-        }
-        occ = addFrequency(occ, t.recurringFrequency, t.recurringDayOfWeek ?? null, t.recurringDayOfMonth ?? null, t.recurringInterval ?? 1, t.recurringDaysOfWeek ?? null);
-      }
-    });
-    return map;
-  }, [tasks, projects, currentDate]);
+  // Projected recurring occurrences for the displayed month — ONE engine shared
+  // with the project calendar (`recurringOccurrencesInMonth`): the tip's own day
+  // plus the future cycles the spawning engine would produce; anchor day only for
+  // old cycles and for series inside an archived/cancelled project.
+  const projectionsByDay = React.useMemo(
+    () => recurringOccurrencesInMonth(tasks, currentDate.getFullYear(), currentDate.getMonth(), { projects }),
+    [tasks, projects, currentDate],
+  );
 
   const days = [];
   for (let i = 0; i < firstDay; i++) {

@@ -19,6 +19,16 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
+### [2026-09-22] — Tasks: ~30 gjetjet e auditimit u rregulluan (motori, paneli, TasksView, cron, rules, portal)
+- Motori (`src/lib/recurringUtils.ts` + pasqyra në `api/cron/run.ts`): mujorja me `addZonedMonthsClamped` (Jan 31 s'bëhet më Mar 31), `seriesId` mbi çdo okurencë + `sameSeries` pa term frekuence, `remapDependsOnForNextCycle`, projeksion i përbashkët kalendari `recurringOccurrencesInMonth`, dedupe i cron-it me arsye të emërtuar; 17 teste të reja
+- Paneli: `readOnly = guest || !canEdit` (Viewer), `ProjectDetailView` i jep `allTasks`, nën-detyra me `customerId` + Done përmes `completeTask`, timer me guard + catch + toast, komenti/nën-detyra raportojnë gabimin
+- TasksView: reorder nga renditja e shfaqur, "Cakto te" njofton (`taskAssignedNotifications`), përzgjedhja pastrohet, Kopjo pa reminder, Done kurrë "vonuar", ditët në Europe/Tirane; `deleteTaskCascade` heq `dependsOn` të varur; `ProjectDetailView.handleCreateTask` shkruan kujtesën
+- Cron: `loadSuspendedBusinessIds` + projekt i arkivuar/anuluar te alarmet, scope manual për 3 job-e, `project-completion` dedupe 7 ditë pa `isRead`, `recurring-project-reset` vetëm `Completed` + datat lëvizin një cikël, `escapeHtml`/`senderHeader`; `_notify-staff` createdByUserId null + fallback menaxher; `_crmAutomationJob` `relatedCustomerId`
+- Rules: `isViewerRole()` te tasks write, `isPortalProjectMember()` te read (teste 39d/39e); portali lexon detyrat e projekteve ku është anëtar (`projectId in`); QuickTaskForm slot default s'nis në të kaluarën, getters zonalë
+### [2026-09-22] — Auditim i plotë i modulit Tasks (5 agjentë, vetëm analizë — asgjë s'u ndryshua)
+- ~30 gjetje të verifikuara te kodi, të renditura; HIGH: `addFrequency` mujore overflow-on para clamp-it (Jan 31 → Mar 31, `src/lib/recurringUtils.ts` + kopja cron), `ProjectDetailView` monton `TaskDetailPanel` pa `allTasks` (blocker guard fikur, ri-hapja dyfishon serinë), Viewer ndryshon gjithçka në panel (`isGuestMode` vetëm)
+- MED: cron `_notify-staff` task me `createdByUserId` = klienti i portalit; `recurring-project-reset` alarmon "vonuar" çdo cikël; dedupe `isRead` te project-completion; manual run kryq-tenant; reminder i hedhur te `ProjectDetailView.handleCreateTask`; `_crmAutomationJob` task me `customerId` i lexueshëm nga portali
+- Lista e plotë në memory `tasks-audit-2026-09.md`; rregullimet presin vendimin e pronarit
 ### [2026-09-22] — Detyrat periodike ndalojnë kur projekti arkivohet/anulohet
 - Bug: as `completeTask` (`src/lib/recurringUtils.ts`) as backstop-i `recurring-tasks` (`api/cron/run.ts`) s'e shihnin projektin — një detyrë periodike në projekt të arkivuar krijonte ciklin tjetër përgjithmonë
 - I ri `projectRecurrenceBlockReason()` + `RECURRENCE_STOPPING_PROJECT_STATUSES` (= `TERMINAL_PROJECT_STATUSES`, pin me test); outcome i ri `recurring-stopped` me toast; 5 thirrësit kalojnë `projects`; kalendari (TasksView ghosts) nuk projekton seri të arkivuara; cron-i numëron `projectTerminalSkipped`

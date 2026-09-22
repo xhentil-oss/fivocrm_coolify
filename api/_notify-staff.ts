@@ -239,7 +239,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const salesStaff = members.filter(
         (m) => m.status !== 'Inactive' && m.userId && (m.role === 'Admin' || m.canAccessCRM === true),
       );
-      const assignee = salesStaff[0]?.userId || null;
+      // Fallback: any manager, so the task always has a STAFF owner. With no
+      // assignee the alert jobs fell back to createdByUserId — which was the
+      // portal client's uid — and the customer got "Detyrë e skaduara" emails.
+      const managerFallback = members.find((m) => m.status !== 'Inactive' && m.userId && (m.role === 'Manager' || m.role === 'Owner'));
+      const assignee = salesStaff[0]?.userId || managerFallback?.userId || null;
       const dueDate = typeof task.dueInDays === 'number' && task.dueInDays >= 0
         ? admin.firestore.Timestamp.fromMillis(now.toMillis() + task.dueInDays * 86_400_000)
         : admin.firestore.Timestamp.fromMillis(now.toMillis() + 86_400_000);
@@ -253,13 +257,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         endDate: dueDate,
         dueDate,
         assignedToUserId: assignee || '',
-        ...(clean(task.leadId, 200) ? { leadId: clean(task.leadId, 200) } : {}),
+        // Same field name as every other server-side task writer (automation,
+        // cadence, landing) — `leadId` was a fourth spelling nothing read.
+        ...(clean(task.leadId, 200) ? { relatedLeadId: clean(task.leadId, 200) } : {}),
         businessId,
         ...(salesStaff[0]?.teamId ? { teamId: salesStaff[0].teamId } : (teamId ? { teamId } : {})),
         customerId,
         createdAt: now,
         updatedAt: now,
-        createdByUserId: decoded.uid,
+        // NOT the caller: `decoded.uid` is the PORTAL CLIENT. As creator they
+        // became the fallback recipient of task_due_soon/task_overdue.
+        createdByUserId: null,
       });
       taskId = ref.id;
     } catch { /* never block on task creation */ }

@@ -240,7 +240,7 @@ async function executeAction(
         description: render(a.description || ''),
         status: 'Todo',
         priority: a.priority || 'medium',
-        assignedToUserId: assignee,
+        assignedToUserId: assignee || '',
         createdByUserId: rule.createdByUserId || null,
         teamId,
         businessId: rule.businessId,
@@ -248,7 +248,11 @@ async function executeAction(
         endDate: due,
         dueDate: due,
         dueNotificationSent: false,
-        ...(f.entity === 'lead' ? { relatedLeadId: f.id } : { customerId: f.id }),
+        // `customerId` on a task is the PORTAL-VISIBILITY switch (rules +
+        // portal query key on it), so an internal "Klient i ftohtë — ofro
+        // zbritje" task was delivered to that customer's browser. Link it
+        // under a name the portal never reads.
+        ...(f.entity === 'lead' ? { relatedLeadId: f.id } : { relatedCustomerId: f.id }),
         automationRuleId: rule.id,
         createdAt: now,
         updatedAt: now,

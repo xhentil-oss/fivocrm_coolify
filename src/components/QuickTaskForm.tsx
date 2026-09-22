@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
+// Zone-explicit getters: a browser outside Europe/Tirane must not store a
+// weekday/day-of-month the recurrence engine disagrees with.
+import { recurrenceDayOfWeek, recurrenceDayOfMonth } from '../lib/recurringUtils';
 import { ChevronDown, AlertTriangle, Search, Check } from 'lucide-react';
 import { Button } from './ui/button';
 import { DialogClose } from './ui/dialog';
@@ -176,8 +179,17 @@ const QuickTaskForm: React.FC<{
   const [projectId, setProjectId] = useState(defaultProjectId);
   const [labels, setLabels] = useState<string[]>([]);
   const [dayIdx, setDayIdx] = useState(0);
-  const [timeFrom, setTimeFrom] = useState(9);
-  const [timeTo, setTimeTo] = useState(11);
+  // Default slot: 09–11, or — when it is already past 09:00 today — the next
+  // whole hour for two hours (capped at 22–23). A task created at 15:00 used to
+  // be born overdue, and a "1 orë para" reminder on it fired within 5 minutes.
+  const defaultSlot = (() => {
+    const h = new Date().getHours();
+    if (h < 9) return [9, 11] as const;
+    const from = Math.min(h + 1, 22);
+    return [from, Math.min(from + 2, 23)] as const;
+  })();
+  const [timeFrom, setTimeFrom] = useState<number>(defaultSlot[0]);
+  const [timeTo, setTimeTo] = useState<number>(defaultSlot[1]);
   const [rec, setRec] = useState<'never' | 'weekly' | 'monthly' | 'custom'>('never');
   const [recInterval, setRecInterval] = useState(2);
   const [recUnit, setRecUnit] = useState<'dite' | 'jave' | 'muaj'>('jave');
@@ -281,11 +293,11 @@ const QuickTaskForm: React.FC<{
       if (rec === 'weekly') {
         fd.set('recurringFrequency', 'weekly');
         fd.set('recurringInterval', '1');
-        fd.set('recurringDayOfWeek', String(selDay.getDay()));
+        fd.set('recurringDayOfWeek', String(recurrenceDayOfWeek(selDay)));
       } else if (rec === 'monthly') {
         fd.set('recurringFrequency', 'monthly');
         fd.set('recurringInterval', '1');
-        fd.set('recurringDayOfMonth', String(selDay.getDate()));
+        fd.set('recurringDayOfMonth', String(recurrenceDayOfMonth(selDay)));
       } else if (recUnit === 'dite') {
         fd.set('recurringFrequency', 'daily');
         fd.set('recurringInterval', String(recInterval));
@@ -300,12 +312,12 @@ const QuickTaskForm: React.FC<{
         } else {
           fd.set('recurringFrequency', 'weekly');
           fd.set('recurringInterval', String(recInterval));
-          fd.set('recurringDayOfWeek', String(recDays[0] ?? selDay.getDay()));
+          fd.set('recurringDayOfWeek', String(recDays[0] ?? recurrenceDayOfWeek(selDay)));
         }
       } else {
         fd.set('recurringFrequency', 'monthly');
         fd.set('recurringInterval', String(recInterval));
-        fd.set('recurringDayOfMonth', String(selDay.getDate()));
+        fd.set('recurringDayOfMonth', String(recurrenceDayOfMonth(selDay)));
       }
       if (recUntil) fd.set('recurringEndDate', recUntil);
     }

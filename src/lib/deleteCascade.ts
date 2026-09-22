@@ -1,4 +1,5 @@
 import {
+  arrayRemove,
   collection,
   deleteDoc,
   doc as docRefOf,
@@ -72,12 +73,17 @@ async function cascadeOneTask(
   ops: Promise<unknown>[],
   processedInvoices: Set<string>,
 ) {
-  const [commentsSnap, collaboratorsSnap, timeSnap, invoicesSnap] = await Promise.all([
+  const [commentsSnap, collaboratorsSnap, timeSnap, invoicesSnap, dependantsSnap] = await Promise.all([
     getDocs(scoped('taskComments', businessId, 'taskId', taskId)),
     getDocs(scoped('taskCollaborators', businessId, 'taskId', taskId)),
     getDocs(scoped('timeEntries', businessId, 'taskId', taskId)),
     getDocs(scoped('invoices', businessId, 'taskId', taskId)),
+    getDocs(query(collection(db, 'tasks'), where('businessId', '==', businessId), where('dependsOn', 'array-contains', taskId))),
   ]);
+  // Tasks that were BLOCKED by this one: drop the dead id, or their 🔒 chip
+  // keeps pointing at nothing ("S'mund të përfundohet para varësisë" for a
+  // task that no longer exists).
+  ops.push(...dependantsSnap.docs.map(d => updateDoc(d.ref, { dependsOn: arrayRemove(taskId), updatedAt: new Date() })));
   summary.comments += commentsSnap.size;
   summary.collaborators += collaboratorsSnap.size;
   summary.timeEntriesUnlinked += timeSnap.size;

@@ -1340,6 +1340,48 @@ test('39b. cross-tenant task create/read/write are denied', async () => {
   }));
 });
 
+test('39d. a Viewer reads tasks but cannot create, update or delete them', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'tasks', 'taskViewed'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'Read only', status: 'Todo', assignedToUserId: 'alice',
+    });
+  });
+  const vera = staffOf('vera', MY_BIZ, MY_TEAM, ['viewer']);
+  await assertSucceeds(getDoc(doc(vera, 'tasks', 'taskViewed')));
+  await assertFails(updateDoc(doc(vera, 'tasks', 'taskViewed'), { status: 'Done' }));
+  await assertFails(updateDoc(doc(vera, 'tasks', 'taskViewed'), { title: 'renamed by a viewer' }));
+  await assertFails(deleteDoc(doc(vera, 'tasks', 'taskViewed')));
+  await assertFails(setDoc(doc(vera, 'tasks', 'taskByViewer'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, title: 'viewer create', status: 'Todo', createdByUserId: 'vera',
+  }));
+  // A plain member of the same business still can.
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(updateDoc(doc(alice, 'tasks', 'taskViewed'), { status: 'In Progress' }));
+});
+
+test('39e. a portal MEMBER of a project reads its tasks (by projectId), a stranger does not', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'projects', 'projShared'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, name: 'Shared', status: 'Active', customerId: 'cust1',
+      memberUserIds: ['dave'],
+    });
+    await setDoc(doc(ctx.firestore(), 'tasks', 'taskShared'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, projectId: 'projShared', customerId: 'cust1',
+      title: 'Shared work', status: 'Todo',
+    });
+  });
+  // dave is a portal user of ANOTHER customer, added to the project as a member.
+  const dave = portalOf('dave', 'custOther', 'dave@partner.com');
+  await assertSucceeds(getDoc(doc(dave, 'tasks', 'taskShared')));
+  await assertSucceeds(getDocs(query(collection(dave, 'tasks'), where('projectId', '==', 'projShared'))));
+  await assertSucceeds(getDocs(query(collection(dave, 'tasks'), where('projectId', 'in', ['projShared']))));
+  await assertFails(updateDoc(doc(dave, 'tasks', 'taskShared'), { status: 'Done' }));
+  // Not a member, not the customer → nothing.
+  const erin = portalOf('erin', 'custOther', 'erin@partner.com');
+  await assertFails(getDoc(doc(erin, 'tasks', 'taskShared')));
+  await assertFails(getDocs(query(collection(erin, 'tasks'), where('projectId', '==', 'projShared'))));
+});
+
 test('39c. task update may never move the task to another business', async () => {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(doc(ctx.firestore(), 'tasks', 'taskHop'), {

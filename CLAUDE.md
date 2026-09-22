@@ -1078,6 +1078,43 @@ Full runbook: `workspace/FOLLOW_UP.md`.
   "Sipas afatit". Project board columns have no persisted order and sort
   urgent-first then earliest deadline; a same-column drag is not persisted.
 
+### Recurring tasks (engine laws — audit 22 Sep 2026)
+
+- **`addFrequency` never `setMonth(+n)`.** Monthly steps go through
+  `addZonedMonthsClamped` with the anchor day (31 Jan → 28 Feb → 31 Mar); yearly
+  clamps 29 Feb. The overflow-before-clamp version turned Jan 31 into MAR 31 and
+  every short month vanished from month-end series, in both engines, for years —
+  because no test ever took a monthly step. `api/cron/run.ts` mirrors it.
+- **A series is identified by `seriesId`** (= root parent id, carried onto every
+  child by `buildNextRecurringTask` and the cron). `sameSeries()` /
+  `hasLiveSeriesSibling()` key on it, falling back to title+assignee+project for
+  legacy rows — never on frequency (changing "çdo javë" → "çdo muaj" on a Done
+  tip used to disown its live child and fork the series). The cron's duplicate
+  check uses the same key and records `recurringSkippedReason:
+  'duplicate-occurrence'` on the parent it closes — never a silent close.
+- **`dependsOn` on a child follows the LIVE blocker**
+  (`remapDependsOnForNextCycle`, mirrored as `remapDependsOn` in the cron): a Done
+  recurring blocker → its live sibling, a Done one-off → dropped, unknown/open →
+  kept. Pass `allTasks` to `completeTask` for this to work.
+- **`recurringOccurrencesInMonth()` is the ONE calendar projection** (TasksView
+  and ProjectDetailView). A recurring doc renders only through it: anchor day
+  always, forward walk unless `nextCycleCreated` or the project is
+  archived/cancelled (`projectRecurrenceBlockReason`).
+- **`TaskDetailPanel` must be mounted with `allTasks`.** Without it the blocker
+  guard is off and re-opening a Done tip re-arms `nextCycleCreated` while the
+  child is alive (double series). The panel is read-only for `!canEdit` (Viewer)
+  as well as for guests — and the rules now deny Viewer writes (`isViewerRole()`,
+  test 39d); a portal project MEMBER reads its tasks by projectId
+  (`isPortalProjectMember`, test 39e).
+- **The task jobs skip suspended tenants and archived/cancelled projects, and a
+  manual run is one tenant** (`task-deadline-alerts`, `project-completion-reminder`,
+  `recurring-project-reset` all take `{ businessId }` from `manualScopeId`).
+  `recurring-project-reset` cycles only a `Completed` project and moves the task
+  dates by one cycle — re-opening tasks with last cycle's deadline fired
+  "vonuar" for every task at the next run. Server-created follow-up tasks carry
+  `createdByUserId: null` (never the portal client) and link a customer via
+  `relatedCustomerId` — `customerId` on a task IS the portal-visibility switch.
+
 ### Roles & Permissions
 - Roles: `Admin`, `Manager`, `Sales`, `SalesAgent`, `Member`, `Viewer`
 - Permission checks via `usePermissions()` hook and `<PermissionGate>` component.

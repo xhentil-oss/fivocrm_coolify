@@ -177,19 +177,73 @@ export function addFrequency(
       if (diff !== 0) d.setUTCDate(d.getUTCDate() + ((diff + 7) % 7));
     }
   } else if (frequency === 'monthly') {
-    d.setUTCMonth(d.getUTCMonth() + step);
-    if (dayOfMonth != null) {
-      const maxDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-      d.setUTCDate(Math.min(dayOfMonth, maxDay));
-    }
+    // NEVER `setUTCMonth(+step)`: it overflows BEFORE any clamp, so 31 Jan + 1
+    // became "31 Feb" = 3 Mar, which the clamp then pinned to 31 MAR — every
+    // short month (Feb/Apr/Jun/Sep) vanished from a month-end series. Same law
+    // as the billing anchors: add months in the zone, clamped, anchor day kept.
+    return addZonedMonthsClamped(date, step, dayOfMonth ?? undefined);
   } else if (frequency === 'yearly') {
-    d.setUTCFullYear(d.getUTCFullYear() + step);
+    // 29 Feb + 1 year is 28 Feb, not 1 Mar.
+    const p = zonedParts(date);
+    const lastDay = daysInZonedMonth(p.year + step, p.month);
+    return zonedDate(p.year + step, p.month, Math.min(p.day, lastDay), p.hours, p.minutes, p.seconds, p.ms);
   }
   return fromZoned(d, RECURRENCE_TIMEZONE);
 }
 
-/** Build the data for the next cycle task from a completed recurring task. */
-export function buildNextRecurringTask(task: Task): Omit<Task, 'id' | 'createdAt' | 'updatedAt'> {
+/**
+ * The id every occurrence of one series shares: the root parent's id. Legacy
+ * rows (before the field existed) are their own root. It is what the cron's
+ * duplicate check and `hasLiveSeriesSibling` key on — a title/assignee match
+ * used to be the only identity, so two distinct series with the same title
+ * collided (one was silently closed) and a renamed occurrence forked.
+ */
+export function seriesIdOf(task: Pick<Task, 'id' | 'seriesId'>): string {
+  return task.seriesId || task.id;
+}
+
+/** True when two rows are occurrences of the same recurring series. */
+export function sameSeries(a: Task, b: Task): boolean {
+  if (a.seriesId || b.seriesId) return seriesIdOf(a) === seriesIdOf(b);
+  // Legacy identity (rows that predate `seriesId`): the fields that do not
+  // change from one occurrence to the next. Frequency is deliberately NOT one
+  // of them — changing "çdo javë" to "çdo muaj" on a tip must not make its own
+  // live child a stranger (that forked a second series).
+  return a.title === b.title &&
+    (a.assignedToUserId ?? '') === (b.assignedToUserId ?? '') &&
+    (a.projectId ?? '') === (b.projectId ?? '');
+}
+
+/**
+ * The child's blockers. `dependsOn` holds occurrence IDS, so a copied list points
+ * at the blocker occurrence that was already Done: a recurring blocker blocked
+ * only in cycle 1 and the 🔒 badge lied from then on. A Done recurring blocker
+ * is re-pointed to its live sibling; a Done one-off blocker is dropped (it can
+ * never block again); an unknown or still-open id is kept as is.
+ * MIRRORED in api/cron/run.ts (`remapDependsOn`) — keep in sync.
+ */
+export function remapDependsOnForNextCycle(task: Task, allTasks?: readonly Task[] | null): string[] | undefined {
+  const deps = task.dependsOn;
+  if (!deps || deps.length === 0) return deps ?? undefined;
+  if (!allTasks || allTasks.length === 0) return deps;
+  const out: string[] = [];
+  for (const id of deps) {
+    const dep = allTasks.find(t => t.id === id);
+    if (!dep || dep.status !== 'Done') { out.push(id); continue; }
+    if (!dep.isRecurring) continue; // satisfied forever
+    const live = allTasks.find(t => t.id !== dep.id && t.status !== 'Done' && t.isRecurring === true && sameSeries(dep, t));
+    if (live && !out.includes(live.id)) out.push(live.id);
+  }
+  return out;
+}
+
+/** Build the data for the next cycle task from a completed recurring task.
+ *  `allTasks` (when the caller has it) lets `dependsOn` follow the blockers'
+ *  live occurrences instead of the finished ones. */
+export function buildNextRecurringTask(
+  task: Task,
+  opts: { allTasks?: readonly Task[] | null } = {},
+): Omit<Task, 'id' | 'createdAt' | 'updatedAt'> {
   const parseDate = (d: any): Date => {
     if (!d) return new Date();
     if (d instanceof Date) return d;
@@ -253,8 +307,10 @@ export function buildNextRecurringTask(task: Task): Omit<Task, 'id' | 'createdAt
     startDate: newStart,
     endDate: newEnd,
     parentTaskId: task.parentTaskId ?? undefined,
-    dependsOn: task.dependsOn ?? undefined,
+    dependsOn: remapDependsOnForNextCycle(task, opts.allTasks),
     estimatedHours: task.estimatedHours ?? undefined,
+    // Every occurrence carries the root parent's id — see `seriesIdOf`.
+    seriesId: seriesIdOf(task),
     isRecurring: true,
     recurringFrequency: freq,
     recurringInterval: interval,
@@ -293,10 +349,7 @@ export function hasLiveSeriesSibling(task: Task, allTasks: Task[] | undefined | 
     t.id !== task.id &&
     t.status !== 'Done' &&
     t.isRecurring === true &&
-    t.recurringFrequency === task.recurringFrequency &&
-    t.title === task.title &&
-    (t.assignedToUserId ?? '') === (task.assignedToUserId ?? '') &&
-    (t.projectId ?? '') === (task.projectId ?? ''),
+    sameSeries(task, t),
   );
 }
 
@@ -378,7 +431,7 @@ export async function completeTask(task: Task, deps: CompleteTaskDeps): Promise<
     try {
       const ended = recurrenceHasEnded(task);
       if (!ended) {
-        await deps.createTask(buildNextRecurringTask(task) as Omit<Task, 'id' | 'createdAt' | 'updatedAt'>);
+        await deps.createTask(buildNextRecurringTask(task, { allTasks: deps.allTasks }) as Omit<Task, 'id' | 'createdAt' | 'updatedAt'>);
       }
       await deps.updateTask(task.id, { status: 'Done', nextCycleCreated: true });
       return ended ? { kind: 'recurring-ended' } : { kind: 'recurring-created' };
@@ -444,4 +497,79 @@ export function projectRecurrenceBlockReason(
   if (project.status === 'Archived') return 'project-archived';
   if (project.status === 'Cancelled') return 'project-cancelled';
   return null;
+}
+
+// ── Calendar projection (one engine for both calendars) ──────────────────────
+//
+// Recurring tasks materialise one cycle at a time, so future cycles have no doc
+// yet. Both calendars (TasksView, ProjectDetailView) paint the series forward
+// from its tip with the SAME engine that spawns the cycles. This used to be two
+// hand-written copies; the project one never received the fixes (zone math,
+// interval, fast-forward, archived project) the tasks one got.
+//
+// Contract: a recurring doc is rendered ONLY through this map (the day filter of
+// the calendar excludes `isRecurring` rows), so:
+//   · the tip's own anchor day is always included (it is a real doc);
+//   · an old cycle (`nextCycleCreated`) or a series inside an archived/cancelled
+//     project shows its anchor day and NOTHING further — the engine will not
+//     spawn there, so the calendar must not promise it;
+//   · a Done tip still projects forward (the series is alive).
+export function recurringOccurrencesInMonth(
+  tasks: readonly Task[],
+  year: number,
+  month: number,
+  opts: { projects?: ReadonlyArray<RecurrenceProject> | null } = {},
+): Map<number, Task[]> {
+  const map = new Map<number, Task[]>();
+  const daysInMo = new Date(year, month + 1, 0).getDate();
+  // Cell keys via the recurrence zone (noon-local can't flip across a day
+  // boundary for any real browser offset).
+  const cellKeys = Array.from({ length: daysInMo }, (_, i) => startOfRecurrenceDay(new Date(year, month, i + 1, 12)));
+  const monthEndKey = cellKeys[daysInMo - 1];
+  const push = (key: number, task: Task) => {
+    const dayIdx = cellKeys.indexOf(key);
+    if (dayIdx < 0) return;
+    const day = dayIdx + 1;
+    if (!map.has(day)) map.set(day, []);
+    map.get(day)!.push(task);
+  };
+  for (const task of tasks) {
+    const t = task as any;
+    if (!t.isRecurring || !t.recurringFrequency) continue;
+    const anchor = task.endDate || task.startDate;
+    if (!anchor) continue;
+    const anchorDate = new Date(anchor as any);
+    if (isNaN(anchorDate.getTime())) continue;
+    const anchorKey = startOfRecurrenceDay(anchorDate);
+    push(anchorKey, task);
+    // Anchor only: the engine spawns nothing past this occurrence.
+    if (t.nextCycleCreated === true) continue;
+    if (projectRecurrenceBlockReason(task, opts.projects)) continue;
+    if (anchorKey > monthEndKey) continue;
+
+    const recEndKey = t.recurringEndDate ? startOfRecurrenceDay(new Date(t.recurringEndDate)) : null;
+    let occ = anchorDate;
+    // Fast-forward a stale anchor arithmetically (whole pattern-periods only, so
+    // the phase is preserved) — otherwise the 500-step walk below exhausts itself
+    // before ever reaching the viewed month for an old daily series.
+    const interval = Math.max(1, t.recurringInterval ?? 1);
+    const periodMs = t.recurringFrequency === 'daily' && interval === 1
+      ? 7 * 86400000
+      : t.recurringFrequency === 'weekly' ? interval * 7 * 86400000
+      : 0;
+    if (periodMs > 0) {
+      const behindMs = cellKeys[0] - periodMs - occ.getTime();
+      if (behindMs > 0) occ = new Date(occ.getTime() + Math.floor(behindMs / periodMs) * periodMs);
+    }
+    let guard = 0;
+    while (guard++ < 500) {
+      occ = addFrequency(occ, t.recurringFrequency, t.recurringDayOfWeek ?? null, t.recurringDayOfMonth ?? null, interval, t.recurringDaysOfWeek ?? null);
+      const key = startOfRecurrenceDay(occ);
+      if (recEndKey != null && key > recEndKey) break;
+      if (key > monthEndKey) break;
+      if (key === anchorKey) continue;
+      push(key, task);
+    }
+  }
+  return map;
 }

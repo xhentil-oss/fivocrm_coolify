@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { buildNextRecurringTask, completeTask, recurrenceHasEnded, addFrequency, startOfRecurrenceDay, projectRecurrenceBlockReason, RECURRENCE_STOPPING_PROJECT_STATUSES } from './recurringUtils';
+import { buildNextRecurringTask, completeTask, recurrenceHasEnded, addFrequency, startOfRecurrenceDay, projectRecurrenceBlockReason, RECURRENCE_STOPPING_PROJECT_STATUSES, hasLiveSeriesSibling, remapDependsOnForNextCycle, recurringOccurrencesInMonth, zonedParts } from './recurringUtils';
 import { TERMINAL_PROJECT_STATUSES } from './finance/recurringBilling';
 import type { Task } from '../types';
 
@@ -271,5 +271,130 @@ describe('recurrence day math is timezone-independent', () => {
     const early = startOfRecurrenceDay(new Date('2026-08-09T22:30:00Z')); // Aug 10 00:30 local
     const late = startOfRecurrenceDay(new Date('2026-08-10T21:30:00Z'));  // Aug 10 23:30 local
     expect(early).toBe(late);
+  });
+});
+
+// `setUTCMonth(+1)` overflowed BEFORE the clamp: 31 Jan → "31 Feb" = 3 Mar →
+// clamped to 31 MAR. Every short month vanished from a month-end series and no
+// test ever asked for a monthly step.
+describe('addFrequency — monthly and yearly never overflow', () => {
+  const day = (d: Date) => { const p = zonedParts(d); return `${p.year}-${String(p.month + 1).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`; };
+  const jan31 = new Date('2026-01-31T09:00:00+01:00');
+
+  it('31 Jan + 1 month is 28 Feb, and the series keeps its anchor day', () => {
+    const feb = addFrequency(jan31, 'monthly', null, 31);
+    expect(day(feb)).toBe('2026-02-28');
+    const mar = addFrequency(feb, 'monthly', null, 31);
+    expect(day(mar)).toBe('2026-03-31');
+    const apr = addFrequency(mar, 'monthly', null, 31);
+    expect(day(apr)).toBe('2026-04-30');
+  });
+
+  it('walks every month of the year exactly once (no skipped February)', () => {
+    let d = jan31;
+    const months: number[] = [];
+    for (let i = 0; i < 11; i++) { d = addFrequency(d, 'monthly', null, 31); months.push(zonedParts(d).month + 1); }
+    expect(months).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  });
+
+  it('without an explicit day-of-month it still clamps instead of overflowing', () => {
+    expect(day(addFrequency(new Date('2026-01-30T09:00:00+01:00'), 'monthly', null, null))).toBe('2026-02-28');
+  });
+
+  it('keeps the wall-clock time of day across the step', () => {
+    const p = zonedParts(addFrequency(jan31, 'monthly', null, 31));
+    expect([p.hours, p.minutes]).toEqual([9, 0]);
+  });
+
+  it('every 2 months from the 31st: Mar 31 → May 31, never Apr 30 → Jun 30 drift', () => {
+    const d = addFrequency(new Date('2026-03-31T09:00:00+02:00'), 'monthly', null, 31, 2);
+    expect(day(d)).toBe('2026-05-31');
+  });
+
+  it('29 Feb + 1 year is 28 Feb, not 1 Mar', () => {
+    expect(day(addFrequency(new Date('2028-02-29T09:00:00+01:00'), 'yearly'))).toBe('2029-02-28');
+  });
+});
+
+describe('series identity — sameSeries / hasLiveSeriesSibling / seriesId', () => {
+  it('the child carries the root parent id as seriesId, and grandchildren keep it', () => {
+    const child = buildNextRecurringTask(baseTask());
+    expect(child.seriesId).toBe('t1');
+    const grandchild = buildNextRecurringTask({ ...baseTask(), id: 'c1', seriesId: 't1' });
+    expect(grandchild.seriesId).toBe('t1');
+  });
+
+  it('a frequency change on the tip does not disown its live child (no fork)', () => {
+    const tip = baseTask({ status: 'Done', recurringFrequency: 'monthly' });
+    const child = baseTask({ id: 'c1', status: 'Todo', recurringFrequency: 'weekly' });
+    expect(hasLiveSeriesSibling(tip, [tip, child])).toBe(true);
+  });
+
+  it('seriesId wins over the legacy title match', () => {
+    const a = baseTask({ id: 'a', seriesId: 'S1', status: 'Done' });
+    const stranger = baseTask({ id: 'b', seriesId: 'S2', status: 'Todo' }); // same title, different series
+    expect(hasLiveSeriesSibling(a, [a, stranger])).toBe(false);
+    const sibling = baseTask({ id: 'c', seriesId: 'S1', status: 'Todo', title: 'renamed' });
+    expect(hasLiveSeriesSibling(a, [a, sibling])).toBe(true);
+  });
+});
+
+// `dependsOn` holds occurrence IDS: a copied list pointed at the blocker that was
+// already Done, so a recurring blocker blocked only in cycle 1.
+describe('remapDependsOnForNextCycle', () => {
+  it('re-points a Done recurring blocker to its live sibling', () => {
+    const blockerDone = baseTask({ id: 'b1', status: 'Done', title: 'Blocker', seriesId: 'B' });
+    const blockerLive = baseTask({ id: 'b2', status: 'Todo', title: 'Blocker', seriesId: 'B' });
+    const task = baseTask({ dependsOn: ['b1'] });
+    expect(remapDependsOnForNextCycle(task, [blockerDone, blockerLive, task])).toEqual(['b2']);
+  });
+
+  it('drops a Done one-off blocker and keeps open / unknown ids', () => {
+    const oneOff = baseTask({ id: 'o1', status: 'Done', isRecurring: false, title: 'Once' });
+    const open = baseTask({ id: 'p1', status: 'Todo', isRecurring: false, title: 'Open' });
+    const task = baseTask({ dependsOn: ['o1', 'p1', 'ghost'] });
+    expect(remapDependsOnForNextCycle(task, [oneOff, open, task])).toEqual(['p1', 'ghost']);
+  });
+
+  it('without a task list the ids are copied as they are', () => {
+    expect(remapDependsOnForNextCycle(baseTask({ dependsOn: ['x'] }), undefined)).toEqual(['x']);
+    expect(buildNextRecurringTask(baseTask({ dependsOn: ['x'] })).dependsOn).toEqual(['x']);
+  });
+});
+
+describe('recurringOccurrencesInMonth — one projection engine for both calendars', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-08-09T12:00:00Z')); });
+  afterEach(() => { vi.useRealTimers(); });
+  // Weekly on Monday, tip due Mon 3 Aug 2026 (Tirane).
+  const tip = baseTask({ endDate: new Date('2026-08-03T09:00:00+02:00'), startDate: new Date('2026-08-03T08:00:00+02:00') });
+
+  it('paints the anchor day and every later Monday of the month', () => {
+    const m = recurringOccurrencesInMonth([tip], 2026, 7);
+    expect([...m.keys()].sort((a, b) => a - b)).toEqual([3, 10, 17, 24, 31]);
+  });
+
+  it('an old cycle (nextCycleCreated) shows only its own day', () => {
+    const m = recurringOccurrencesInMonth([{ ...tip, nextCycleCreated: true }], 2026, 7);
+    expect([...m.keys()]).toEqual([3]);
+  });
+
+  it('a series inside an archived project shows its real day and promises nothing further', () => {
+    const m = recurringOccurrencesInMonth([{ ...tip, projectId: 'p1' }], 2026, 7, { projects: [{ id: 'p1', status: 'Archived' }] });
+    expect([...m.keys()]).toEqual([3]);
+    const live = recurringOccurrencesInMonth([{ ...tip, projectId: 'p1' }], 2026, 7, { projects: [{ id: 'p1', status: 'Active' }] });
+    expect(live.size).toBe(5);
+  });
+
+  it('a Done tip still projects forward (the series is alive) and stops at repeat-until', () => {
+    const m = recurringOccurrencesInMonth([{ ...tip, status: 'Done', recurringEndDate: new Date('2026-08-17T00:00:00+02:00') }], 2026, 7);
+    expect([...m.keys()].sort((a, b) => a - b)).toEqual([3, 10, 17]);
+  });
+
+  it('an interval-2 weekly series paints every OTHER week and a stale anchor fast-forwards', () => {
+    const old = baseTask({ recurringInterval: 2, endDate: new Date('2025-01-06T09:00:00+01:00'), startDate: new Date('2025-01-06T08:00:00+01:00') });
+    const m = recurringOccurrencesInMonth([old], 2026, 7);
+    const days = [...m.keys()].sort((a, b) => a - b);
+    expect(days.length).toBeGreaterThanOrEqual(2);
+    for (let i = 1; i < days.length; i++) expect(days[i] - days[i - 1]).toBe(14);
   });
 });
