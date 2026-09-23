@@ -3,6 +3,7 @@ import admin, { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 import { notifyUser } from './_push.js';
 import { NOTIFICATION_TYPE_CATEGORY } from './_notificationTypes.js';
 import { checkPersistentRateLimit } from './_rateLimit.js';
+import { verifiedEmail, isSafeAppPath } from './_callerIdentity.js';
 
 // Each call fans out (doc + push to every device + email) to every Admin/Manager/
 // CRM-capable member of the tenant, and can create a task — so the ceiling is per
@@ -148,7 +149,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // mirror check with '/portal'; every legitimate caller sends '/app/…'.)
   const safeActionUrl = (() => {
     const u = clean(actionUrl, 500);
-    return u && u.startsWith('/app/') && !u.startsWith('//') ? u : undefined;
+    return isSafeAppPath(u, ['/app/']) ? u : undefined;
   })();
 
   // ── Resolve the caller's customer (portal identity) ──
@@ -175,10 +176,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const cd = c.data() as any;
     businessId = cd.businessId || null;
     teamId = cd.teamId || null;
-    // Sanity: the caller must actually own this customer record.
-    const callerEmail = (decoded.email || '').toLowerCase();
+    // Sanity: the caller must actually own this customer record. Only a VERIFIED
+    // token email counts as a match; an unverified one is treated as absent, so the
+    // portal-access row has to prove the ownership instead.
+    const callerEmail = verifiedEmail(decoded) || '';
     const customerEmail = (cd.email || '').toLowerCase();
-    if (callerEmail && customerEmail && callerEmail !== customerEmail) {
+    if (!callerEmail || !customerEmail || callerEmail !== customerEmail) {
       // users/{uid}.customerId is rules-validated by email, but re-check here since
       // this endpoint bypasses rules.
       const pa = await db.collection('clientPortalAccess')
@@ -214,17 +217,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // ── Optional: conversation thread routing (owner + watchers) ──
   // Done here, server-side, because computing watchers needs the tenant's staff list
   // — which the portal must not read. Mirrors src/lib/conversationRouting.ts.
-  if (conversation && typeof conversation.channelId === 'string' && conversation.channelId) {
+  // The channel id is client-supplied and becomes a `conversations` DOCUMENT id, so it
+  // is pinned to the portal's own shape: `client-<customerId>` or
+  // `client-<customerId>-project-<projectId>` for THIS customer. Anything else (another
+  // client's thread, a WhatsApp `wa-…` thread, a path) is dropped, not routed.
+  const activeMemberIds = new Set(members.filter((m) => m.status !== 'Inactive' && m.userId).map((m) => m.userId));
+  const conversationChannelId: string | null = (() => {
+    const id = typeof conversation?.channelId === 'string' ? conversation.channelId : '';
+    if (!id || id.length > 200) return null;
+    const re = new RegExp(`^client-${customerId.replace(/[^A-Za-z0-9_-]/g, '')}(-project-[A-Za-z0-9_-]{1,64})?$`);
+    return re.test(id) ? id : null;
+  })();
+  if (conversationChannelId) {
     try {
+      const requestedAgent = typeof conversation.salesAgentId === 'string' ? conversation.salesAgentId : null;
+      const requestedTeam = typeof conversation.teamId === 'string' ? conversation.teamId : null;
       await upsertConversation({
-        channelId: conversation.channelId,
-        channel: typeof conversation.channel === 'string' ? conversation.channel : 'portal',
+        channelId: conversationChannelId,
+        channel: typeof conversation.channel === 'string' ? conversation.channel.slice(0, 40) : 'portal',
         businessId,
-        teamId: typeof conversation.teamId === 'string' ? conversation.teamId : teamId,
+        // A department id from the body must be one of THIS tenant's teams (a member has it).
+        teamId: requestedTeam && members.some((m) => m.teamId === requestedTeam) ? requestedTeam : teamId,
         customerId,
         subject: clean(conversation.subject, 200) || null,
-        ownerId: members.some((m) => m.userId === responsibleUserId) ? responsibleUserId : null,
-        salesAgentId: typeof conversation.salesAgentId === 'string' ? conversation.salesAgentId : null,
+        ownerId: typeof responsibleUserId === 'string' && activeMemberIds.has(responsibleUserId) ? responsibleUserId : null,
+        // The sales agent becomes a watcher (notified of every message) — only a member of the tenant may be one.
+        salesAgentId: requestedAgent && activeMemberIds.has(requestedAgent) ? requestedAgent : null,
         members,
         actorUserId: decoded.uid,
         now,
@@ -236,6 +254,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let taskId: string | null = null;
   if (task && typeof task.title === 'string' && task.title.trim()) {
     try {
+      // `task.leadId` is client-supplied and is stored as `relatedLeadId` — it must be
+      // one of THIS tenant's leads (ideally this client's own), or it is dropped.
+      let relatedLeadId: string | null = null;
+      const wantedLead = clean(task.leadId, 200);
+      if (wantedLead && /^[A-Za-z0-9_-]+$/.test(wantedLead)) {
+        const leadSnap = await db.collection('leads').doc(wantedLead).get().catch(() => null);
+        const ld = leadSnap?.exists ? (leadSnap.data() as any) : null;
+        if (ld && ld.businessId === businessId) relatedLeadId = wantedLead;
+      }
       const salesStaff = members.filter(
         (m) => m.status !== 'Inactive' && m.userId && (m.role === 'Admin' || m.canAccessCRM === true),
       );
@@ -259,7 +286,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         assignedToUserId: assignee || '',
         // Same field name as every other server-side task writer (automation,
         // cadence, landing) — `leadId` was a fourth spelling nothing read.
-        ...(clean(task.leadId, 200) ? { relatedLeadId: clean(task.leadId, 200) } : {}),
+        ...(relatedLeadId ? { relatedLeadId } : {}),
         businessId,
         ...(salesStaff[0]?.teamId ? { teamId: salesStaff[0].teamId } : (teamId ? { teamId } : {})),
         customerId,
@@ -277,9 +304,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // and its watchers instead of every lead in the business (the watchers list was
   // computed above by upsertConversation and already contains the managers/admins
   // who should see it). Threads without an owner keep the broad audience.
-  if (conversation && typeof conversation.channelId === 'string' && conversation.channelId) {
+  if (conversationChannelId) {
     try {
-      const conv = await db.collection('conversations').doc(conversation.channelId).get();
+      const conv = await db.collection('conversations').doc(conversationChannelId).get();
       const cd = conv.exists ? (conv.data() as any) : null;
       const memberIds = new Set(members.filter((m) => m.status !== 'Inactive' && m.userId).map((m) => m.userId));
       if (cd?.ownerId && memberIds.has(cd.ownerId)) {

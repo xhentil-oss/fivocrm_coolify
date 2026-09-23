@@ -5,6 +5,7 @@ import { getDoc, setDoc, doc } from 'firebase/firestore';
 import { db } from './lib/firebase';
 import { useAuth } from './contexts/AuthContext';
 import { getStaffIdentity } from './lib/staffIdentity';
+import VerifyEmailScreen, { needsEmailVerification } from './components/VerifyEmailScreen';
 import ErrorBoundary from './components/ErrorBoundary';
 import TopNavBar from './components/TopNavBar';
 import Sidebar from './components/Sidebar';
@@ -186,6 +187,11 @@ function DefaultRedirect() {
 
   // If user has no team membership (not admin/owner/member), they are a client → go to portal
   if (!permissions.role && !permissions.isOwner && !permissions.isAdmin) {
+    // An UNVERIFIED password account with no uid-keyed membership is not bootstrapped
+    // anywhere (portal included) until the address is proven: the email-keyed
+    // membership match is off for them (usePermissions), so without this screen a
+    // colleague whose seat is still keyed by email would silently land in the portal.
+    if (user && needsEmailVerification(user)) return <VerifyEmailScreen user={user} />;
     if (invite.token) return <Navigate to={`/join/${invite.token}`} replace />;
     return <Navigate to="/portal" replace />;
   }

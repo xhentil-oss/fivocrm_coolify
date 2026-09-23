@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import crypto from 'crypto';
 import admin, { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 import { writeAudit } from './_audit.js';
 import { seatsForPlan } from './_billingPlans.js';
@@ -57,7 +58,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return await createTenantAction(res, body, decoded);
     } catch (err: any) {
       console.error('[platform-admin] create-tenant failed:', err?.message || err);
-      return res.status(500).json({ error: err?.message || 'Krijimi dështoi.' });
+      return res.status(500).json({ error: 'Krijimi dështoi.' });
     }
   }
 
@@ -326,7 +327,9 @@ async function createTenantAction(
 
   // Admin invite for the owner. `/api/accept-invite` verifies the email, applies the
   // seat cap and mints the membership + claims.
-  const token = `pc-${bizRef.id}-${Math.random().toString(36).slice(2, 10)}`;
+  // 192 bits of CSPRNG entropy: the token IS the Admin credential for the new tenant
+  // until it is accepted, and `Math.random()` is neither secret nor long enough.
+  const token = `pc-${crypto.randomBytes(24).toString('base64url')}`;
   const inviteRef = db.collection('teamInvites').doc();
   await inviteRef.set({
     email: ownerEmail,

@@ -11,6 +11,7 @@ import {
   Cloud, CloudOff,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
+import { safeExternalUrl } from '../lib/safeUrl';
 
 // ── Calendar Events List ──
 interface CalendarEventsProps {
@@ -140,9 +141,9 @@ export const CalendarEventsList: React.FC<CalendarEventsProps> = ({ compact = fa
                 )}
               </div>
               <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                {event.htmlLink && (
+                {safeExternalUrl(event.htmlLink) && (
                   <a
-                    href={event.htmlLink}
+                    href={safeExternalUrl(event.htmlLink) ?? undefined}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="p-1 hover:bg-muted rounded"

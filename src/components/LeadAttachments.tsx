@@ -5,6 +5,7 @@ import { useFileUpload } from '../hooks/useFileUpload';
 import { useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
+import { safeExternalUrl } from '../lib/safeUrl';
 import type { Lead, LeadActivity, FileAttachment } from '../types';
 
 // What the CRM lets you attach. Must stay a subset of the VPS ALLOWED_UPLOAD
@@ -50,7 +51,7 @@ export const AttachmentChips: React.FC<{
         >
           {iconFor(att)}
           <a
-            href={att.url}
+            href={safeExternalUrl(att.url) ?? undefined}
             target="_blank"
             rel="noopener noreferrer"
             className="truncate max-w-[180px] hover:underline"
@@ -70,7 +71,7 @@ export const AttachmentChips: React.FC<{
             </button>
           ) : (
             <a
-              href={att.url}
+              href={safeExternalUrl(att.url) ?? undefined}
               target="_blank"
               rel="noopener noreferrer"
               download={att.name}
@@ -220,7 +221,7 @@ export const LeadDocumentsPanel: React.FC<{ lead: Lead; canEdit: boolean }> = ({
               {iconFor(att)}
               <div className="flex-1 min-w-0">
                 <a
-                  href={att.url}
+                  href={safeExternalUrl(att.url) ?? undefined}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="block truncate font-medium hover:underline"
@@ -231,7 +232,7 @@ export const LeadDocumentsPanel: React.FC<{ lead: Lead; canEdit: boolean }> = ({
                 {att.size ? <p className="text-xs text-muted-foreground">{formatBytes(att.size)}</p> : null}
               </div>
               <a
-                href={att.url}
+                href={safeExternalUrl(att.url) ?? undefined}
                 target="_blank"
                 rel="noopener noreferrer"
                 download={att.name}

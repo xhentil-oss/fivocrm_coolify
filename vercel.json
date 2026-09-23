@@ -130,7 +130,15 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com https://www.gstatic.com https://js.stripe.com https://accounts.google.com https://*.daily.co; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob: https://vps.fivocrm.com https://*.daily.co; connect-src 'self' https://wa.fivocrm.com https://vps.fivocrm.com https://*.googleapis.com https://*.firebaseio.com https://*.firebase.com https://firestore.googleapis.com wss://*.firebaseio.com https://api.stripe.com https://*.sentry.io https://accounts.google.com https://*.daily.co wss://*.daily.co https://api.daily.co; frame-src https://js.stripe.com https://accounts.google.com https://*.firebaseapp.com https://*.daily.co; object-src 'none'; base-uri 'self'"
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com https://www.gstatic.com https://js.stripe.com https://accounts.google.com https://*.daily.co; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob: https://vps.fivocrm.com https://*.daily.co; connect-src 'self' https://wa.fivocrm.com https://vps.fivocrm.com https://*.googleapis.com https://*.firebaseio.com https://*.firebase.com https://firestore.googleapis.com wss://*.firebaseio.com https://api.stripe.com https://*.sentry.io https://accounts.google.com https://*.daily.co wss://*.daily.co https://api.daily.co; frame-src https://js.stripe.com https://accounts.google.com https://*.firebaseapp.com https://*.daily.co; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self' https://checkout.stripe.com https://accounts.google.com"
+        },
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=63072000; includeSubDomains"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(self), microphone=(self), geolocation=(), payment=(self \"https://js.stripe.com\" \"https://checkout.stripe.com\"), usb=(), interest-cohort=()"
         }
       ]
     }

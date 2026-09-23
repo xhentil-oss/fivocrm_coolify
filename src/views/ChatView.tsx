@@ -34,6 +34,7 @@ import { copyWithToast } from '../lib/clipboard';
 import { ToastAction } from '../components/ui/toast';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { getTimestampMs } from '../lib/utils';
+import { safeExternalUrl } from '../lib/safeUrl';
 import { useUnreadChat } from '../hooks/useUnreadChat';
 import { isDmForMe, isUnreadClientMessage, groupFullyReadAfter, unionById } from '../lib/chat/unread';
 import { useNotificationPrefs, useConversationPresence } from '../hooks/useNotificationPrefs';
@@ -1836,12 +1837,10 @@ const ChatView: React.FC = () => {
   // A message written directly to Firestore could carry a `javascript:` (or
   // other) URI that would execute on click — reject anything non-https here.
   const safeAttachmentHref = useCallback((url?: string | null): string | undefined => {
-    if (!url) return undefined;
-    const u = url.trim();
-    // Block only dangerous schemes that could execute on click (javascript:/data:/
-    // vbscript:/file:); allow normal file URLs. Was https-only, which stripped
-    // legitimate legacy http:// VPS attachment links and broke downloads for some users.
-    return /^(javascript|data|vbscript|file):/i.test(u) ? undefined : u;
+    // Only http(s) survives — decided by PARSING the value (`lib/safeUrl`): a regex
+    // on the raw string misses `java\tscript:`, which the browser reads as
+    // `javascript:`. Legacy http:// VPS attachment links still download.
+    return safeExternalUrl(url) ?? undefined;
   }, []);
 
   // Scroll to + briefly highlight a message by id. Used by the reply-quote preview
@@ -3964,8 +3963,11 @@ const ChatView: React.FC = () => {
                         message.id === lastOwnMsgId &&
                         message.isRead;
                       // Image attachment
-                      const hasImage = !!(message.attachmentUrl && isImageUrl(message.attachmentUrl));
-                      const hasAudio = !!(message.attachmentUrl && !hasImage && isAudioUrl(message.attachmentUrl));
+                      // An attachment renders ONLY through its http(s)-checked URL; a
+                      // row carrying any other scheme shows no media and no link.
+                      const attachmentHref = safeAttachmentHref(message.attachmentUrl);
+                      const hasImage = !!(attachmentHref && isImageUrl(attachmentHref));
+                      const hasAudio = !!(attachmentHref && !hasImage && isAudioUrl(attachmentHref));
                       // Placeholder text shown when a message is media-only — hide it so
                       // the image/voice note is the only thing in the bubble (no "📎 Attachment").
                       const isPlaceholderContent = message.content === '📎 Attachment' || message.content === '🎙️ Voice note';
@@ -4078,15 +4080,15 @@ const ChatView: React.FC = () => {
                                 )}
 
                                 {/* Inline audio (voice note) preview */}
-                                {message.attachmentUrl && hasAudio && (
-                                  <audio controls src={message.attachmentUrl} className="mt-2 max-w-[240px] h-9" preload="metadata" />
+                                {attachmentHref && hasAudio && (
+                                  <audio controls src={attachmentHref} className="mt-2 max-w-[240px] h-9" preload="metadata" />
                                 )}
 
                                 {/* Inline image preview */}
-                                {message.attachmentUrl && hasImage && (
-                                  <a href={safeAttachmentHref(message.attachmentUrl)} target="_blank" rel="noopener noreferrer" className={`block ${isPlaceholderContent ? '' : 'mt-2'}`}>
+                                {attachmentHref && hasImage && (
+                                  <a href={attachmentHref} target="_blank" rel="noopener noreferrer" className={`block ${isPlaceholderContent ? '' : 'mt-2'}`}>
                                     <img
-                                      src={message.attachmentUrl}
+                                      src={attachmentHref}
                                       alt="attachment"
                                       loading="lazy"
                                       decoding="async"
@@ -4099,12 +4101,12 @@ const ChatView: React.FC = () => {
                                   </a>
                                 )}
                                 {/* Non-image / non-audio attachment */}
-                                {message.attachmentUrl && !hasImage && !hasAudio && (
-                                  <a href={safeAttachmentHref(message.attachmentUrl)} target="_blank" rel="noopener noreferrer"
+                                {attachmentHref && !hasImage && !hasAudio && (
+                                  <a href={attachmentHref} target="_blank" rel="noopener noreferrer"
                                     className={`inline-flex items-center gap-1.5 text-xs mt-2 px-2.5 py-1 rounded-lg transition-colors ${
                                       isOwn ? 'bg-primary-foreground/15 hover:bg-primary-foreground/25' : 'bg-background hover:bg-accent text-primary'
                                     }`}>
-                                    <FileIcon className="h-3 w-3" /><span className="truncate max-w-[140px]">{getFilename(message.attachmentUrl)}</span>
+                                    <FileIcon className="h-3 w-3" /><span className="truncate max-w-[140px]">{getFilename(attachmentHref)}</span>
                                   </a>
                                 )}
 

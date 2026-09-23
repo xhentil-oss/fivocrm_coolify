@@ -32,6 +32,9 @@ on:
         type: string
         default: ''
 
+permissions:
+  contents: read
+
 jobs:
   ios:
     runs-on: macos-15
@@ -87,9 +90,13 @@ jobs:
 
       - name: Set build number
         if: inputs.build_number != ''
+        env:
+          BUILD_NUMBER: ${{ inputs.build_number }}
         run: |
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ inputs.build_number }}" ios/App/App/Info.plist 2>/dev/null || true
-          sed -i '' "s/CURRENT_PROJECT_VERSION = .*/CURRENT_PROJECT_VERSION = ${{ inputs.build_number }};/" ios/App/App.xcodeproj/project.pbxproj
+          # Passed through env (never interpolated into the script) and validated: digits only.
+          if ! [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then echo "::error::build_number must be numeric"; exit 1; fi
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" ios/App/App/Info.plist 2>/dev/null || true
+          sed -i '' "s/CURRENT_PROJECT_VERSION = .*/CURRENT_PROJECT_VERSION = $BUILD_NUMBER;/" ios/App/App.xcodeproj/project.pbxproj
 
       # ── verify: compile for the simulator, no certificates involved ──────────
       - name: Build for simulator

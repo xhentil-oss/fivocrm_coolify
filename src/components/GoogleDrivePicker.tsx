@@ -5,6 +5,7 @@ import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { ScrollArea } from './ui/scroll-area';
 import { Badge } from './ui/badge';
+import { safeExternalUrl } from '../lib/safeUrl';
 import {
   Search, FolderOpen, File, Image, FileText, Film, Music, Table, Presentation,
   ArrowLeft, ExternalLink, Loader2, Cloud, CloudOff, ChevronRight,
@@ -251,9 +252,9 @@ const GoogleDrivePicker: React.FC<GoogleDrivePickerProps> = ({
                         }`}
                       >
                         {/* Thumbnail or icon */}
-                        {file.thumbnailLink && !isFolder ? (
+                        {safeExternalUrl(file.thumbnailLink) && !isFolder ? (
                           <img
-                            src={file.thumbnailLink}
+                            src={safeExternalUrl(file.thumbnailLink) ?? undefined}
                             alt=""
                             className="w-8 h-8 rounded object-cover flex-shrink-0"
                           />
@@ -272,9 +273,9 @@ const GoogleDrivePicker: React.FC<GoogleDrivePickerProps> = ({
                           </div>
                         </div>
 
-                        {!isFolder && file.webViewLink && (
+                        {!isFolder && safeExternalUrl(file.webViewLink) && (
                           <a
-                            href={file.webViewLink}
+                            href={safeExternalUrl(file.webViewLink) ?? undefined}
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={e => e.stopPropagation()}

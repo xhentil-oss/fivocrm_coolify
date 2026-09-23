@@ -6,6 +6,7 @@ import { useClientPortal } from '../../hooks/useClientPortal';
 import { usePortalTenant } from '../../hooks/usePortalTenant';
 import { useCollection, useMutation, useDocument } from '../../hooks/useFirestore';
 import { useFileUpload } from '../../hooks/useFileUpload';
+import { safeExternalUrl } from '../../lib/safeUrl';
 import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../../components/ui/button';
 import { ScrollArea } from '../../components/ui/scroll-area';
@@ -244,22 +245,18 @@ const PortalChatView: React.FC = () => {
   const ALLOWED_ATTACHMENT_TYPES = [...ALLOWED_IMG_TYPES, ...ALLOWED_DOC_TYPES];
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
   const isImageUrl = (url: string) => /\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i.test(url) || /image%2F/i.test(url);
-  // Render attachment links as clickable anchors, but block dangerous schemes
-  // (javascript:/data:/vbscript:/file:) written straight to Firestore (XSS on click).
-  // Allow normal file URLs (https/http/blob/relative) so legacy http:// VPS links download.
-  const safeAttachmentHref = (url?: string | null): string | undefined => {
-    if (!url) return undefined;
-    const u = url.trim();
-    return /^(javascript|data|vbscript|file):/i.test(u) ? undefined : u;
-  };
+  // Render attachment links as clickable anchors only for http(s) URLs. A row written
+  // straight to Firestore can carry a `javascript:`/`data:` URI (XSS on click), and a
+  // regex on the raw string misses `java\tscript:` — `safeExternalUrl` PARSES it.
+  // Legacy http:// VPS links still download.
+  const safeAttachmentHref = (url?: string | null): string | undefined =>
+    safeExternalUrl(url) ?? undefined;
 
-  // The file-upload VPS URL lives in teamSettings but is synced to localStorage
-  // only for staff. Portal clients must load it themselves so photo upload works.
-  const { data: teamSettings } = useDocument<any>('teamSettings', resolvedTeamId || undefined);
-  useEffect(() => {
-    const url = teamSettings?.whatsappVpsUrl;
-    if (url) { try { localStorage.setItem('whatsapp_vps_url', url); } catch { /* ignore */ } }
-  }, [teamSettings]);
+  // The portal no longer reads `teamSettings` at all: the document carries the
+  // tenant's finance rate card, SMTP identity and bank details, and the rules deny
+  // it to portal clients. The upload host comes from the build env / allow-listed
+  // default (`useFileUpload`), so a tenant-editable `whatsappVpsUrl` can never
+  // receive the client's Firebase ID token.
 
   // Who should receive the client's message: the responsible person for the
   // active project, else the customer's assigned rep. Null → fall back to team.
@@ -431,7 +428,9 @@ const PortalChatView: React.FC = () => {
 
   // ── Video call (Daily) ──────────────────────────────────────────────────
   const { roomUrl, starting: videoStarting, start: startVideo, close: closeVideo } = useVideoCall();
-  const videoEnabled = teamSettings?.videoCallsEnabled !== false; // default on
+  // `videoCallsEnabled` was never written anywhere (staff or server), so the flag
+  // always resolved to "on"; keep that behaviour without the teamSettings read.
+  const videoEnabled = true;
   const handleVideoCall = async () => {
     const room = `fivocrm-${channelId}`.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60);
     const url = await startVideo(room);
@@ -772,10 +771,10 @@ const PortalChatView: React.FC = () => {
                             }`}
                           >
                             <p className="text-[13px] sm:text-[13.5px] leading-relaxed whitespace-pre-wrap break-words">{formatMessageContent(msg.content)}</p>
-                            {msg.attachmentUrl && (
+                            {safeAttachmentHref(msg.attachmentUrl) && (
                               isImageUrl(msg.attachmentUrl) ? (
                                 <a href={safeAttachmentHref(msg.attachmentUrl)} target="_blank" rel="noopener noreferrer" className="block mt-1.5">
-                                  <img src={msg.attachmentUrl} alt="Foto" loading="lazy" className="rounded-lg max-w-[220px] max-h-[280px] object-cover border border-border/40" />
+                                  <img src={safeAttachmentHref(msg.attachmentUrl)} alt="Foto" loading="lazy" className="rounded-lg max-w-[220px] max-h-[280px] object-cover border border-border/40" />
                                 </a>
                               ) : (
                                 <a

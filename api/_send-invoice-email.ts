@@ -4,6 +4,7 @@ import nodemailer from 'nodemailer';
 import { buildInvoiceEmail, publicInvoicePayUrl } from './_invoiceEmail.js';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
 import { tenantEmailIdentity } from './_tenantConfig.js';
+import { checkPersistentRateLimit } from './_rateLimit.js';
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && !email.includes('\n') && !email.includes('\r');
@@ -28,20 +29,28 @@ async function callerIsStaff(
   teamId: string | undefined | null,
   businessId: string | undefined | null,
 ): Promise<boolean> {
+  // An Inactive membership (removed employee) grants nothing; legacy rows without
+  // `status` count as Active, as in the rules.
+  const active = (s: FirebaseFirestore.QuerySnapshot) => s.docs.some((d) => d.data()?.status !== 'Inactive');
   if (teamId) {
     const s = await db.collection('teamMembers')
-      .where('teamId', '==', teamId).where('userId', '==', uid).limit(1).get();
-    if (!s.empty) return true;
+      .where('teamId', '==', teamId).where('userId', '==', uid).limit(5).get();
+    if (active(s)) return true;
   }
   if (businessId) {
     const s = await db.collection('teamMembers')
-      .where('businessId', '==', businessId).where('userId', '==', uid).limit(1).get();
-    if (!s.empty) return true;
+      .where('businessId', '==', businessId).where('userId', '==', uid).limit(5).get();
+    if (active(s)) return true;
   }
   return false;
 }
 
 // In-memory rate limit for client chat notifications: 1 email per (email+channelId) per 10 min
+// Persistent (Firestore-backed) per-caller ceilings — an in-memory Map is per
+// instance and resets on every cold start, so it never enforced anything under load.
+const NOTIFY_EMAILS_PER_HOUR = 60;
+const INVOICE_EMAILS_PER_HOUR = 60;
+// Debounce: one chat-notification email per (recipient, channel) per 10 minutes.
 const notifyRateLimit = new Map<string, number>();
 const NOTIFY_RATE_MS = 10 * 60 * 1000;
 
@@ -124,7 +133,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(422).json({ error: 'Customer has no valid email' });
     }
 
-    // Rate limit — silently skip
+    if (!(await checkPersistentRateLimit('notifyClientEmail', decodedToken.uid, NOTIFY_EMAILS_PER_HOUR))) {
+      return res.status(429).json({ error: 'Rate limited', retryAfterSeconds: 3600 });
+    }
+    // Debounce — silently skip
     const key = `${recipientEmail}:${channelId}`;
     const lastSent = notifyRateLimit.get(key) || 0;
     if (Date.now() - lastSent < NOTIFY_RATE_MS) {
@@ -197,6 +209,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(422).json({ error: 'Customer has no valid email address' });
   }
 
+  if (!(await checkPersistentRateLimit('invoiceEmail', decodedToken.uid, INVOICE_EMAILS_PER_HOUR))) {
+    return res.status(429).json({ error: 'Rate limited', retryAfterSeconds: 3600 });
+  }
   // Debounce: a double-clicked "Dërgo" must not mail the client twice.
   const mailKey = `${invoiceId}:${requestType === 'reminder' ? 'reminder' : 'initial'}`;
   const lastInvoiceMail = invoiceMailRateLimit.get(mailKey) || 0;

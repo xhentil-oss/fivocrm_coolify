@@ -126,6 +126,36 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   `scripts/firestore-rules.test.mjs` (35 tests; run them in the emulator before any
   `firebase deploy --only firestore:rules`).
 
+### Security laws (audit Sep 2026 — `workspace/SECURITY_AUDIT_2026_09.md`)
+
+- **An email is an identity only when Firebase says it is verified.** Server
+  (`verifiedEmail()` in `api/_callerIdentity.ts`, `_tenantClaims`), rules
+  (`verifiedEmail()` on every `token.email` clause) and client (`needsEmailVerification`
+  → `VerifyEmailScreen`; `/register` writes nothing before verification) agree. A
+  by-email membership match or portal bootstrap for an unverified account is the
+  pre-registration takeover the audit found.
+- **Authority never comes from a document the caller can write.** `bid` is
+  `teams/{tid}.businessId` (immutable), not `membership.businessId`; a team you created
+  makes you its Admin only if you are `businesses.ownerId` or already an Admin there;
+  `isSelfCreate()` is portal-only and tenant-bound. Every update rule pins
+  `businessId`/`teamId`/`userId` (`keepsBusinessId()`); adding a collection means pinning
+  them too.
+- **A cron job runnable by hand is in exactly one set** (`PLATFORM_ONLY_JOBS` /
+  `SCOPED_JOBS` / `BOOTSTRAP_JOBS` in `api/cron/run.ts`); the dispatcher refuses anything
+  else for a manual non-super-admin call, and a scoped runner filters by
+  `opts.businessId` BEFORE any send. `authorizeManual` checks the role for the resolved
+  `bid`, not "Admin anywhere".
+- **Nothing that sends, relays or uploads trusts the body for its target**: WhatsApp
+  agents are loaded from `whatsappAccounts` and compared with the caller's tenant (Vercel
+  AND the VPS `/send`); invite/welcome/report emails derive the recipient from the
+  invite/customer record; `actionUrl` is a relative path; redirect/upload hosts pass
+  `isPlatformHost` / `trustedFileHost` (`*.fivocrm.com`), never a tenant setting.
+- **HTML from users goes through `sanitizeHtml()` (DOMPurify + URL-parsing hook) and
+  every `href`/`src` from Firestore through `safeExternalUrl()`** — a regex on the raw
+  string misses `java	script:`; parse with `new URL`.
+- Storage bucket is deny-all (uploads go to the VPS). Secrets compare with
+  `timingSafeEqual`; a missing webhook secret fails CLOSED (503), never open.
+
 ### Contact identity & duplicate merge
 
 - **One person, one pair of records.** A contact may legitimately be BOTH a lead and a
@@ -1277,6 +1307,7 @@ META_ACCESS_TOKEN        — Meta WhatsApp API
 - `workspace/REPORTING_MODULE.md` — Reporting & accountability module (ERD, security, runbook)
 - `workspace/FINANCE_AUDIT_2026_09.md` — Finance/recurring-billing audit (anchor drift, period claims, tenant scoping)
 - `workspace/HOSTING_MODULE.md` — Hosting & domains module (cPanel/WHM + Dynadot): architecture, lifecycle table, endpoint actions, deploy steps
+- `workspace/SECURITY_AUDIT_2026_09.md` — Full-platform security audit (rules, api, cron, VPS, client, secrets): what shipped, operator actions (secret rotation), what was left
 - `workspace/CLIENT_PROFITABILITY.md` — Client & project profitability (hours × cost rate, earned revenue, gross→net, plan vs actual, month close): model, capture paths, cron, deploy
 
 ---

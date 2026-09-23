@@ -3,6 +3,8 @@ import { adminDb, Timestamp } from './_firebaseAdmin.js';
 import { FieldValue } from 'firebase-admin/firestore';
 import { normContactEmail, findLeadForContact, findCustomerForContact, crossLinkLeadCustomer } from './_contactIdentity.js';
 import { notifyUser } from './_push.js';
+import { checkPersistentRateLimit } from './_rateLimit.js';
+import { clientIp } from './_callerIdentity.js';
 
 /**
  * Combined landing-page API (public, no auth).
@@ -105,7 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   } catch (err: any) {
     console.error('landing top-level error:', err);
-    return res.status(500).json({ error: 'Internal server error', detail: err?.message });
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }
 
@@ -118,13 +120,19 @@ async function handleGetServices(_req: VercelRequest, res: VercelResponse) {
     // tenant's service catalogue on a public endpoint. Scope it to the landing
     // tenant; if that tenant has no stamped services yet (legacy docs), fall back
     // to the unscoped read so live landing pages keep working.
+    // No unscoped fallback: an empty catalogue for the landing tenant is an empty
+    // list, never every tenant's price list (the old fallback published exactly that
+    // whenever the tenant's services lacked a `businessId` stamp).
     const { businessId } = await resolveLandingTenant();
-    const base = adminDb.collection('services').where('category', '==', category);
-    let snap = await (businessId ? base.where('businessId', '==', businessId) : base).get();
-    if (businessId && snap.empty) {
-      console.warn('[landing] no services stamped with businessId — falling back to unscoped read');
-      snap = await base.get();
+    if (!businessId) {
+      console.error('[landing] landing tenant unresolved (VITE_DEFAULT_BUSINESS_ID) — returning no services');
+      res.setHeader('Cache-Control', 's-maxage=60');
+      return res.status(200).json({ services: [] });
     }
+    const snap = await adminDb.collection('services')
+      .where('category', '==', category)
+      .where('businessId', '==', businessId)
+      .get();
 
     const services = snap.docs.map(doc => {
       const d = doc.data();
@@ -148,8 +156,11 @@ async function handleGetServices(_req: VercelRequest, res: VercelResponse) {
 
 // ── POST: lead capture ───────────────────────────────────────────────
 async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
-  const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || 'unknown';
-  if (!checkIpRateLimit(ip)) {
+  // Per-IP, Firestore-backed (the in-memory Map is per instance and resets on every
+  // cold start, so it never limited a distributed submitter). The local Map stays as
+  // a cheap first gate.
+  const ip = clientIp(req);
+  if (!checkIpRateLimit(ip) || !(await checkPersistentRateLimit('landingIp', ip, MAX_PER_HOUR))) {
     return res.status(429).json({ error: 'Keni arritur limitin e kërkesave. Provoni përsëri pas pak.' });
   }
 

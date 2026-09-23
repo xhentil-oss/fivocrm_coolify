@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { collection, addDoc, Timestamp, query, onSnapshot } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from 'firebase/auth';
 import { db, auth } from '../lib/firebase';
+import { savePortalRegistrationDraft } from '../lib/portalRegistrationDraft';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -10,6 +11,7 @@ import { Card } from '../components/ui/card';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Loader2, CheckCircle, UserPlus } from 'lucide-react';
+import { toast } from '../hooks/use-toast';
 import { usePortalTenant } from '../hooks/usePortalTenant';
 import { getStaffIdentity } from '../lib/staffIdentity';
 
@@ -81,8 +83,16 @@ const RegisterView: React.FC = () => {
       // Set display name
       await updateProfile(user, { displayName: fullName });
 
-      // Send email verification (non-blocking — don't fail registration if this errors)
-      sendEmailVerification(user).catch(() => {});
+      // Send email verification (non-blocking — don't fail registration if this
+      // errors, but SAY so: the address must be verified before any staff match).
+      sendEmailVerification(user).catch((err: any) => {
+        console.error('[register] sendEmailVerification failed:', err?.code, err?.message);
+        toast({
+          variant: 'destructive',
+          title: 'Email-i i verifikimit nuk u dërgua',
+          description: `Mund ta ridërgosh më vonë nga ekrani "Verifiko email-in"${err?.code ? ` (${err.code})` : ''}.`,
+        });
+      });
 
       // 1b. This form registers CLIENTS. If the address is staff — already a member,
       // or invited and not yet accepted — stop before creating a Lead/Customer for
@@ -95,6 +105,27 @@ const RegisterView: React.FC = () => {
       if (staff.isStaffOrInvited) {
         setLoading(false);
         navigate(staff.pendingInviteToken ? `/join/${staff.pendingInviteToken}` : '/app');
+        return;
+      }
+
+      // A fresh password account is UNVERIFIED, and the Firestore rules (audit Sep
+      // 2026) refuse every portal bootstrap write — `leads`, `customers`,
+      // `clientPortalAccess`, `userProfiles` — until Firebase has verified the address.
+      // Otherwise anyone could register a customer's email and plant records (or a
+      // portal identity) in that customer's tenant. So this form no longer writes
+      // to Firestore at all: the extra details are parked locally and consumed by
+      // `useClientPortal` on the first VERIFIED portal login, which auto-creates the
+      // Customer + access record and lets /api/link-contact derive the CRM lead.
+      if (!user.emailVerified) {
+        savePortalRegistrationDraft({
+          email: normEmail,
+          name: fullName,
+          phone,
+          company,
+          serviceInterested,
+          message,
+        });
+        setSuccess(true);
         return;
       }
 
@@ -205,7 +236,8 @@ const RegisterView: React.FC = () => {
           <CheckCircle className="w-16 h-16 text-green-500 mx-auto" />
           <h2 className="text-2xl font-bold text-foreground">Regjistrimi u krye me sukses!</h2>
           <p className="text-muted-foreground">
-            Faleminderit për interesin tuaj. Tani mund të hyni në portalin tuaj.
+            Ju dërguam një email verifikimi te <span className="font-medium text-foreground">{email.trim()}</span>.
+            Klikoni lidhjen në email dhe më pas hyni në portal — llogaria aktivizohet pas verifikimit.
           </p>
           <div className="pt-4 space-y-3">
             <Button

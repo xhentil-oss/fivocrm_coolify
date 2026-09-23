@@ -1,5 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminAuth, adminDb, Timestamp } from './_firebaseAdmin.js';
+import { checkPersistentRateLimit } from './_rateLimit.js';
+import { activeMembership } from './_callerIdentity.js';
 import { getTeamConfig } from './_tenantConfig.js';
 import { markConversationAnswered } from './_waInbound.js';
 
@@ -33,22 +35,9 @@ function validatePhoneStrict(raw: string): string | null {
   return n;
 }
 
-// Per-uid rate limiter (10 / min)
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX = 10;
-const rateBuckets: Map<string, number[]> = new Map();
-function checkRateLimit(uid: string): boolean {
-  const now = Date.now();
-  const cutoff = now - RATE_LIMIT_WINDOW_MS;
-  const recent = (rateBuckets.get(uid) || []).filter((t) => t > cutoff);
-  if (recent.length >= RATE_LIMIT_MAX) {
-    rateBuckets.set(uid, recent);
-    return false;
-  }
-  recent.push(now);
-  rateBuckets.set(uid, recent);
-  return true;
-}
+// Persistent (Firestore-backed) per-uid ceiling. The old in-memory bucket was per
+// instance and reset on every cold start, so it enforced nothing under fan-out.
+const SEND_PER_HOUR = 200;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
@@ -67,7 +56,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
-  if (!checkRateLimit(uid)) {
+  if (!(await checkPersistentRateLimit('metaSend', uid, SEND_PER_HOUR))) {
     return res.status(429).json({ error: 'Limiti i dërgimeve u arrit. Provoni përsëri pas pak.' });
   }
 
@@ -93,13 +82,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'Numri i telefonit është i pavlefshëm' });
   }
 
-  // Verify the caller belongs to the requested team — prevents using another team's Meta credentials
-  const memberSnap = await adminDb.collection('teamMembers')
-    .where('teamId', '==', teamId)
-    .where('userId', '==', uid)
-    .limit(1)
-    .get();
-  if (memberSnap.empty) {
+  // Verify the caller is an ACTIVE member of the requested team — prevents using
+  // another team's Meta credentials (and a removed employee keeping the capability).
+  if (typeof teamId !== 'string' || !(await activeMembership(uid, { teamId }))) {
     return res.status(403).json({ error: 'Forbidden: nuk jeni anëtar i këtij ekipi' });
   }
 

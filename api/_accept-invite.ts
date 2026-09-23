@@ -3,6 +3,8 @@ import admin, { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 import { syncTenantClaims } from './_tenantClaims.js';
 import { writeAudit } from './_audit.js';
 import { seatsForPlan } from './_billingPlans.js';
+import { checkPersistentRateLimit } from './_rateLimit.js';
+import { verifiedEmail, isStaffRole, isBusinessOwner, isSuperAdminUid, clientIp, activeMembership } from './_callerIdentity.js';
 
 /**
  * POST /api/accept-invite
@@ -16,14 +18,20 @@ import { seatsForPlan } from './_billingPlans.js';
  * longer self-insert a `teamMembers` doc into a victim tenant as Admin.
  *
  * Security invariants enforced here:
- *  - The caller's verified email MUST equal the invite's target email (blocks
- *    accepting someone else's Admin invite).
+ *  - The caller's VERIFIED email MUST equal the invite's target email (blocks
+ *    accepting someone else's Admin invite; an unverified address is no identity).
  *  - The invite must be Pending and unexpired.
  *  - The invite's PROVENANCE is verified: it must have been created by someone who
  *    is (still) an owner/Admin/Manager of that team. Without this, `teamInvites`
  *    being client-creatable meant anyone could forge an invite for their own email
  *    into ANY team and have this endpoint hand them an Admin membership — a full
  *    cross-tenant takeover. A Manager may not mint an Admin.
+ *  - "Owner" means `businesses/{bid}.ownerId` (or a platform super-admin, who
+ *    creates tenants from the console) — NOT `teams.createdByUserId`: a team
+ *    someone once created must never outrank their current membership role.
+ *  - `invite.role` must be one of the closed staff-role list, case-sensitive.
+ *  - The seat check and the membership write happen in ONE transaction, so two
+ *    concurrent accepts cannot both squeeze into the last seat.
  *  - The membership is written with a DETERMINISTIC id `{teamId}_{uid}` so the
  *    hardened Firestore rules can validate tenant keys via exists().
  *  - The tenant keys on users/{uid} are written by the Admin SDK (server), never
@@ -31,27 +39,26 @@ import { seatsForPlan } from './_billingPlans.js';
  *    rules never have to trust a client-written document.
  */
 
-/** Resolve an actor's authority over a team: 'owner' | 'Admin' | 'Manager' | null. */
-async function teamAuthority(teamId: string, uid: string | null | undefined): Promise<string | null> {
+const ACCEPT_PER_HOUR_UID = 20;
+const ACCEPT_PER_HOUR_IP = 60;
+
+/**
+ * Resolve an actor's authority over a team: 'owner' | 'Admin' | 'Manager' | <other role> | null.
+ * Owner = `businesses/{bid}.ownerId` or a platform super-admin. An ACTIVE membership
+ * row supplies the role otherwise; an Inactive one grants nothing.
+ */
+async function teamAuthority(teamId: string, businessId: string, uid: string | null | undefined): Promise<string | null> {
   if (!uid) return null;
-  try {
-    const teamSnap = await db.collection('teams').doc(teamId).get();
-    if (teamSnap.exists && (teamSnap.data() as any)?.createdByUserId === uid) return 'owner';
-  } catch { /* fall through to membership */ }
-  try {
-    const direct = await db.collection('teamMembers').doc(`${teamId}_${uid}`).get();
-    const m = direct.exists ? (direct.data() as any) : null;
-    if (m && m.status !== 'Inactive') return m.role || null;
-    // Legacy random-id membership.
-    const legacy = await db.collection('teamMembers')
-      .where('teamId', '==', teamId).where('userId', '==', uid).limit(1).get();
-    if (!legacy.empty) {
-      const l = legacy.docs[0].data() as any;
-      if (l.status !== 'Inactive') return l.role || null;
-    }
-  } catch { /* no authority */ }
+  if (await isBusinessOwner(uid, businessId)) return 'owner';
+  if (await isSuperAdminUid(uid)) return 'owner';
+  const m = await activeMembership(uid, { teamId });
+  if (m?.role) return m.role;
+  // A business-level Admin/Owner (another department) may invite into any team of the business.
+  const biz = await activeMembership(uid, { businessId });
+  if (biz?.role && ['Admin', 'Owner'].includes(biz.role)) return biz.role;
   return null;
 }
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -65,10 +72,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Invalid token' });
   }
 
-  const { token } = req.body || {};
-  if (!token || typeof token !== 'string') return res.status(400).json({ error: 'Missing token' });
+  // Token guessing is the attack this endpoint invites; cap it per account AND per IP.
+  const [okUid, okIp] = await Promise.all([
+    checkPersistentRateLimit('acceptInvite', decoded.uid, ACCEPT_PER_HOUR_UID),
+    checkPersistentRateLimit('acceptInviteIp', clientIp(req), ACCEPT_PER_HOUR_IP),
+  ]);
+  if (!okUid || !okIp) return res.status(429).json({ error: 'Shumë përpjekje. Provo përsëri më vonë.' });
 
-  const callerEmail = (decoded.email || '').toLowerCase();
+  const { token } = req.body || {};
+  if (!token || typeof token !== 'string' || token.length > 256) return res.status(400).json({ error: 'Missing token' });
+
+  const callerEmail = verifiedEmail(decoded);
   if (!callerEmail) return res.status(403).json({ error: 'Account has no verified email' });
 
   // Look up the invite by token.
@@ -95,20 +109,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const teamId: string = invite.teamId;
-  if (!teamId) return res.status(422).json({ error: 'Invite has no teamId' });
+  if (!teamId || typeof teamId !== 'string') return res.status(422).json({ error: 'Invite has no teamId' });
 
-  // ── PROVENANCE: the invite must come from someone with authority over the team.
-  // `teamInvites` is client-creatable, so without this check a forged invite for
-  // the attacker's own email would mint them a membership in any tenant.
-  const inviterUid: string | null = invite.invitedByUserId || invite.createdByUserId || null;
-  const inviterAuthority = await teamAuthority(teamId, inviterUid);
-  if (!inviterAuthority || !['owner', 'Admin', 'Manager'].includes(inviterAuthority)) {
-    return res.status(403).json({ error: 'Ftesa nuk është e vlefshme (nuk u lëshua nga një administrator i ekipit).' });
-  }
-  // A Manager may not mint an Admin (no silent privilege escalation via invite).
-  const requestedRole: string = invite.role || 'Member';
-  if (inviterAuthority === 'Manager' && requestedRole === 'Admin') {
-    return res.status(403).json({ error: 'Ftesa kërkon rol Admin, por lëshuesi nuk ka të drejtë të caktojë Admin.' });
+  // The role is a closed list — `invite.role` is client-written, so anything else
+  // (including 'admin', 'Owner', 'SuperAdmin') is refused rather than stored.
+  const requestedRole = invite.role ?? 'Member';
+  if (!isStaffRole(requestedRole)) {
+    return res.status(422).json({ error: 'Ftesa ka një rol të pavlefshëm.' });
   }
 
   // Resolve the tenant (businessId) from the team doc; the team is the child of a
@@ -116,61 +123,75 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let businessId: string = teamId;
   try {
     const teamSnap = await db.collection('teams').doc(teamId).get();
-    if (teamSnap.exists && (teamSnap.data() as any)?.businessId) businessId = (teamSnap.data() as any).businessId;
-  } catch { /* fall back to teamId */ }
+    if (!teamSnap.exists) return res.status(404).json({ error: 'Ekipi nuk ekziston më.' });
+    if ((teamSnap.data() as any)?.businessId) businessId = (teamSnap.data() as any).businessId;
+  } catch {
+    return res.status(500).json({ error: 'Kontrolli i ekipit dështoi. Provo përsëri.' });
+  }
+
+  // ── PROVENANCE: the invite must come from someone with authority over the team.
+  // `teamInvites` is client-creatable, so without this check a forged invite for
+  // the attacker's own email would mint them a membership in any tenant.
+  const inviterUid: string | null = invite.invitedByUserId || invite.createdByUserId || null;
+  const inviterAuthority = await teamAuthority(teamId, businessId, inviterUid);
+  if (!inviterAuthority || !['owner', 'Admin', 'Manager'].includes(inviterAuthority)) {
+    return res.status(403).json({ error: 'Ftesa nuk është e vlefshme (nuk u lëshua nga një administrator i ekipit).' });
+  }
+  // A Manager may not mint an Admin (no silent privilege escalation via invite).
+  if (inviterAuthority === 'Manager' && requestedRole === 'Admin') {
+    return res.status(403).json({ error: 'Ftesa kërkon rol Admin, por lëshuesi nuk ka të drejtë të caktojë Admin.' });
+  }
 
   const uid = decoded.uid;
   const now = admin.firestore.Timestamp.now();
-
-  // ── SEAT LIMIT: the plan the tenant pays for decides how many people can join.
-  // Enforced here (server-side) because the client cannot be trusted to count, and
-  // because this endpoint is the ONLY path that creates a membership.
-  try {
-    const bizSnap = await db.collection('businesses').doc(businessId).get();
-    const biz = bizSnap.exists ? (bizSnap.data() as any) : null;
-    if (biz) {
-      if (biz.status === 'suspended') {
-        return res.status(402).json({ error: 'Hapësira është e pezulluar. Aktivizo abonimin për të shtuar anëtarë.' });
-      }
-      const seatCap = (biz.limits?.seats as number) || (biz.seats as number) || seatsForPlan(biz.plan);
-      const membersSnap = await db.collection('teamMembers').where('businessId', '==', businessId).get();
-      const activeUids = new Set<string>();
-      membersSnap.forEach((d) => {
-        const m = d.data() as any;
-        if (m.status !== 'Inactive' && m.userId) activeUids.add(m.userId);
-      });
-      // Re-accepting an existing membership must never be blocked by the cap.
-      if (!activeUids.has(uid) && activeUids.size >= seatCap) {
-        return res.status(402).json({
-          error: `Plani aktual përfshin ${seatCap} vende dhe të gjitha janë të zëna. Përmirëso planin për të shtuar anëtarë.`,
-          code: 'seat_limit_reached',
-          seats: seatCap,
-        });
-      }
-    }
-  } catch (err: any) {
-    console.error('[accept-invite] seat check failed:', err?.message || err);
-    // Fail CLOSED on an unexpected error: better to ask the user to retry than to
-    // silently hand out a seat the tenant has not paid for.
-    return res.status(500).json({ error: 'Kontrolli i vendeve dështoi. Provo përsëri.' });
-  }
-
-  // Deterministic membership id so hardened rules can validate via exists().
   const memberRef = db.collection('teamMembers').doc(`${teamId}_${uid}`);
-  const existing = await memberRef.get();
 
-  if (!existing.exists) {
-    // Also guard against a legacy random-id membership for the same (team,user).
-    const legacy = await db.collection('teamMembers')
-      .where('userId', '==', uid).where('teamId', '==', teamId).limit(1).get();
-    if (legacy.empty) {
-      await memberRef.set({
+  // ── SEAT LIMIT + MEMBERSHIP WRITE, in one transaction.
+  // The plan the tenant pays for decides how many people can join. Enforced here
+  // (server-side) because the client cannot be trusted to count, and because this
+  // endpoint is the ONLY path that creates a membership. Counting and writing in
+  // the same transaction means two accepts racing for the last seat cannot both win.
+  type Outcome = { created: boolean } | { error: string; status: number; extra?: Record<string, unknown> };
+  let outcome: Outcome;
+  try {
+    outcome = await db.runTransaction(async (tx): Promise<Outcome> => {
+      const bizSnap = await tx.get(db.collection('businesses').doc(businessId));
+      const biz = bizSnap.exists ? (bizSnap.data() as any) : null;
+      if (biz?.status === 'suspended') {
+        return { error: 'Hapësira është e pezulluar. Aktivizo abonimin për të shtuar anëtarë.', status: 402 };
+      }
+
+      const existing = await tx.get(memberRef);
+      // Legacy random-id membership for the same (team,user) counts as "already in".
+      const legacy = await tx.get(db.collection('teamMembers')
+        .where('userId', '==', uid).where('teamId', '==', teamId).limit(1));
+      if (existing.exists || !legacy.empty) return { created: false };
+
+      if (biz) {
+        const seatCap = (biz.limits?.seats as number) || (biz.seats as number) || seatsForPlan(biz.plan);
+        const membersSnap = await tx.get(db.collection('teamMembers').where('businessId', '==', businessId));
+        const activeUids = new Set<string>();
+        membersSnap.forEach((d) => {
+          const m = d.data() as any;
+          if (m.status !== 'Inactive' && m.userId) activeUids.add(m.userId);
+        });
+        // Re-accepting an existing membership (another department) must never be blocked by the cap.
+        if (!activeUids.has(uid) && activeUids.size >= seatCap) {
+          return {
+            error: `Plani aktual përfshin ${seatCap} vende dhe të gjitha janë të zëna. Përmirëso planin për të shtuar anëtarë.`,
+            status: 402,
+            extra: { code: 'seat_limit_reached', seats: seatCap },
+          };
+        }
+      }
+
+      tx.set(memberRef, {
         userId: uid,
-        email: callerEmail || invite.email || '',
-        displayName: decoded.name || (callerEmail ? callerEmail.split('@')[0] : ''),
+        email: callerEmail,
+        displayName: decoded.name || callerEmail.split('@')[0],
         teamId,
         businessId,
-        role: invite.role || 'Member',
+        role: requestedRole,
         canAccessProjects: invite.canAccessProjects ?? false,
         canAccessTasks: invite.canAccessTasks ?? false,
         canAccessCRM: invite.canAccessCRM ?? false,
@@ -194,17 +215,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         updatedAt: now,
         createdByUserId: uid,
       });
-    }
+      // Keep the console's denormalised member count fresh without waiting for the
+      // daily rollup (it is recomputed there, so an increment can never drift permanently).
+      if (bizSnap.exists) {
+        tx.set(db.collection('businesses').doc(businessId), {
+          memberCount: admin.firestore.FieldValue.increment(1),
+          updatedAt: now,
+        }, { merge: true });
+      }
+      return { created: true };
+    });
+  } catch (err: any) {
+    console.error('[accept-invite] membership transaction failed:', err?.message || err);
+    // Fail CLOSED on an unexpected error: better to ask the user to retry than to
+    // silently hand out a seat the tenant has not paid for.
+    return res.status(500).json({ error: 'Kontrolli i vendeve dështoi. Provo përsëri.' });
   }
-
-  // Keep the console's denormalised member count fresh without waiting for the daily
-  // rollup (it is recomputed there, so an increment can never drift permanently).
-  try {
-    await db.collection('businesses').doc(businessId).set({
-      memberCount: admin.firestore.FieldValue.increment(1),
-      updatedAt: now,
-    }, { merge: true });
-  } catch { /* non-critical: the rollup reconciles it */ }
+  if ('error' in outcome) return res.status(outcome.status).json({ error: outcome.error, ...(outcome.extra || {}) });
 
   // Mark the invite accepted (idempotent).
   await inviteDoc.ref.update({
@@ -227,7 +254,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (profiles.empty) {
       await db.collection('userProfiles').add({
         userId: uid,
-        displayName: decoded.name || (callerEmail ? callerEmail.split('@')[0] : ''),
+        displayName: decoded.name || callerEmail.split('@')[0],
         teamId,
         businessId,
         createdAt: now,
@@ -251,13 +278,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     actorEmail: callerEmail,
     action: 'invite.accept',
     target: `team:${teamId}`,
-    meta: { role: requestedRole, invitedBy: inviterUid, inviterAuthority },
+    meta: { role: requestedRole, invitedBy: inviterUid, inviterAuthority, created: outcome.created },
   });
 
   return res.status(200).json({
     success: true,
     teamId,
     teamName: invite.teamName || 'Ekip',
-    role: invite.role || 'Member',
+    role: requestedRole,
   });
 }

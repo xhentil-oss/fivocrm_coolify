@@ -2,6 +2,7 @@ import React from 'react';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { getInquirySections, getInquiryCompleteness, canSeeInquiryPricing } from '../lib/inquiryBrief';
 import { cn } from '../lib/utils';
+import { safeExternalUrl } from '../lib/safeUrl';
 import { AlertTriangle, FileText, Mail, ExternalLink } from 'lucide-react';
 import type { ServiceInquiry } from '../types';
 
@@ -121,14 +122,14 @@ const ProjectClientBrief: React.FC<{ inquiry: ServiceInquiry }> = ({ inquiry }) 
               {files.map((f, i) => (
                 <a
                   key={i}
-                  href={f.url}
+                  href={safeExternalUrl(f.url) ?? undefined}
                   target="_blank"
                   rel="noopener noreferrer"
                   title={f.name}
                   className="overflow-hidden rounded-xl border border-brand-line-soft transition-all hover:border-brand-blue hover:shadow-[0_4px_12px_rgba(8,24,58,.1)]"
                 >
-                  {isImg(f.name, f.url) ? (
-                    <img src={f.url} alt={f.name} className="h-[62px] w-full bg-white object-contain p-1.5" />
+                  {isImg(f.name, f.url) && safeExternalUrl(f.url) ? (
+                    <img src={safeExternalUrl(f.url) ?? undefined} alt={f.name} className="h-[62px] w-full bg-white object-contain p-1.5" />
                   ) : (
                     <div className="flex h-[62px] w-full items-center justify-center bg-brand-blue-tint text-brand-blue-hover">
                       <FileText className="h-5 w-5" />

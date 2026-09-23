@@ -438,6 +438,8 @@ export interface GmbSyncAllResult {
   results: GmbSyncResult[];
   /** Accounts not reached before the time budget ran out (they go FIRST next run). */
   skipped: number;
+  /** Accounts of suspended tenants, never synced while the tenant is suspended. */
+  suspendedSkipped: number;
 }
 
 /**
@@ -473,12 +475,23 @@ export async function syncAllGmbAccounts(
     return mx - my;
   });
 
+  // A suspended tenant must not keep replying to / syncing reviews in FivoCRM's name —
+  // the Admin SDK bypasses `tenantActive()` in the rules, so the job excludes them itself.
+  const suspended = new Set<string>();
+  try {
+    (await adminDb.collection('businesses').where('status', '==', 'suspended').get()).forEach((d) => suspended.add(d.id));
+  } catch (err) {
+    console.warn('[gmb] suspended-tenant lookup failed — proceeding without the exclusion:', err);
+  }
+
   const cfgCache = new Map<string, Record<string, any>>();
   const results: GmbSyncResult[] = [];
   let skipped = 0;
+  let suspendedSkipped = 0;
   for (const doc of ordered) {
     const a = doc.data();
     if (a.connected === false) continue;
+    if (a.businessId && suspended.has(a.businessId)) { suspendedSkipped++; continue; }
     if (Date.now() - started > budgetMs) { skipped++; continue; }
     let cfg = a.teamId ? cfgCache.get(a.teamId) : undefined;
     if (a.teamId && !cfg) {
@@ -490,5 +503,6 @@ export async function syncAllGmbAccounts(
     results.push(await syncGmbAccount(doc, { config: cfg }));
   }
   if (skipped) console.warn(`[gmb] time budget hit — ${skipped} llogari shtyhen për run-in e ardhshëm (do të kenë përparësi)`);
-  return { results, skipped };
+  if (suspendedSkipped) console.log(`[gmb] ${suspendedSkipped} llogari të tenantëve të pezulluar u kapërcyen`);
+  return { results, skipped, suspendedSkipped };
 }

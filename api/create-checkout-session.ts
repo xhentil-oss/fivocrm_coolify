@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { isPlatformHost, isPlatformUrl } from './_callerIdentity.js';
 import Stripe from 'stripe';
 import { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 
@@ -62,18 +63,18 @@ async function eurToAllRate(teamId?: string, businessId?: string): Promise<numbe
 // NOTE: fivocrm.com is the PRIMARY domain — the public /pay page lives there, and
 // its success/cancel redirects go through the host allowlist below. Leaving it out
 // 400'd ("Invalid redirect URLs") every public-link payment.
-const ALLOWED_HOSTS = (process.env.ALLOWED_HOSTS || 'fivocrm.com,fivoo.net,fivocrm.vercel.app,localhost,vercel.app')
-  .split(',')
-  .map(h => h.trim())
-  .filter(Boolean);
+// The allowlist is the platform's (api/_callerIdentity.ts `platformHosts`): the
+// fixed production hosts, whatever APP_BASE_URL/PUBLIC_APP_URL/VITE_APP_URL name and
+// the operator's ALLOWED_HOSTS — never `localhost` in production and never the bare
+// `vercel.app` wildcard, which made every preview deployment of every project a
+// valid post-payment redirect.
 const PRIMARY_ORIGIN = process.env.VITE_APP_URL || 'https://app.fivoo.net';
 
 function resolveAllowedOrigin(origin: string | undefined): string | null {
   if (!origin) return null;
   try {
-    const host = new URL(origin).hostname;
-    const ok = ALLOWED_HOSTS.some(h => host === h || host.endsWith(`.${h}`));
-    return ok ? origin : null;
+    const u = new URL(origin);
+    return isPlatformHost(u.hostname) && ['http:', 'https:'].includes(u.protocol) ? origin : null;
   } catch {
     return null;
   }
@@ -128,15 +129,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // authorized by possession of the token, so anyone holding one could
       // otherwise have Stripe bounce the paying client to an arbitrary site
       // after payment — a ready-made phishing hop off a legitimate checkout.
-      const redirectAllowed = (raw: string): boolean => {
-        try {
-          const u = new URL(raw);
-          if (!['http:', 'https:'].includes(u.protocol)) return false;
-          return ALLOWED_HOSTS.some(h => u.hostname === h || u.hostname.endsWith(`.${h}`));
-        } catch {
-          return false;
-        }
-      };
+      const redirectAllowed = (raw: unknown): boolean => typeof raw === 'string' && raw.length <= 2000 && isPlatformUrl(raw);
       if (!redirectAllowed(successUrl) || !redirectAllowed(cancelUrl)) {
         return res.status(400).json({ error: 'Invalid redirect URLs' });
       }
@@ -176,7 +169,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ? db.collection('clientPortalAccess').where('userId', '==', uid).where('customerId', '==', invoiceData.customerId).limit(1).get()
           : Promise.resolve({ empty: true } as any),
       ]);
-      if (teamSnap.empty && bizSnap.empty && portalSnap.empty) {
+      // An Inactive membership (a removed employee) proves nothing; legacy rows without
+      // `status` count as Active, as in the rules.
+      const activeStaff = [...(teamSnap.docs || []), ...(bizSnap.docs || [])]
+        .some((d: any) => d.data()?.status !== 'Inactive');
+      const activePortal = (portalSnap.docs || []).some((d: any) => (d.data()?.status ?? 'Active') === 'Active');
+      if (!activeStaff && !activePortal) {
         return res.status(403).json({ error: 'Forbidden' });
       }
     }

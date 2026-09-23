@@ -80,6 +80,11 @@ class HttpError extends Error { status: number; constructor(status: number, msg:
 const bad = (msg: string) => new HttpError(400, msg);
 const forbidden = (msg = 'Nuk keni të drejta për këtë veprim.') => new HttpError(403, msg);
 const notFound = (msg = 'Nuk u gjet.') => new HttpError(404, msg);
+// Audit Sep 2026: every action that CHANGES a provider account, a registrar record
+// or a lifecycle flag is Admin/Manager/Owner only. Read-only actions (usage, quotes,
+// availability, live status) stay open to any staff; portal-client actions on the
+// client's OWN records are unchanged.
+const MUTATION_NEEDS_ADMIN = 'Vetëm Admin/Manager mund të kryejë këtë veprim.';
 
 /**
  * Fixed-window rate limit per (uid, action) in `hostingRateLimits` (deny-all for
@@ -243,7 +248,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true, test });
       }
       case 'server.test': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const serverId = String(body.serverId || '');
         const snap = await db.collection('hostingServers').doc(serverId).get();
         if (!snap.exists) throw notFound('Serveri nuk u gjet');
@@ -262,7 +267,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true, test });
       }
       case 'registrar.test': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const teamId = String(body.teamId || c.tid || (await teamIdForBusiness(c.bid)) || '');
         if (!teamId) throw bad('Mungon teamId');
         const team = await db.collection('teams').doc(teamId).get();
@@ -366,7 +371,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true, orderId: ref.id, orderNumber, invoiceId: inv.invoiceId || null, total: priced.order.total, currency: priced.order.currency, provisioned });
       }
       case 'order.provision': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const o = await loadOwned('hostingOrders', String(body.orderId || ''), c);
         if (o.data.status === 'Pending') {
           // Staff may push a manually-settled order through: verify the invoice really is Paid.
@@ -384,7 +389,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true, ...result });
       }
       case 'order.cancel': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const o = await loadOwned('hostingOrders', String(body.orderId || ''), c);
         if (!['Pending', 'Failed'].includes(o.data.status)) throw bad('Vetëm një porosi në pritje ose e dështuar mund të anulohet');
         await db.collection('hostingOrders').doc(o.id).update({ status: 'Cancelled', updatedAt: Timestamp.now() });
@@ -400,14 +405,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       // ── Subscriptions ─────────────────────────────────────────────────────
       case 'sub.suspend': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);
         await suspendSubscription(s.id, String(body.reason || 'manual').slice(0, 200), c.uid);
         await audit('sub.suspend', `subscription:${s.id}`);
         return res.status(200).json({ ok: true });
       }
       case 'sub.unsuspend': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);
         await unsuspendSubscription(s.id, c.uid);
         await audit('sub.unsuspend', `subscription:${s.id}`);
@@ -422,7 +427,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true });
       }
       case 'sub.changePackage': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);
         await changeSubscriptionPackage(s.id, String(body.productId || ''), isBillingCycle(body.cycle) ? body.cycle : null, c.uid);
         await audit('sub.changePackage', `subscription:${s.id}`, { productId: body.productId });
@@ -446,7 +451,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true, url });
       }
       case 'sub.addExisting': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const customerId = String(body.customerId || '');
         const cust = await db.collection('customers').doc(customerId).get();
         if (!cust.exists) throw notFound('Klienti nuk u gjet');
@@ -465,7 +470,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true, subscriptionId: id });
       }
       case 'domain.addExisting': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const customerId = String(body.customerId || '');
         const cust = await db.collection('customers').doc(customerId).get();
         if (!cust.exists) throw notFound('Klienti nuk u gjet');
@@ -482,7 +487,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true, domainId: id });
       }
       case 'sub.adoptWhmcs': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);
         await adoptWhmcsSubscription(s.id, String(body.serverId || ''), String(body.cpanelUsername || ''), c.uid);
         await audit('sub.adoptWhmcs', `subscription:${s.id}`, { serverId: body.serverId, cpanelUsername: body.cpanelUsername });
@@ -493,7 +498,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true, usage: await subscriptionUsage(s.id) });
       }
       case 'sub.setHold': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);
         await db.collection('subscriptions').doc(s.id).update({ lifecycleHold: body.hold === true, updatedAt: Timestamp.now() });
         await audit('sub.hold', `subscription:${s.id}`, { hold: body.hold === true });
@@ -559,7 +564,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true, authCode: code });
       }
       case 'domain.setHold': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const d = await loadOwned('domains', String(body.domainId || ''), c);
         await db.collection('domains').doc(d.id).update({ lifecycleHold: body.hold === true, updatedAt: Timestamp.now() });
         return res.status(200).json({ ok: true });
@@ -586,7 +591,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true, result });
       }
       case 'sync.run': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const scope = c.superAdmin && body.businessId ? String(body.businessId) : c.bid;
         if (!scope) throw bad('Nuk u përcaktua biznesi');
         return res.status(200).json({ ok: true, result: await runHostingSync({ businessId: scope }) });
@@ -624,7 +629,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true, ...r });
       }
       case 'backup.run': {
-        if (!isStaff(c)) throw forbidden();
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);
         await assertRate(c.uid, 'backup.run', 20, 60 * 60_000);
         const r = await backupSubscription(s.id, 'manual', c.uid);
@@ -634,6 +639,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'domain.pointToHosting': {
         const d = await loadOwned('domains', String(body.domainId || ''), c);
         if (body.subscriptionId) await loadOwned('subscriptions', String(body.subscriptionId), c); // same caller must own both
+        if (isStaff(c) && !isConfigAdmin(c)) throw forbidden(MUTATION_NEEDS_ADMIN);
         if (!isStaff(c)) await assertRate(c.uid, 'domain.pointToHosting', 20, 60 * 60_000);
         let r: { ip: string };
         try { r = await pointDomainToHosting(d.id, { subscriptionId: body.subscriptionId ? String(body.subscriptionId) : null, ip: body.ip ? String(body.ip) : null }, c.uid); }

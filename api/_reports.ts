@@ -5,6 +5,8 @@ import { writeAudit } from './_audit.js';
 import { getTeamConfig } from './_tenantConfig.js';
 import { notifyUser } from './_push.js';
 import nodemailer from 'nodemailer';
+import { checkPersistentRateLimit } from './_rateLimit.js';
+import { verifiedEmail, hasManagerRole } from './_callerIdentity.js';
 
 /**
  * POST /api/reports   (routed as /api/email?type=reports)
@@ -70,7 +72,8 @@ async function authenticate(req: VercelRequest): Promise<Caller | null> {
     const t = await adminAuth.verifyIdToken(header.slice(7));
     return {
       uid: t.uid,
-      email: (t.email as string) || null,
+      // Identity only when Firebase verified it — an unverified address is absent.
+      email: verifiedEmail(t),
       customerId: (t.cid as string) || null,
       portalBusinessId: (t.pbid as string) || null,
       businessId: (t.bid as string) || null,
@@ -164,6 +167,9 @@ function makeTransporter() {
   });
 }
 
+const MAX_REPORT_RECIPIENTS = 5;
+const REPORT_EMAILS_PER_HOUR = 30;
+
 const escapeHtml = (s: string) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -174,7 +180,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const caller = await authenticate(req);
   if (!caller) return res.status(401).json({ error: 'Unauthorized' });
 
-  const body = (typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body) || {};
+  let body: any;
+  try {
+    body = (typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body) || {};
+  } catch {
+    return res.status(400).json({ error: 'Invalid JSON body' });
+  }
+  if (typeof body !== 'object' || Array.isArray(body)) return res.status(400).json({ error: 'Invalid JSON body' });
   const action = String(body.action || '');
   const reportId = String(body.reportId || '');
   if (!action || !reportId) return res.status(400).json({ error: 'action and reportId are required' });
@@ -186,7 +198,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const businessId: string = report.businessId;
 
   if (action === 'send-email') {
-    return handleSendEmail({ req, res, caller, ref, report, businessId });
+    return handleSendEmail({ req, res, caller, ref, report, businessId, body });
   }
 
   const spec = CLIENT_ACTIONS[action];
@@ -388,27 +400,41 @@ async function handleSendEmail(args: {
   ref: admin.firestore.DocumentReference;
   report: any;
   businessId: string;
+  body: any;
 }) {
-  const { req, res, caller, ref, report, businessId } = args;
+  const { req, res, caller, ref, report, businessId, body } = args;
 
   if (!(await isStaffOf(caller, businessId))) {
     return res.status(403).json({ error: 'Not a member of this tenant' });
   }
+  // Sending mail in the tenant's name is for Admin/Manager or the report's own author —
+  // not every Viewer with a token. (Pre-rollout tokens carry no roles: the author rule
+  // still covers the common case; a Member who is not the author gets a 403.)
+  const canSend = caller.superAdmin
+    || hasManagerRole(caller.roles)
+    || (!!report.authorUserId && report.authorUserId === caller.uid);
+  if (!canSend) return res.status(403).json({ error: 'Only Admin/Manager or the report author may send it' });
   if (!PUBLISHED.has(String(report.status))) {
     return res.status(409).json({ error: 'Publish the report before sending it' });
   }
+  if (!(await checkPersistentRateLimit('reportEmail', caller.uid, REPORT_EMAILS_PER_HOUR))) {
+    return res.status(429).json({ error: 'Rate limited', limitPerHour: REPORT_EMAILS_PER_HOUR, retryAfterSeconds: 3600 });
+  }
 
-  const body = (typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body) || {};
-  const recipients: string[] = Array.isArray(body.to)
-    ? body.to.map((x: unknown) => String(x).trim().toLowerCase()).filter(Boolean)
+  const asEmails = (v: unknown): string[] => Array.isArray(v)
+    ? Array.from(new Set(v.map((x: unknown) => String(x).trim().toLowerCase()).filter(Boolean)))
     : [];
-  const cc: string[] = Array.isArray(body.cc)
-    ? body.cc.map((x: unknown) => String(x).trim().toLowerCase()).filter(Boolean)
-    : [];
+  const recipients: string[] = asEmails(body.to);
+  const cc: string[] = asEmails(body.cc);
 
   if (!recipients.length) return res.status(400).json({ error: 'At least one recipient is required' });
-  const invalid = [...recipients, ...cc].find(e => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
-  if (invalid) return res.status(400).json({ error: `Invalid email: ${invalid}` });
+  // A report email goes to the client's contacts — never a mailing list. The cap is
+  // what keeps a compromised staff token from using the tenant's SMTP as a relay.
+  if (recipients.length + cc.length > MAX_REPORT_RECIPIENTS) {
+    return res.status(400).json({ error: `At most ${MAX_REPORT_RECIPIENTS} recipients (to + cc) per send` });
+  }
+  const invalid = [...recipients, ...cc].find(e => e.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+  if (invalid) return res.status(400).json({ error: 'Invalid recipient email' });
 
   const transporter = makeTransporter();
   if (!transporter) return res.status(503).json({ error: 'SMTP is not configured' });

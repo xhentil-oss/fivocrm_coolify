@@ -2,14 +2,15 @@
 // already-generated CHILD invoices that were created empty (before the cron fix).
 // Safe & idempotent: only touches children with NO products; never edits amounts.
 //
-// Run:  node scripts/backfill-recurring-products.mjs         (apply)
-//       node scripts/backfill-recurring-products.mjs --dry   (count only)
+// Run:  node scripts/backfill-recurring-products.mjs           (dry-run, count only)
+//       node scripts/backfill-recurring-products.mjs --apply   (write)
 
 import { readFileSync } from 'node:fs';
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 
-const DRY = process.argv.includes('--dry');
+// Dry-run by default like every other maintenance script; `--apply` writes.
+const DRY = !process.argv.includes('--apply');
 
 // ── Credentials from the service-account key (scripts/sa.json) ──
 const sa = JSON.parse(readFileSync('scripts/sa.json', 'utf8'));

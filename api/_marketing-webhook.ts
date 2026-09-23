@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
+import { timingSafeEqualStr } from './_callerIdentity.js';
 
 // Inbound ESP event webhook (open/click/delivered tracking) for email marketing.
 // Not a standalone Vercel function — dispatched from api/email.ts (?type=
@@ -27,7 +28,7 @@ function tagValue(tags: any, key: string): string | undefined {
 function parseEvents(body: any): { campaignId: string; kind: EventKind }[] {
   const out: { campaignId: string; kind: EventKind }[] = [];
   const push = (campaignId: any, kind: EventKind) => {
-    if (campaignId && typeof campaignId === 'string') out.push({ campaignId, kind });
+    if (campaignId && typeof campaignId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(campaignId)) out.push({ campaignId, kind });
   };
 
   // SendGrid: an array of event objects; custom_args merged as top-level fields.
@@ -64,13 +65,16 @@ function parseEvents(body: any): { campaignId: string; kind: EventKind }[] {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Lightweight shared-secret guard (full per-provider signature verification is
-  // out of scope). If the env secret is set, the query secret must match.
+  // Shared-secret guard (full per-provider signature verification is out of scope).
+  // The secret is MANDATORY: unset → 503, never an open endpoint that lets anyone
+  // inflate any campaign's open/click counters. Compared in constant time.
   const secret = process.env.MARKETING_WEBHOOK_SECRET;
-  if (secret) {
-    const q = Array.isArray(req.query.secret) ? req.query.secret[0] : req.query.secret;
-    if (q !== secret) return res.status(401).json({ error: 'Unauthorized' });
+  if (!secret) {
+    console.error('[marketing-webhook] MARKETING_WEBHOOK_SECRET is not configured — refusing');
+    return res.status(503).json({ error: 'Webhook not configured' });
   }
+  const q = Array.isArray(req.query.secret) ? req.query.secret[0] : req.query.secret;
+  if (!timingSafeEqualStr(q, secret)) return res.status(401).json({ error: 'Unauthorized' });
 
   // ESPs sometimes verify the endpoint with a GET.
   if (req.method === 'GET') return res.status(200).json({ ok: true });

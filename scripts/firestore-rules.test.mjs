@@ -1,14 +1,24 @@
 /**
- * Rules-unit tests for the HARDENED tenant-isolation rules (firestore.rules.hardened).
- * These are the gate before deploying the cutover — all 7 must pass.
+ * Rules-unit tests for `firestore.rules` — the gate before every
+ * `firebase deploy --only firestore:rules`. The whole file must pass (168 tests as
+ * of the Sep 2026 hardening pass: 1–55 tenant isolation, modules, finance, chat,
+ * hosting; 56–73 the C1–C5 / H1–H7 / M1–M8 / L findings). `storage.rules` has its
+ * own suite in scripts/storage-rules.test.mjs.
  *
  * Setup (one-time):
  *   npm i -D @firebase/rules-unit-testing firebase-tools
- *   node scripts/build-hardened-rules.cjs         # produces firestore.rules.hardened
  *
- * Run:
- *   firebase emulators:exec --only firestore "node --test scripts/firestore-rules.test.mjs"
+ * Run (JDK 21 for firebase-tools 14+):
+ *   npm run test:rules
+ *   # = firebase emulators:exec --only firestore --project fivocrm-rules-test \
+ *   #     "node --test scripts/firestore-rules.test.mjs"
  *
+ * Conventions: tests run in FILE ORDER and share one emulator database, so a seed
+ * written by an earlier test is visible to a later one (e.g. bob is re-seeded as a
+ * team Admin in 15; finn/eve/zoe are plain Members from 10f/10g). Prefer a fresh
+ * uid over assuming a colleague's role. `staffOf` / `portalOf` / `outsider` mint the
+ * signed claims exactly as api/_tenantClaims.ts does; `verifiedUser` /
+ * `unverifiedUser` are the portal first-login shapes (no tenant claim yet).
  * (Uses the Node built-in test runner, so no extra test framework is required.)
  */
 import { readFileSync } from 'node:fs';
@@ -266,8 +276,11 @@ test('5. super-admin bypass', async () => {
 
 // 6. Portal client sets customerId for their OWN customer (email match) → ALLOWED;
 //    for someone else's customer → DENIED.
-test('6a. portal client claims own customer', async () => {
-  const carol = testEnv.authenticatedContext('carol', { email: 'carol@client.com' }).firestore();
+test('6a. portal client claims own customer (verified e-mail only)', async () => {
+  // The e-mail must be VERIFIED: a password sign-up with the client's address is not the client.
+  const carolUnverified = testEnv.authenticatedContext('carol', { email: 'carol@client.com' }).firestore();
+  await assertFails(setDoc(doc(carolUnverified, 'users', 'carol'), { customerId: 'cust1', businessId: MY_BIZ }));
+  const carol = testEnv.authenticatedContext('carol', { email: 'carol@client.com', email_verified: true }).firestore();
   await assertSucceeds(setDoc(doc(carol, 'users', 'carol'), { customerId: 'cust1', businessId: MY_BIZ }));
 });
 test('6b. portal client cannot claim a customer they do not own', async () => {
@@ -576,7 +589,7 @@ test('17c. a Manager cannot mint an Admin invite', async () => {
   }));
 });
 test('17d. the invitee can read their own invite', async () => {
-  const invitee = testEnv.authenticatedContext('newguy', { email: 'someone@victim.com' }).firestore();
+  const invitee = testEnv.authenticatedContext('newguy', { email: 'someone@victim.com', email_verified: true }).firestore();
   await assertSucceeds(getDoc(doc(invitee, 'teamInvites', 'invVictim')));
 });
 // The LIST shapes the app actually issues: TeamsView reads a tenant's invites by
@@ -590,7 +603,7 @@ test('17e. staff list their own tenant invites by businessId; another tenant can
   await assertFails(getDocs(query(collection(outsider(), 'teamInvites'), where('businessId', '==', MY_BIZ))));
 });
 test('17f. an invitee with no membership lists their own invites by email only', async () => {
-  const invitee = testEnv.authenticatedContext('newguy', { email: 'someone@victim.com' }).firestore();
+  const invitee = testEnv.authenticatedContext('newguy', { email: 'someone@victim.com', email_verified: true }).firestore();
   await assertSucceeds(getDocs(query(collection(invitee, 'teamInvites'),
     where('email', '==', 'someone@victim.com'), where('status', '==', 'Pending'))));
   await assertFails(getDocs(query(collection(invitee, 'teamInvites'), where('email', '==', 'other@victim.com'))));
@@ -1443,7 +1456,7 @@ test('41. email-keyed member row can self-heal to own uid, nothing more', async 
       teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active',
     });
   });
-  const dora = testEnv.authenticatedContext('doraUid', { email: 'dora@mine.com' }).firestore();
+  const dora = testEnv.authenticatedContext('doraUid', { email: 'dora@mine.com', email_verified: true }).firestore();
   // The legitimate repair: userId → own uid.
   await assertSucceeds(updateDoc(doc(dora, 'teamMembers', `${MY_TEAM}_dora@mine.com`), {
     userId: 'doraUid',
@@ -1465,7 +1478,7 @@ test('41. email-keyed member row can self-heal to own uid, nothing more', async 
       teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active',
     });
   });
-  const fisnik = testEnv.authenticatedContext('fisnikUid', { email: 'fisnik@mine.com' }).firestore();
+  const fisnik = testEnv.authenticatedContext('fisnikUid', { email: 'fisnik@mine.com', email_verified: true }).firestore();
   await assertFails(updateDoc(doc(fisnik, 'teamMembers', `${MY_TEAM}_fisnik@mine.com`), {
     userId: 'fisnikUid', role: 'Admin',
   }));
@@ -2077,4 +2090,634 @@ test('55c. financeMonthCloses: admin-only, id pinned to business + period, never
   await assertFails(getDoc(doc(outsider(), 'financeMonthCloses', `${MY_BIZ}_2026-01`)));
   // Cron-only report ledger.
   await assertFails(setDoc(doc(alice, 'financeReportRuns', `${MY_BIZ}_2026-01`), { businessId: MY_BIZ }));
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Hardening pass Sep 2026 (C1–C5, H1–H7, M1–M8, L) — every finding gets a NEGATIVE
+// test (the attack is denied) and, where a legitimate flow is touched, a POSITIVE
+// one (the flow the app actually performs still works).
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** A signed-in user with a VERIFIED e-mail and no tenant claims (portal first login). */
+const verifiedUser = (uid, email, extra = {}) =>
+  testEnv.authenticatedContext(uid, { email, email_verified: true, ...extra }).firestore();
+const unverifiedUser = (uid, email, extra = {}) =>
+  testEnv.authenticatedContext(uid, { email, email_verified: false, ...extra }).firestore();
+
+async function seedHardeningFixtures() {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    // The victim tenant's customer (referenced by many seeds, never created before).
+    await setDoc(doc(db, 'customers', 'custVictim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, email: 'vclient@victim.com', name: 'Victim Client' });
+    await setDoc(doc(db, 'users', 'vstaff'), { teamId: VICTIM_TEAM, businessId: VICTIM_BIZ });
+    await setDoc(doc(db, 'projects', 'projCarol'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', name: 'Carol site', status: 'Active' });
+  });
+}
+
+// ── C1. teamMembers: the identity keys of a row are immutable ─────────────────
+test('56a. a member cannot re-point their own membership row to another tenant/team/person', async () => {
+  await seedHardeningFixtures();
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  // /api/sync-claims mints `bid` from this row — re-pointing it would mint the victim's.
+  await assertFails(updateDoc(doc(alice, 'teamMembers', `${MY_TEAM}_alice`), { businessId: VICTIM_BIZ }));
+  await assertFails(updateDoc(doc(alice, 'teamMembers', `${MY_TEAM}_alice`), { teamId: VICTIM_TEAM }));
+  await assertFails(updateDoc(doc(alice, 'teamMembers', `${MY_TEAM}_alice`), { displayName: 'A', businessId: VICTIM_BIZ }));
+  // Nor may an admin of the tenant move a colleague's row out of it.
+  const admin = staffOf('boss', MY_BIZ, MY_TEAM, ['admin'], 'boss@mine.com');
+  await assertFails(updateDoc(doc(admin, 'teamMembers', `${MY_TEAM}_alice`), { businessId: VICTIM_BIZ }));
+  await assertFails(updateDoc(doc(admin, 'teamMembers', `${MY_TEAM}_alice`), { teamId: VICTIM_TEAM }));
+  await assertFails(updateDoc(doc(admin, 'teamMembers', `${MY_TEAM}_alice`), { userId: 'boss' }));
+  // The normal roster edit (same keys echoed back, as TeamsView sends them) still works.
+  await assertSucceeds(updateDoc(doc(admin, 'teamMembers', `${MY_TEAM}_alice`), {
+    teamId: MY_TEAM, businessId: MY_BIZ, userId: 'alice', serviceLines: ['seo'], status: 'Active',
+  }));
+});
+
+test('56b. a LEGACY row with no businessId may be filled in once — only with its own team\'s business', async () => {
+  // teams/teamLegacy (businessId MY_BIZ) and teamMembers/teamLegacy_ghost (no businessId) come from 35j.
+  const owner = testEnv.authenticatedContext('legacyOwner', { email: 'lo@mine.com' }).firestore();
+  await assertFails(updateDoc(doc(owner, 'teamMembers', 'teamLegacy_ghost'), { businessId: VICTIM_BIZ }));
+  await assertSucceeds(updateDoc(doc(owner, 'teamMembers', 'teamLegacy_ghost'), { businessId: MY_BIZ, status: 'Active' }));
+  // Once set, it is pinned like everyone else's.
+  await assertFails(updateDoc(doc(owner, 'teamMembers', 'teamLegacy_ghost'), { businessId: VICTIM_BIZ }));
+});
+
+test('56c. a team OWNER cannot create a membership that names another business', async () => {
+  // teams/teamOwned lives in bizOwned (test 7). Its creator proves authority through
+  // isTeamOwner alone — that branch must still agree with the team's real business.
+  const owner = testEnv.authenticatedContext('owner', { email: 'owner@o.com' }).firestore();
+  await assertFails(setDoc(doc(owner, 'teamMembers', 'teamOwned_eve2'), {
+    userId: 'eve2', teamId: 'teamOwned', businessId: VICTIM_BIZ, role: 'Member', status: 'Active',
+  }));
+  await assertSucceeds(setDoc(doc(owner, 'teamMembers', 'teamOwned_eve2'), {
+    userId: 'eve2', teamId: 'teamOwned', businessId: 'bizOwned', role: 'Member', status: 'Active',
+  }));
+});
+
+// ── C2. clientPortalAccess: a portal identity is minted only for yourself ─────
+test('57a. nobody mints a portal identity for a customer whose e-mail is not their own (verified) e-mail', async () => {
+  const mallory = verifiedUser('mallory', 'm@evil.com');
+  await assertFails(setDoc(doc(mallory, 'clientPortalAccess', 'paForged'), {
+    customerId: 'cust1', userId: 'mallory', email: 'm@evil.com', status: 'Active', createdByUserId: 'mallory',
+  }));
+  // Even with the CUSTOMER's e-mail typed into the row: the customer's own e-mail must match the token.
+  await assertFails(setDoc(doc(mallory, 'clientPortalAccess', 'paForged2'), {
+    customerId: 'cust1', userId: 'mallory', email: 'carol@client.com', status: 'Active', createdByUserId: 'mallory',
+  }));
+  // The real client, but with an UNVERIFIED e-mail (a password sign-up with her address) — refused.
+  const carolUnverified = unverifiedUser('carol', 'carol@client.com');
+  await assertFails(setDoc(doc(carolUnverified, 'clientPortalAccess', 'paCarolUnverified'), {
+    customerId: 'cust1', userId: 'carol', email: 'carol@client.com', status: 'Active', createdByUserId: 'carol', businessId: MY_BIZ,
+  }));
+  // Verified, but for somebody else's uid, or for another customer, or carrying access fields — refused.
+  const carol = verifiedUser('carol', 'carol@client.com');
+  await assertFails(setDoc(doc(carol, 'clientPortalAccess', 'paCarolOther'), {
+    customerId: 'cust1', userId: 'mallory', email: 'carol@client.com', status: 'Active', createdByUserId: 'carol',
+  }));
+  await assertFails(setDoc(doc(carol, 'clientPortalAccess', 'paCarolVictim'), {
+    customerId: 'custVictim', userId: 'carol', email: 'carol@client.com', status: 'Active', createdByUserId: 'carol',
+  }));
+  await assertFails(setDoc(doc(carol, 'clientPortalAccess', 'paCarolAdmin'), {
+    customerId: 'cust1', userId: 'carol', email: 'carol@client.com', status: 'Active', createdByUserId: 'carol', accessLevel: 'admin',
+  }));
+});
+
+test('57b. the portal bootstrap (useClientPortal.createDoc shape) and the staff "Krijo akses" shape both work', async () => {
+  // useClientPortal: verified token e-mail == row e-mail == customer e-mail, own uid, tenant stamp.
+  const carol = verifiedUser('carol', 'carol@client.com');
+  await assertSucceeds(setDoc(doc(carol, 'clientPortalAccess', 'paCarolNew'), {
+    customerId: 'cust1', userId: 'carol', email: 'carol@client.com', status: 'Active',
+    teamId: MY_TEAM, businessId: MY_BIZ, createdAt: new Date(), updatedAt: new Date(), createdByUserId: 'carol',
+  }));
+  // A tenant stamp that disagrees with the customer's business is refused.
+  await assertFails(setDoc(doc(carol, 'clientPortalAccess', 'paCarolWrongBiz'), {
+    customerId: 'cust1', userId: 'carol', email: 'carol@client.com', status: 'Active', businessId: VICTIM_BIZ, createdByUserId: 'carol',
+  }));
+  // CustomersView / CRMView / InvoicesView: staff of the customer's tenant, userId '', no businessId stamped.
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  await assertSucceeds(setDoc(doc(alice, 'clientPortalAccess', 'paByStaff'), {
+    customerId: 'cust1', userId: '', email: 'carol@client.com', status: 'Active', createdByUserId: 'alice',
+  }));
+  await assertFails(setDoc(doc(alice, 'clientPortalAccess', 'paByStaffVictim'), {
+    customerId: 'custVictim', userId: '', email: 'vclient@victim.com', status: 'Active', createdByUserId: 'alice',
+  }));
+  // Staff may revoke/edit within the tenant but never re-point the row.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await updateDoc(doc(ctx.firestore(), 'clientPortalAccess', 'paByStaff'), { businessId: MY_BIZ });
+  });
+  await assertSucceeds(updateDoc(doc(alice, 'clientPortalAccess', 'paByStaff'), { status: 'Revoked' }));
+  await assertFails(updateDoc(doc(alice, 'clientPortalAccess', 'paByStaff'), { customerId: 'custVictim' }));
+});
+
+test('57c. the "initial claim" of an unlinked access row needs a VERIFIED matching e-mail', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'clientPortalAccess', 'paUnclaimed'), {
+      businessId: MY_BIZ, customerId: 'cust1', userId: '', email: 'carol@client.com', status: 'Active',
+    });
+  });
+  await assertFails(updateDoc(doc(unverifiedUser('carol', 'carol@client.com'), 'clientPortalAccess', 'paUnclaimed'), { userId: 'carol' }));
+  await assertFails(updateDoc(doc(verifiedUser('mallory', 'm@evil.com'), 'clientPortalAccess', 'paUnclaimed'), { userId: 'mallory' }));
+  // The claim may not smuggle access/tenant fields, and must name the claimant.
+  await assertFails(updateDoc(doc(verifiedUser('carol', 'carol@client.com'), 'clientPortalAccess', 'paUnclaimed'), { userId: 'carol', accessLevel: 'admin' }));
+  await assertFails(updateDoc(doc(verifiedUser('carol', 'carol@client.com'), 'clientPortalAccess', 'paUnclaimed'), { userId: 'mallory' }));
+  await assertSucceeds(updateDoc(doc(verifiedUser('carol', 'carol@client.com'), 'clientPortalAccess', 'paUnclaimed'), { userId: 'carol', updatedAt: new Date() }));
+  // Reading one's own access row by e-mail also needs the verified e-mail.
+  await assertFails(getDocs(query(collection(unverifiedUser('eve', 'carol@client.com'), 'clientPortalAccess'), where('email', '==', 'carol@client.com'))));
+  await assertSucceeds(getDocs(query(collection(verifiedUser('carol', 'carol@client.com'), 'clientPortalAccess'), where('email', '==', 'carol@client.com'))));
+});
+
+// ── C3. isSelfCreate is tenant-bound; the portal bootstrap is e-mail-bound ─────
+test('58a. first-login bootstrap: a verified user creates a customer ABOUT THEIR OWN e-mail, nothing else', async () => {
+  const newbie = verifiedUser('newbie', 'newbie@x.com');
+  await assertSucceeds(setDoc(doc(newbie, 'customers', 'custNewbie'), {
+    name: 'Newbie', email: 'newbie@x.com', status: 'Pending', teamId: MY_TEAM, businessId: MY_BIZ,
+    createdAt: new Date(), updatedAt: new Date(), createdByUserId: 'newbie',
+  }));
+  // Somebody else's address on "my" record — refused.
+  await assertFails(setDoc(doc(newbie, 'customers', 'custImpersonate'), {
+    name: 'Carol', email: 'carol@client.com', status: 'Pending', businessId: MY_BIZ, createdByUserId: 'newbie',
+  }));
+  // Not as yourself — refused.
+  await assertFails(setDoc(doc(newbie, 'customers', 'custAsOther'), {
+    name: 'Newbie', email: 'newbie@x.com', status: 'Pending', businessId: MY_BIZ, createdByUserId: 'someoneElse',
+  }));
+  // Unverified e-mail — refused (the whole point: a password sign-up is not proof of the address).
+  await assertFails(setDoc(doc(unverifiedUser('newbie2', 'newbie2@x.com'), 'customers', 'custNewbie2'), {
+    name: 'Newbie2', email: 'newbie2@x.com', status: 'Pending', businessId: MY_BIZ, createdByUserId: 'newbie2',
+  }));
+  // Reading a customer by e-mail (the bootstrap query) needs the verified e-mail too.
+  await assertFails(getDocs(query(collection(unverifiedUser('eve', 'carol@client.com'), 'customers'), where('email', '==', 'carol@client.com'))));
+  await assertSucceeds(getDocs(query(collection(verifiedUser('carol', 'carol@client.com'), 'customers'), where('email', '==', 'carol@client.com'))));
+});
+
+test('58b. portal self-creates (lead, request, comment, inquiry) are bound to the client\'s OWN tenant', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  // PortalInquiryView lead: the client's own tenant, any contact e-mail they typed.
+  await assertSucceeds(setDoc(doc(carol, 'leads', 'leadFromInquiry'), {
+    name: 'Contact', email: 'other-contact@x.com', status: 'New', source: 'Service Questionnaire',
+    teamId: MY_TEAM, businessId: MY_BIZ, createdByUserId: 'carol',
+  }));
+  await assertFails(setDoc(doc(carol, 'leads', 'leadIntoVictim'), {
+    name: 'Contact', email: 'other-contact@x.com', status: 'New', businessId: VICTIM_BIZ, createdByUserId: 'carol',
+  }));
+  // clientRequests: own customer inside own tenant; never another customer's, never another tenant's.
+  await assertSucceeds(setDoc(doc(carol, 'clientRequests', 'reqCarol'), {
+    customerId: 'cust1', businessId: MY_BIZ, teamId: MY_TEAM, title: 'Ndrysho logon', status: 'New', createdByUserId: 'carol',
+  }));
+  await assertFails(setDoc(doc(carol, 'clientRequests', 'reqAsVictim'), {
+    customerId: 'custVictim', businessId: MY_BIZ, title: 'x', createdByUserId: 'carol',
+  }));
+  // The OLD hole: staff of another tenant "self-creating" a request into mine.
+  await assertFails(setDoc(doc(outsider(), 'clientRequests', 'reqInjected'), {
+    customerId: 'cust1', businessId: MY_BIZ, title: 'injected', createdByUserId: 'mallory',
+  }));
+  // Portal client edits the content of their request, never its keys.
+  await assertSucceeds(updateDoc(doc(carol, 'clientRequests', 'reqCarol'), { description: 'më shumë detaje' }));
+  await assertFails(updateDoc(doc(carol, 'clientRequests', 'reqCarol'), { customerId: 'custVictim' }));
+  await assertFails(updateDoc(doc(carol, 'clientRequests', 'reqCarol'), { businessId: VICTIM_BIZ }));
+  // projectComments (PortalProjectDetailView shape).
+  await assertSucceeds(setDoc(doc(carol, 'projectComments', 'pcCarol'), {
+    projectId: 'projCarol', content: 'Faleminderit', userId: 'carol', senderType: 'client',
+    teamId: MY_TEAM, customerId: 'cust1', businessId: MY_BIZ, createdByUserId: 'carol',
+  }));
+  await assertFails(setDoc(doc(carol, 'projectComments', 'pcCarolVictim'), {
+    projectId: 'projCarol', content: 'x', userId: 'carol', senderType: 'client', customerId: 'cust1', businessId: VICTIM_BIZ, createdByUserId: 'carol',
+  }));
+  await assertFails(setDoc(doc(outsider(), 'projectComments', 'pcInjected'), {
+    projectId: 'projCarol', content: 'x', businessId: MY_BIZ, createdByUserId: 'mallory',
+  }));
+  // A portal MEMBER of a shared project (39e) may still comment on it.
+  const dave = portalOf('dave', 'custOther', 'dave@partner.com');
+  await assertSucceeds(setDoc(doc(dave, 'projectComments', 'pcDave'), {
+    projectId: 'projShared', content: 'ok', userId: 'dave', senderType: 'client', customerId: 'custOther', businessId: MY_BIZ, createdByUserId: 'dave',
+  }));
+  // serviceInquiries (useStartInquiry shape) + PortalInquiryView edits.
+  await assertSucceeds(setDoc(doc(carol, 'serviceInquiries', 'inqCarol'), {
+    status: 'Draft', isDraft: true, lastSavedStep: 1, customerId: 'cust1', clientUserId: 'carol',
+    teamId: MY_TEAM, businessId: MY_BIZ, createdByUserId: 'carol',
+  }));
+  await assertFails(setDoc(doc(outsider(), 'serviceInquiries', 'inqInjected'), {
+    status: 'Draft', clientUserId: 'mallory', businessId: MY_BIZ, createdByUserId: 'mallory',
+  }));
+  await assertSucceeds(updateDoc(doc(carol, 'serviceInquiries', 'inqCarol'), { contactName: 'Carol', lastSavedStep: 2, leadId: 'leadFromInquiry' }));
+  await assertFails(updateDoc(doc(carol, 'serviceInquiries', 'inqCarol'), { clientUserId: 'mallory' }));
+  await assertFails(updateDoc(doc(carol, 'serviceInquiries', 'inqCarol'), { businessId: VICTIM_BIZ }));
+});
+
+// ── C4. Departments are created by roster authority; no self-promotion via a team ──
+test('59a. a plain Member cannot create a department (the self-promotion ladder)', async () => {
+  const bob = staffOf('bob', MY_BIZ, MY_TEAM, ['member'], 'bob@mine.com');
+  await assertFails(setDoc(doc(bob, 'teams', 'teamByBob'), { name: 'Bob dept', businessId: MY_BIZ, createdByUserId: 'bob' }));
+  // A legacy team he did manage to create earlier: he still cannot make himself its Admin.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teams', 'teamGrab'), { name: 'Grab', businessId: MY_BIZ, createdByUserId: 'bob' });
+  });
+  await assertFails(setDoc(doc(bob, 'teamMembers', 'teamGrab_bob'), {
+    userId: 'bob', teamId: 'teamGrab', businessId: MY_BIZ, role: 'Admin', status: 'Active',
+  }));
+  await assertFails(setDoc(doc(bob, 'teamMembers', 'teamGrab_bob'), {
+    userId: 'bob', teamId: 'teamGrab', businessId: MY_BIZ, role: 'Manager', status: 'Active',
+  }));
+  await assertSucceeds(setDoc(doc(bob, 'teamMembers', 'teamGrab_bob'), {
+    userId: 'bob', teamId: 'teamGrab', businessId: MY_BIZ, role: 'Member', status: 'Active',
+  }));
+  // The team's creator is pinned: nobody hands isTeamOwner() to somebody else.
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(updateDoc(doc(alice, 'teams', 'teamDept2'), { createdByUserId: 'bob' }));
+  await assertSucceeds(updateDoc(doc(alice, 'teams', 'teamDept2'), { name: 'Dept 2 renamed' }));
+});
+
+test('59b. self-signup (createTenant.ts order) still provisions business → team → own Admin row → settings → users', async () => {
+  const founder = testEnv.authenticatedContext('founder', { email: 'founder@new.com' }).firestore();
+  const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+  await assertSucceeds(setDoc(doc(founder, 'businesses', 'bizNew'), {
+    name: 'New Co', ownerId: 'founder', ownerEmail: 'founder@new.com', plan: 'trial', status: 'trialing',
+    trialEndsAt, disabledModules: ['/app/products'], createdAt: new Date(), updatedAt: new Date(),
+  }));
+  await assertSucceeds(setDoc(doc(founder, 'teams', 'teamNew'), {
+    name: 'Përgjithshëm', businessId: 'bizNew', createdByUserId: 'founder', ownerEmail: 'founder@new.com',
+  }));
+  await assertSucceeds(setDoc(doc(founder, 'teamMembers', 'teamNew_founder'), {
+    teamId: 'teamNew', businessId: 'bizNew', userId: 'founder', email: 'founder@new.com', displayName: 'F',
+    role: 'Admin', status: 'Active', createdByUserId: 'founder',
+  }));
+  await assertSucceeds(setDoc(doc(founder, 'teamSettings', 'teamNew'), { companyName: 'New Co', eurAllRate: '100' }, { merge: true }));
+  await assertSucceeds(setDoc(doc(founder, 'users', 'founder'), { teamId: 'teamNew', businessId: 'bizNew' }, { merge: true }));
+  // TeamsView: an ADMIN creating a second department and adding themselves as its Admin.
+  const admin = staffOf('boss', MY_BIZ, MY_TEAM, ['admin'], 'boss@mine.com');
+  await assertSucceeds(setDoc(doc(admin, 'teams', 'teamDept3'), { name: 'Dept 3', businessId: MY_BIZ, createdByUserId: 'boss' }));
+  await assertSucceeds(setDoc(doc(admin, 'teamMembers', 'teamDept3_boss'), {
+    userId: 'boss', teamId: 'teamDept3', businessId: MY_BIZ, role: 'Admin', status: 'Active',
+  }));
+});
+
+// ── C5 / H1. businesses: a signup is a fresh trial and cannot squat a legacy tenant ──
+test('60a. a business cannot be founded over an existing team id, nor born with a plan/status/seats', async () => {
+  const squatter = testEnv.authenticatedContext('squatter', { email: 's@evil.com' }).firestore();
+  // Legacy tenants have businessId == teamId and no businesses doc: claiming that id = owning the tenant.
+  await assertFails(setDoc(doc(squatter, 'businesses', VICTIM_TEAM), { name: 'Mine now', ownerId: 'squatter', plan: 'trial', status: 'trialing' }));
+  const founder = testEnv.authenticatedContext('founder2', { email: 'f2@new.com' }).firestore();
+  await assertFails(setDoc(doc(founder, 'businesses', 'bizPro'), { name: 'x', ownerId: 'founder2', plan: 'enterprise', status: 'trialing' }));
+  await assertFails(setDoc(doc(founder, 'businesses', 'bizPro'), { name: 'x', ownerId: 'founder2', plan: 'trial', status: 'active' }));
+  await assertFails(setDoc(doc(founder, 'businesses', 'bizPro'), { name: 'x', ownerId: 'founder2', plan: 'trial', status: 'trialing', lockedModules: ['/app/hosting'] }));
+  await assertFails(setDoc(doc(founder, 'businesses', 'bizPro'), { name: 'x', ownerId: 'founder2', plan: 'trial', status: 'trialing', seats: 99 }));
+  await assertFails(setDoc(doc(founder, 'businesses', 'bizPro'), { name: 'x', ownerId: 'founder2', plan: 'trial', status: 'trialing', limits: { users: 999 } }));
+  await assertFails(setDoc(doc(founder, 'businesses', 'bizPro'), {
+    name: 'x', ownerId: 'founder2', plan: 'trial', status: 'trialing', trialEndsAt: new Date(Date.now() + 400 * 24 * 3600 * 1000),
+  }));
+  await assertSucceeds(setDoc(doc(founder, 'businesses', 'bizPro'), {
+    name: 'x', ownerId: 'founder2', plan: 'trial', status: 'trialing', trialEndsAt: new Date(Date.now() + 14 * 24 * 3600 * 1000),
+  }));
+});
+
+test('60b. the owner cannot set their own seats / limits / trial end / owner; the platform (Admin SDK) does', async () => {
+  const owner = testEnv.authenticatedContext('aliceOwner', { email: 'alice@mine.com', bid: MY_BIZ, tid: MY_TEAM, roles: ['owner', 'admin'] }).firestore();
+  await assertFails(updateDoc(doc(owner, 'businesses', MY_BIZ), { seats: 50 }));
+  await assertFails(updateDoc(doc(owner, 'businesses', MY_BIZ), { limits: { users: 500 } }));
+  await assertFails(updateDoc(doc(owner, 'businesses', MY_BIZ), { trialEndsAt: new Date('2099-01-01') }));
+  await assertFails(updateDoc(doc(owner, 'businesses', MY_BIZ), { ownerId: 'mallory' }));
+  await assertFails(updateDoc(doc(owner, 'businesses', MY_BIZ), { stripeSubscriptionId: 'sub_fake' }));
+  await assertSucceeds(updateDoc(doc(owner, 'businesses', MY_BIZ), { name: 'Mine Ltd', updatedAt: new Date() }));
+});
+
+// ── H2. messages: sent as yourself, inside your tenant, to people in your tenant ──
+test('61a. a DM cannot leave the tenant, a message cannot be sent as somebody else', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  // vstaff is staff of the victim tenant (users/vstaff carries its businessId).
+  await assertFails(setDoc(doc(alice, 'messages', 'dm-to-victim'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, senderId: 'alice', receiverId: 'vstaff', content: 'phish', isRead: false,
+  }));
+  await assertSucceeds(setDoc(doc(alice, 'messages', 'dm-to-zoe'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, senderId: 'alice', receiverId: 'zoe', content: 'hi', isRead: false,
+  }));
+  // senderId / createdByUserId must be the caller.
+  await assertFails(setDoc(doc(alice, 'messages', 'as-zoe'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, senderId: 'zoe', channelId: 'general-mine', content: 'not me', isRead: false,
+  }));
+  await assertFails(setDoc(doc(alice, 'messages', 'as-zoe2'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, senderId: 'alice', createdByUserId: 'zoe', channelId: 'general-mine', content: 'x', isRead: false,
+  }));
+  // The old teamId-only branch: my team + the victim's businessId — closed.
+  await assertFails(setDoc(doc(alice, 'messages', 'stamp-victim'), {
+    businessId: VICTIM_BIZ, teamId: MY_TEAM, senderId: 'alice', channelId: 'general-victim', content: 'x', isRead: false,
+  }));
+  // Staff→client thread: only a customer of MY tenant.
+  await assertFails(setDoc(doc(alice, 'messages', 'to-victim-client'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, senderId: 'alice', senderType: 'staff', channelId: 'client-custVictim', content: 'x', isRead: true,
+  }));
+  await assertSucceeds(setDoc(doc(alice, 'messages', 'to-my-client'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, senderId: 'alice', senderType: 'staff', channelId: 'client-cust1', content: 'hi', isRead: true,
+  }));
+  // The portal client cannot pose as staff.
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(setDoc(doc(carol, 'messages', 'client-as-staff'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, senderId: 'carol', senderType: 'staff', channelId: 'client-cust1', content: 'x', isRead: true,
+  }));
+});
+
+test('61b. the sender edits content but never re-points a message; dmThreads need a same-tenant peer', async () => {
+  const zoe = staffOf('zoe', MY_BIZ, MY_TEAM, ['member'], 'zoe@mine.com');
+  // msg1 was sent by zoe (seed). ChatView's edit / soft-delete / pin writes:
+  await assertSucceeds(updateDoc(doc(zoe, 'messages', 'msg1'), { content: 'edited', editedAt: new Date(), editHistory: [{ content: 'hi' }] }));
+  await assertSucceeds(updateDoc(doc(zoe, 'messages', 'msg1'), { isPinned: true }));
+  await assertSucceeds(updateDoc(doc(zoe, 'messages', 'msg1'), {
+    deletedAt: new Date(), content: 'Ky mesazh u fshi.', attachmentUrl: null, reactions: {}, isPinned: false, isRead: true, editHistory: [],
+  }));
+  await assertFails(updateDoc(doc(zoe, 'messages', 'msg1'), { receiverId: 'vstaff' }));
+  await assertFails(updateDoc(doc(zoe, 'messages', 'msg1'), { channelId: 'client-custVictim' }));
+  await assertFails(updateDoc(doc(zoe, 'messages', 'msg1'), { businessId: VICTIM_BIZ }));
+  await assertFails(updateDoc(doc(zoe, 'messages', 'msg1'), { senderId: 'alice' }));
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  await assertFails(setDoc(doc(alice, 'dmThreads', 'alice__vstaff'), {
+    participants: ['alice', 'vstaff'], businessId: MY_BIZ, lastMessage: { content: 'x', senderId: 'alice', createdAt: new Date() }, updatedAt: new Date(),
+  }, { merge: true }));
+});
+
+// ── H3. taskComments: as yourself, in your tenant / on your own customer's task ──
+test('62. a task comment is authored by its writer and stays inside the tenant', async () => {
+  // The old rule accepted `teamId is string` from ANYONE.
+  await assertFails(setDoc(doc(outsider(), 'taskComments', 'tcInjected'), {
+    taskId: 'taskCarol', content: 'injected', teamId: MY_TEAM, businessId: MY_BIZ, createdByUserId: 'mallory',
+  }));
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  await assertFails(setDoc(doc(alice, 'taskComments', 'tcAsZoe'), {
+    taskId: 'taskCarol', content: 'x', teamId: MY_TEAM, businessId: MY_BIZ, createdByUserId: 'zoe',
+  }));
+  await assertSucceeds(setDoc(doc(alice, 'taskComments', 'tcAlice'), {
+    taskId: 'taskCarol', content: 'ok', teamId: MY_TEAM, businessId: MY_BIZ, createdByUserId: 'alice',
+  }));
+  // PortalProjectDetailView shape: senderType client + the client's own customerId.
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertSucceeds(setDoc(doc(carol, 'taskComments', 'tcCarol'), {
+    taskId: 'taskCarol', content: 'Faleminderit', userId: 'carol', senderType: 'client', createdByUserId: 'carol',
+    teamId: MY_TEAM, customerId: 'cust1', businessId: MY_BIZ,
+  }));
+  await assertFails(setDoc(doc(carol, 'taskComments', 'tcCarolVictim'), {
+    taskId: 'taskV', content: 'x', userId: 'carol', senderType: 'client', createdByUserId: 'carol', customerId: 'custVictim', businessId: VICTIM_BIZ,
+  }));
+  // The author's edit may not re-tenant the comment.
+  await assertFails(updateDoc(doc(alice, 'taskComments', 'tcAlice'), { content: 'moved', businessId: VICTIM_BIZ }));
+});
+
+// ── H4. contracts / projects / customers: the portal's writes are keyholes ──────
+test('63a. a portal client only ANSWERS a sent contract — sign as themselves or reject — never edits or deletes it', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'contracts', 'ctrSent'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', title: 'SEO 12m', amount: 1200, status: 'Sent' });
+    await setDoc(doc(db, 'contracts', 'ctrSent2'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', title: 'Ads', amount: 300, status: 'Sent' });
+    await setDoc(doc(db, 'contracts', 'ctrDraft'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', title: 'Draft', amount: 500, status: 'Draft' });
+  });
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(updateDoc(doc(carol, 'contracts', 'ctrSent'), { amount: 1 }));
+  await assertFails(updateDoc(doc(carol, 'contracts', 'ctrSent'), { status: 'Signed', amount: 1, signedByUserId: 'carol' }));
+  await assertFails(updateDoc(doc(carol, 'contracts', 'ctrSent'), { status: 'Signed', signedByUserId: 'alice' }));
+  await assertFails(updateDoc(doc(carol, 'contracts', 'ctrDraft'), { status: 'Signed', signedByUserId: 'carol' }));
+  await assertFails(updateDoc(doc(carol, 'contracts', 'ctrDraft'), { status: 'Sent' }));
+  await assertFails(deleteDoc(doc(carol, 'contracts', 'ctrSent')));
+  // PortalContractsView.handleSign — the exact write.
+  await assertSucceeds(updateDoc(doc(carol, 'contracts', 'ctrSent'), {
+    status: 'Signed', signedAt: new Date(), signedByUserId: 'carol', signedByEmail: 'carol@client.com',
+    signatureData: 'Carol', signatureType: 'typed', updatedAt: new Date(),
+  }));
+  // Un-signing is not a thing.
+  await assertFails(updateDoc(doc(carol, 'contracts', 'ctrSent'), { status: 'Sent' }));
+  // handleReject.
+  await assertSucceeds(updateDoc(doc(carol, 'contracts', 'ctrSent2'), { status: 'Rejected', rejectedAt: new Date(), rejectionReason: 'çmimi', updatedAt: new Date() }));
+  // Staff keep full control inside the tenant.
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  await assertSucceeds(updateDoc(doc(alice, 'contracts', 'ctrDraft'), { status: 'Sent', sentAt: new Date() }));
+  await assertFails(updateDoc(doc(alice, 'contracts', 'ctrDraft'), { businessId: VICTIM_BIZ }));
+  await assertSucceeds(deleteDoc(doc(alice, 'contracts', 'ctrDraft')));
+});
+
+test('63b. the portal client cannot write or delete their project, nor delete their own customer record', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertSucceeds(getDoc(doc(carol, 'projects', 'projCarol')));
+  await assertFails(updateDoc(doc(carol, 'projects', 'projCarol'), { name: 'renamed by client' }));
+  await assertFails(updateDoc(doc(carol, 'projects', 'projCarol'), { status: 'Archived' }));
+  await assertFails(deleteDoc(doc(carol, 'projects', 'projCarol')));
+  await assertFails(deleteDoc(doc(carol, 'customers', 'cust1')));
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  await assertSucceeds(updateDoc(doc(alice, 'projects', 'projCarol'), { status: 'On Hold' }));
+  await assertFails(updateDoc(doc(alice, 'projects', 'projCarol'), { businessId: VICTIM_BIZ }));
+});
+
+// ── H5. teamId-only create branches: a teamId names no tenant ──────────────────
+test('64. marketing / workspace / typing rows are created inside the writer\'s business, never "my team + your business"', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  for (const col of ['waTemplates', 'waBroadcasts', 'emailTemplates', 'emailCampaigns', 'campaignEnrollments', 'chatSnippets', 'workspaceFolders', 'workspaceDriveFiles']) {
+    await assertFails(setDoc(doc(alice, col, `${col}-hop`), { teamId: MY_TEAM, businessId: VICTIM_BIZ, name: 'hop', createdByUserId: 'alice' }));
+    await assertFails(setDoc(doc(alice, col, `${col}-noBiz`), { teamId: MY_TEAM, name: 'no tenant', createdByUserId: 'alice' }));
+    await assertSucceeds(setDoc(doc(alice, col, `${col}-ok`), { teamId: MY_TEAM, businessId: MY_BIZ, name: 'ok', createdByUserId: 'alice' }));
+    await assertFails(updateDoc(doc(alice, col, `${col}-ok`), { businessId: VICTIM_BIZ }));
+  }
+  // typingIndicators: as yourself, in your business.
+  await assertFails(setDoc(doc(alice, 'typingIndicators', 'grp1__alice-hop'), { userId: 'alice', channelId: 'grp1', timestamp: new Date(), businessId: VICTIM_BIZ, teamId: MY_TEAM }));
+  await assertFails(setDoc(doc(alice, 'typingIndicators', 'grp1__zoe'), { userId: 'zoe', channelId: 'grp1', timestamp: new Date(), businessId: MY_BIZ, teamId: MY_TEAM }));
+  // lidMappings are written by the VPS only.
+  await assertFails(setDoc(doc(alice, 'lidMappings', 'lid1'), { businessId: MY_BIZ, teamId: MY_TEAM, lid: '1', phone: '355' }));
+});
+
+// ── H6. chatScheduledMessages: the cron sends them unchecked, so the target is checked here ──
+test('65. a scheduled message cannot target another tenant, and its routing cannot be re-aimed', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  const base = { senderId: 'alice', content: 'later', attachmentUrl: null, scheduledAt: new Date(Date.now() + 3600e3).toISOString(), sent: false, createdByUserId: 'alice' };
+  await assertFails(setDoc(doc(alice, 'chatScheduledMessages', 'sch-victim'), { ...base, channelId: null, directUserId: 'vstaff' }));
+  await assertFails(setDoc(doc(alice, 'chatScheduledMessages', 'sch-victim-ch'), { ...base, channelId: 'client-custVictim', directUserId: null }));
+  await assertFails(setDoc(doc(alice, 'chatScheduledMessages', 'sch-as-zoe'), { ...base, senderId: 'zoe', channelId: null, directUserId: 'zoe' }));
+  await assertSucceeds(setDoc(doc(alice, 'chatScheduledMessages', 'sch-ok'), { ...base, channelId: null, directUserId: 'zoe' }));
+  await assertSucceeds(setDoc(doc(alice, 'chatScheduledMessages', 'sch-ok-client'), { ...base, channelId: 'client-cust1', directUserId: null }));
+  await assertFails(updateDoc(doc(alice, 'chatScheduledMessages', 'sch-ok'), { directUserId: 'vstaff' }));
+  await assertFails(updateDoc(doc(alice, 'chatScheduledMessages', 'sch-ok'), { channelId: 'client-custVictim' }));
+  await assertFails(updateDoc(doc(alice, 'chatScheduledMessages', 'sch-ok'), { senderId: 'zoe' }));
+  await assertSucceeds(updateDoc(doc(alice, 'chatScheduledMessages', 'sch-ok'), { content: 'edited', sent: true, sentAt: new Date() }));
+  await assertFails(getDoc(doc(staffOf('zoe', MY_BIZ, MY_TEAM, ['member']), 'chatScheduledMessages', 'sch-ok')));
+});
+
+// ── M2. teamSettings: staff-only, and the secret deny-list mirrors api/_tenantConfig.ts ──
+test('66a. a portal client no longer reads teamSettings', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(getDoc(doc(carol, 'teamSettings', MY_TEAM)));
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(getDoc(doc(alice, 'teamSettings', MY_TEAM)));
+});
+
+test('66b. every SECRET_FIELDS key of api/_tenantConfig.ts is refused on teamSettings, and the two lists are identical', async () => {
+  const src = readFileSync('api/_tenantConfig.ts', 'utf8');
+  const block = src.match(/export const SECRET_FIELDS = \[([\s\S]*?)\] as const;/);
+  assert.ok(block, 'SECRET_FIELDS not found in api/_tenantConfig.ts');
+  const secretFields = [...block[1].matchAll(/'([A-Za-z0-9_]+)'/g)].map(m => m[1]);
+  assert.ok(secretFields.length >= 6, `too few SECRET_FIELDS parsed: ${secretFields.join(',')}`);
+  const rules = readFileSync('firestore.rules', 'utf8');
+  const fn = rules.match(/function teamSettingsSecretKeys\(\) \{\s*return \[([\s\S]*?)\];/);
+  assert.ok(fn, 'teamSettingsSecretKeys() not found in firestore.rules');
+  const ruleKeys = [...fn[1].matchAll(/'([A-Za-z0-9_]+)'/g)].map(m => m[1]);
+  assert.deepEqual([...ruleKeys].sort(), [...secretFields].sort(), 'firestore.rules teamSettingsSecretKeys() must mirror SECRET_FIELDS');
+  const admin = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  for (const field of secretFields) {
+    await assertFails(setDoc(doc(admin, 'teamSettings', MY_TEAM), { [field]: 'leak-me' }, { merge: true }));
+  }
+  await assertSucceeds(setDoc(doc(admin, 'teamSettings', MY_TEAM), { hasDynadotApiKey: true, companyName: 'Mine Ltd' }, { merge: true }));
+});
+
+// ── M3. expenses: the approving department is a department OF the business ─────
+test('67. an expense cannot be routed to a team of another business, nor re-routed by a non-approver', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  await assertFails(setDoc(doc(alice, 'expenses', 'expForeignTeam'), {
+    businessId: MY_BIZ, teamId: VICTIM_TEAM, title: 'x', amount: 10, currency: 'ALL', date: '2026-09-01', approvalStatus: 'Submitted', createdByUserId: 'alice',
+  }));
+  await assertSucceeds(setDoc(doc(alice, 'expenses', 'expTeamOk'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, title: 'x', amount: 10, currency: 'ALL', date: '2026-09-01', approvalStatus: 'Submitted', createdByUserId: 'alice',
+  }));
+  // finn is a plain Member (10g) — bob's membership row was re-seeded as Admin in 15,
+  // which makes him a legitimate approver (isTeamAdmin), not the case under test.
+  const finn = staffOf('finn', MY_BIZ, MY_TEAM, ['member'], 'finn@mine.com');
+  await assertFails(updateDoc(doc(finn, 'expenses', 'expTeamOk'), { teamId: VICTIM_TEAM }));
+  await assertFails(updateDoc(doc(finn, 'expenses', 'expTeamOk'), { teamId: 'teamDept2' }));
+  await assertSucceeds(updateDoc(doc(finn, 'expenses', 'expTeamOk'), { title: 'renamed' }));
+  // A Viewer books no costs.
+  const vera = staffOf('vera', MY_BIZ, MY_TEAM, ['viewer']);
+  await assertFails(setDoc(doc(vera, 'expenses', 'expByViewer'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, title: 'x', amount: 10, currency: 'ALL', date: '2026-09-01', approvalStatus: 'Submitted', createdByUserId: 'vera',
+  }));
+});
+
+// ── M4. Role gates ─────────────────────────────────────────────────────────────
+test('68a. WhatsApp agents, hosting servers and Momentum targets are Admin/Manager writes', async () => {
+  const bob = staffOf('bob', MY_BIZ, MY_TEAM, ['member'], 'bob@mine.com');
+  const admin = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(bob, 'whatsappAccounts', 'waByBob'), { businessId: MY_BIZ, teamId: MY_TEAM, label: 'x', enabled: true, createdByUserId: 'bob' }));
+  await assertSucceeds(setDoc(doc(admin, 'whatsappAccounts', 'waByAdmin'), { businessId: MY_BIZ, teamId: MY_TEAM, label: 'x', enabled: true, createdByUserId: 'alice' }));
+  await assertFails(updateDoc(doc(bob, 'whatsappAccounts', 'waByAdmin'), { enabled: false }));
+  await assertFails(deleteDoc(doc(bob, 'whatsappAccounts', 'waByAdmin')));
+  await assertSucceeds(getDoc(doc(bob, 'whatsappAccounts', 'waByAdmin')));
+  await assertFails(updateDoc(doc(admin, 'whatsappAccounts', 'waByAdmin'), { businessId: VICTIM_BIZ }));
+  await assertFails(setDoc(doc(bob, 'hostingServers', 'srvByBob'), { businessId: MY_BIZ, teamId: MY_TEAM, name: 'x', hostname: 'h.al', username: 'root', status: 'Active' }));
+  await assertFails(updateDoc(doc(bob, 'hostingServers', 'srvMine'), { hostname: 'evil.example' }));
+  await assertSucceeds(updateDoc(doc(admin, 'hostingServers', 'srvMine'), { name: 'srv1 renamed' }));
+  await assertFails(setDoc(doc(bob, 'productivitySettings', 'psByBob'), { businessId: MY_BIZ, teamId: MY_TEAM, targets: { tasksPerDay: 1 } }));
+  await assertSucceeds(setDoc(doc(admin, 'productivitySettings', 'psByAdmin'), { businessId: MY_BIZ, teamId: MY_TEAM, targets: { tasksPerDay: 5 } }));
+  await assertFails(updateDoc(doc(bob, 'productivitySettings', 'psByAdmin'), { targets: { tasksPerDay: 1 } }));
+});
+
+test('68b. a daily report is edited by its author or a manager — not by a colleague', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'dailyReports', 'drAlice'), { businessId: MY_BIZ, teamId: MY_TEAM, userId: 'alice', date: '2026-09-01', summary: 'ok' });
+  });
+  const bob = staffOf('bob', MY_BIZ, MY_TEAM, ['member'], 'bob@mine.com');
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  const boss = staffOf('boss', MY_BIZ, MY_TEAM, ['admin'], 'boss@mine.com');
+  await assertFails(updateDoc(doc(bob, 'dailyReports', 'drAlice'), { summary: 'rewritten' }));
+  await assertFails(deleteDoc(doc(bob, 'dailyReports', 'drAlice')));
+  await assertFails(setDoc(doc(bob, 'dailyReports', 'drForAlice'), { businessId: MY_BIZ, teamId: MY_TEAM, userId: 'alice', date: '2026-09-02', createdByUserId: 'bob' }));
+  await assertSucceeds(setDoc(doc(bob, 'dailyReports', 'drBob'), { businessId: MY_BIZ, teamId: MY_TEAM, userId: 'bob', date: '2026-09-02', createdByUserId: 'bob' }));
+  await assertSucceeds(updateDoc(doc(alice, 'dailyReports', 'drAlice'), { summary: 'updated by author' }));
+  await assertFails(updateDoc(doc(alice, 'dailyReports', 'drAlice'), { userId: 'bob' }));
+  await assertSucceeds(updateDoc(doc(boss, 'dailyReports', 'drAlice'), { blockerResolvedAt: new Date() }));
+});
+
+test('68c. a Viewer creates no CRM/finance rows and bumps no invoice counter', async () => {
+  const vera = staffOf('vera', MY_BIZ, MY_TEAM, ['viewer']);
+  await assertFails(setDoc(doc(vera, 'invoices', 'invByViewer'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', total: 1, status: 'Draft', createdByUserId: 'vera' }));
+  await assertFails(setDoc(doc(vera, 'customers', 'custByViewer'), { businessId: MY_BIZ, teamId: MY_TEAM, name: 'x', email: 'x@x.com', createdByUserId: 'vera' }));
+  await assertFails(setDoc(doc(vera, 'leads', 'leadByViewer'), { businessId: MY_BIZ, teamId: MY_TEAM, name: 'x', status: 'New', createdByUserId: 'vera' }));
+  await assertFails(setDoc(doc(vera, 'projects', 'projByViewer'), { businessId: MY_BIZ, teamId: MY_TEAM, name: 'x', status: 'Active', createdByUserId: 'vera' }));
+  await assertFails(updateDoc(doc(vera, 'customers', 'cust1'), { name: 'renamed by viewer' }));
+  await assertFails(setDoc(doc(vera, 'counters', `invoices_${MY_TEAM}`), { last: 1 }, { merge: true }));
+  await assertSucceeds(getDoc(doc(vera, 'customers', 'cust1')));
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(setDoc(doc(alice, 'counters', `invoices_${MY_TEAM}`), { last: 1 }, { merge: true }));
+});
+
+// ── M5. Report history rows name their real actor ─────────────────────────────
+test('69. versions / approvals / events are signed by the writer', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  await assertFails(setDoc(doc(alice, 'reportVersions', 'rvForged'), { businessId: MY_BIZ, teamId: MY_TEAM, reportId: 'r1', version: 1, reason: 'submitted', createdByUserId: 'zoe' }));
+  await assertSucceeds(setDoc(doc(alice, 'reportVersions', 'rvOk'), { businessId: MY_BIZ, teamId: MY_TEAM, reportId: 'r1', version: 1, reason: 'submitted', createdByUserId: 'alice' }));
+  await assertFails(setDoc(doc(alice, 'reportApprovals', 'raForged'), { businessId: MY_BIZ, teamId: MY_TEAM, reportId: 'r1', version: 1, stage: 'internal', decision: 'approved', approverUserId: 'zoe', createdByUserId: 'alice' }));
+  await assertSucceeds(setDoc(doc(alice, 'reportApprovals', 'raOk'), { businessId: MY_BIZ, teamId: MY_TEAM, reportId: 'r1', version: 1, stage: 'internal', decision: 'approved', approverUserId: 'alice', createdByUserId: 'alice' }));
+  await assertFails(setDoc(doc(alice, 'reportEvents', 'reForged'), { businessId: MY_BIZ, teamId: MY_TEAM, reportId: 'r1', kind: 'approved', actorUserId: 'zoe', actorType: 'staff', createdByUserId: 'alice' }));
+  await assertSucceeds(setDoc(doc(alice, 'reportEvents', 'reOk'), { businessId: MY_BIZ, teamId: MY_TEAM, reportId: 'r1', kind: 'approved', actorUserId: 'alice', actorType: 'staff', createdByUserId: 'alice' }));
+});
+
+// ── M6. conversations: the portal's write is an activity bump, nothing else ────
+test('70. a portal client cannot re-own or re-watch their thread; staff cannot re-tenant it', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'conversations', 'client-cust1'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', channel: 'portal', ownerId: 'alice', watchers: ['alice'], status: 'open',
+    });
+  });
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(updateDoc(doc(carol, 'conversations', 'client-cust1'), { ownerId: 'carol' }));
+  await assertFails(updateDoc(doc(carol, 'conversations', 'client-cust1'), { watchers: ['carol'] }));
+  await assertFails(updateDoc(doc(carol, 'conversations', 'client-cust1'), { slaBreachNotified: true }));
+  await assertSucceeds(updateDoc(doc(carol, 'conversations', 'client-cust1'), { lastMessageAt: new Date(), awaitingReply: true }));
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  await assertFails(updateDoc(doc(alice, 'conversations', 'client-cust1'), { businessId: VICTIM_BIZ }));
+  await assertSucceeds(updateDoc(doc(alice, 'conversations', 'client-cust1'), { status: 'closed' }));
+  // A portal client creating a thread stamped with another tenant — refused.
+  await assertFails(setDoc(doc(carol, 'conversations', 'client-cust1-project-p9'), { businessId: VICTIM_BIZ, customerId: 'cust1', channel: 'portal', watchers: [] }));
+});
+
+// ── M7. userProfiles: your name goes into YOUR tenant's directory only ─────────
+test('71. a profile is planted only in a tenant the user belongs to, and never moves', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  await assertFails(setDoc(doc(alice, 'userProfiles', 'upAliceHop'), { userId: 'alice', displayName: 'CEO', businessId: VICTIM_BIZ, teamId: VICTIM_TEAM }));
+  await assertSucceeds(setDoc(doc(alice, 'userProfiles', 'upAlice'), { userId: 'alice', displayName: 'Alice', businessId: MY_BIZ, teamId: MY_TEAM }));
+  await assertFails(updateDoc(doc(alice, 'userProfiles', 'upAlice'), { businessId: VICTIM_BIZ }));
+  await assertFails(updateDoc(doc(alice, 'userProfiles', 'upAlice'), { userId: 'zoe' }));
+  await assertSucceeds(updateDoc(doc(alice, 'userProfiles', 'upAlice'), { customStatus: 'në takim', lastSeen: new Date() }));
+  // JoinInviteView: right after /api/accept-invite created the membership, before the claims refresh.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teamMembers', `${MY_TEAM}_joiner`), { userId: 'joiner', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active' });
+  });
+  const joiner = testEnv.authenticatedContext('joiner', { email: 'joiner@mine.com' }).firestore();
+  await assertSucceeds(setDoc(doc(joiner, 'userProfiles', 'upJoiner'), { userId: 'joiner', displayName: 'J', teamId: MY_TEAM, businessId: MY_BIZ, createdByUserId: 'joiner' }));
+  await assertFails(setDoc(doc(joiner, 'userProfiles', 'upJoinerHop'), { userId: 'joiner', displayName: 'J', teamId: VICTIM_TEAM, businessId: VICTIM_BIZ, createdByUserId: 'joiner' }));
+});
+
+// ── M8. An Inactive membership grants nothing through the users/{uid} fallback ──
+test('72. an off-boarded (Inactive) member with a stale users marker reads nothing', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'teamMembers', `${MY_TEAM}_gone`), { userId: 'gone', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Inactive' });
+    await setDoc(doc(db, 'users', 'gone'), { teamId: MY_TEAM, businessId: MY_BIZ });
+  });
+  const gone = testEnv.authenticatedContext('gone', { email: 'gone@mine.com' }).firestore();
+  await assertFails(getDoc(doc(gone, 'customers', 'cust1')));
+  await assertFails(getDoc(doc(gone, 'services', 'svcMine')));
+  await assertFails(getDocs(query(collection(gone, 'invoices'), where('businessId', '==', MY_BIZ))));
+  // The same fallback still works for an ACTIVE member without claims (finn, seeded in 10g).
+  const finn = testEnv.authenticatedContext('finn', { email: 'finn@mine.com' }).firestore();
+  await assertSucceeds(getDoc(doc(finn, 'services', 'svcMine')));
+});
+
+// ── L. notifications: the deep link is a path ──────────────────────────────────
+test('73. a notification actionUrl must be an in-app path', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  await assertFails(setDoc(doc(alice, 'notifications', 'nSelfEvil'), { userId: 'alice', type: 'task_assigned', title: 'Klikoni', actionUrl: 'https://evil.example/login', businessId: MY_BIZ }));
+  await assertFails(setDoc(doc(alice, 'notifications', 'nSelfJs'), { userId: 'alice', type: 'task_assigned', title: 'Klikoni', actionUrl: 'javascript:alert(1)', businessId: MY_BIZ }));
+  await assertSucceeds(setDoc(doc(alice, 'notifications', 'nSelfOk'), { userId: 'alice', type: 'task_assigned', title: 'Detyrë', actionUrl: '/app/tasks?task=t1', businessId: MY_BIZ }));
+  await assertSucceeds(setDoc(doc(alice, 'notifications', 'nSelfNoUrl'), { userId: 'alice', type: 'task_assigned', title: 'Detyrë', businessId: MY_BIZ }));
+});
+
+// ── An UNVERIFIED e-mail is not identity anywhere (staff side) ─────────────────
+test('74. an unverified password sign-up with a colleague\'s address reads no invite token and claims no seat', async () => {
+  // Same address as the pending victim invite (17d) and as dora's legacy e-mail-keyed row (41).
+  const impostor = unverifiedUser('impostor', 'someone@victim.com');
+  await assertFails(getDoc(doc(impostor, 'teamInvites', 'invVictim')));
+  await assertFails(getDocs(query(collection(impostor, 'teamInvites'), where('email', '==', 'someone@victim.com'), where('status', '==', 'Pending'))));
+  await assertFails(updateDoc(doc(impostor, 'teamInvites', 'invVictim'), { status: 'Accepted', acceptedByUserId: 'impostor' }));
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teamMembers', `${MY_TEAM}_greta@mine.com`), {
+      userId: 'greta@mine.com', email: 'greta@mine.com', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active',
+    });
+  });
+  const fakeGreta = unverifiedUser('fakeGreta', 'greta@mine.com');
+  await assertFails(getDoc(doc(fakeGreta, 'teamMembers', `${MY_TEAM}_greta@mine.com`)));
+  await assertFails(updateDoc(doc(fakeGreta, 'teamMembers', `${MY_TEAM}_greta@mine.com`), { userId: 'fakeGreta' }));
+  // The verified owner of the address still self-heals (41) and reads their invite (17d).
+  const greta = verifiedUser('gretaUid', 'greta@mine.com');
+  await assertSucceeds(getDoc(doc(greta, 'teamMembers', `${MY_TEAM}_greta@mine.com`)));
+  await assertSucceeds(updateDoc(doc(greta, 'teamMembers', `${MY_TEAM}_greta@mine.com`), { userId: 'gretaUid' }));
 });

@@ -6,13 +6,14 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card } from '../components/ui/card';
 import { Loader2 } from 'lucide-react';
+import { safeRedirectPath } from '../lib/safeNavigation';
 
 const LoginView: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const rawRedirect = searchParams.get('redirect');
-  // Validate redirect is a safe relative path (prevent open redirect)
-  const redirectTo = rawRedirect && rawRedirect.startsWith('/') && !rawRedirect.includes('://') ? rawRedirect : '/';
+  // Only a same-origin in-app path survives (`//evil.com`, `/\evil.com` and absolute
+  // URLs fall back to `/`) — see lib/safeNavigation.
+  const redirectTo = safeRedirectPath(searchParams.get('redirect'));
   const { signInWithGoogle, signInWithEmail, signUpWithEmail } = useAuth();
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');

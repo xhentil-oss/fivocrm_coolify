@@ -10,6 +10,7 @@ import { useFileUpload } from '../hooks/useFileUpload';
 import { useWhatsAppStatus } from '../hooks/useWhatsAppStatus';
 import WhatsAppStatusBadge from './WhatsAppStatusBadge';
 import { resolveLeadParams } from '../lib/whatsappTemplates';
+import { safeExternalUrl } from '../lib/safeUrl';
 import type { WhatsAppMessage, WhatsAppTemplate, Lead } from '../types';
 
 interface Props {
@@ -426,29 +427,29 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
                     : 'bg-white dark:bg-card text-foreground rounded-tl-none'
                 }`}
               >
-                {(msg as any).mediaType === 'image' && (msg as any).mediaUrl && (
-                  <a href={(msg as any).mediaUrl} target="_blank" rel="noopener noreferrer">
+                {(msg as any).mediaType === 'image' && safeExternalUrl((msg as any).mediaUrl) && (
+                  <a href={safeExternalUrl((msg as any).mediaUrl) ?? undefined} target="_blank" rel="noopener noreferrer">
                     <img
-                      src={(msg as any).mediaUrl}
+                      src={safeExternalUrl((msg as any).mediaUrl) ?? undefined}
                       alt={(msg as any).mediaFilename || 'image'}
                       className="rounded-lg max-h-64 mb-1 object-cover"
                       loading="lazy"
                     />
                   </a>
                 )}
-                {(msg as any).mediaType === 'video' && (msg as any).mediaUrl && (
+                {(msg as any).mediaType === 'video' && safeExternalUrl((msg as any).mediaUrl) && (
                   <video
                     controls
-                    src={(msg as any).mediaUrl}
+                    src={safeExternalUrl((msg as any).mediaUrl) ?? undefined}
                     className="rounded-lg max-h-64 mb-1"
                   />
                 )}
-                {(msg as any).mediaType === 'audio' && (msg as any).mediaUrl && (
-                  <audio controls src={(msg as any).mediaUrl} className="mb-1 w-full" />
+                {(msg as any).mediaType === 'audio' && safeExternalUrl((msg as any).mediaUrl) && (
+                  <audio controls src={safeExternalUrl((msg as any).mediaUrl) ?? undefined} className="mb-1 w-full" />
                 )}
-                {(msg as any).mediaType === 'document' && (msg as any).mediaUrl && (
+                {(msg as any).mediaType === 'document' && safeExternalUrl((msg as any).mediaUrl) && (
                   <a
-                    href={(msg as any).mediaUrl}
+                    href={safeExternalUrl((msg as any).mediaUrl) ?? undefined}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-2 mb-1 px-2 py-1.5 rounded-md bg-black/5 hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10 text-xs"

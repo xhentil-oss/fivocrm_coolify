@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { adminAuth, adminDb } from './_firebaseAdmin.js';
+import { adminAuth } from './_firebaseAdmin.js';
+import { activeMembership } from './_callerIdentity.js';
 import { checkPersistentRateLimit } from './_rateLimit.js';
 import { normContactPhone } from './_contactIdentity.js';
 import { draftWaReply } from './_aiReply.js';
@@ -46,12 +47,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // Verify the caller belongs to the requested team — prevents using another
   // team's AI key/budget and reading another tenant's thread.
-  const memberSnap = await adminDb.collection('teamMembers')
-    .where('teamId', '==', teamId)
-    .where('userId', '==', uid)
-    .limit(1)
-    .get();
-  if (memberSnap.empty) return res.status(403).json({ error: 'Forbidden: nuk jeni anëtar i këtij ekipi' });
+  // An Inactive membership (removed employee) grants nothing.
+  if (!(await activeMembership(uid, { teamId }))) return res.status(403).json({ error: 'Forbidden: nuk jeni anëtar i këtij ekipi' });
 
   if (!(await checkPersistentRateLimit('aiReply', uid, AI_REPLY_PER_HOUR))) {
     return res.status(429).json({ error: 'Limiti i sugjerimeve AI u arrit. Provoni përsëri pas pak.', limitPerHour: AI_REPLY_PER_HOUR, retryAfterSeconds: 3600 });

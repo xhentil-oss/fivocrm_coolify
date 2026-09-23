@@ -437,3 +437,24 @@ html.plt-capacitor body {
   text-decoration: line-through;
   color: hsl(var(--color-muted-foreground));
 }
+
+/* ── Print: the price-calculator quote panel (components/calculator/PriceSummary) ──
+   `window.print()` prints the live page; everything except the panel marked
+   `data-print-root` is hidden, and the internal-costs block never reaches paper. */
+@media print {
+  body:has([data-print-root]) > * { visibility: hidden !important; }
+  body:has([data-print-root]) [data-print-root],
+  body:has([data-print-root]) [data-print-root] * { visibility: visible !important; }
+  body:has([data-print-root]) [data-print-root] {
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: #fff !important;
+    color: #1a1a1a !important;
+    padding: 24px !important;
+  }
+  body:has([data-print-root]) [data-print-root] [data-internal-costs] { display: none !important; }
+  body:has([data-print-root]) [data-print-root] .overflow-y-auto { max-height: none !important; overflow: visible !important; }
+}

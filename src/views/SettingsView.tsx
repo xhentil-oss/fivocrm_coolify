@@ -138,7 +138,7 @@ const ADMIN_ONLY_TABS = ['integrations', 'automation', 'roles', 'modules'];
 
 // ─── SettingsView ──────────────────────────────────────────────────────────────
 const SettingsView: React.FC = () => {
-  const { teamId: permTeamId, isAdmin, isOwner } = usePermissions();
+  const { teamId: permTeamId, isAdmin, isOwner, isSuperAdmin } = usePermissions();
   // A super-admin has no permissions.teamId (null); fall back to the resolved
   // global active team so team-scoped saves here (WhatsApp, bank, Meta, Stripe)
   // still work for them.
@@ -2292,8 +2292,10 @@ const SettingsView: React.FC = () => {
             lastRun={getLastRun('invoice_reminders')}
           />
 
-          {/* WHMCS Sync */}
-          <CronJobCard
+          {/* WHMCS Sync — a platform-wide integration (one WHMCS instance, env-configured);
+              the cron endpoint refuses a manual run from anyone but a super-admin, so the
+              card is only shown to them. */}
+          {isSuperAdmin && <CronJobCard
             title="Sinkronizim WHMCS"
             description="Tërheq klientët, faturat, pagesat dhe shërbimet/abonimet aktive nga WHMCS në FivoCRM. Klientët shkojnë te lista e Klientëve. Sinkronizimi është idempotent (pa dublime); pjesët pa leje në WHMCS API thjesht anashkalohen. Kliko 'Ekzekuto Tani' për një backfill të plotë."
             schedule="Çdo ditë (brenda 'run-all') + kohë reale via webhook"
@@ -2303,7 +2305,7 @@ const SettingsView: React.FC = () => {
             status={cronRunStatus['whmcs_sync']}
             onRun={() => handleRunCron('/api/cron/run?job=whmcs-sync', 'whmcs_sync')}
             lastRun={getLastRun('whmcs_sync')}
-          />
+          />}
 
           {/* Recurring Tasks */}
           <CronJobCard

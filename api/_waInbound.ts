@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminDb, Timestamp } from './_firebaseAdmin.js';
 import { getTeamConfig } from './_tenantConfig.js';
+import { timingSafeEqualStr } from './_callerIdentity.js';
 import {
   findLeadForContact,
   findCustomerForContact,
@@ -775,7 +776,11 @@ export async function processWaEvent(rawEvent: WaEvent | Record<string, any>): P
 
 function authorized(req: VercelRequest): boolean {
   const cronSecret = process.env.CRON_SECRET;
-  return !!(cronSecret && req.headers.authorization === `Bearer ${cronSecret}`);
+  if (!cronSecret) return false;
+  const header = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
+  if (!header.startsWith('Bearer ')) return false;
+  // Constant-time: a `===` on the secret leaks its length/prefix through timing.
+  return timingSafeEqualStr(header.slice(7).trim(), cronSecret);
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

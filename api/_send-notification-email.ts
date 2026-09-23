@@ -6,6 +6,18 @@ import {
   isViewingConversation, shouldThrottleCategoryEmail, notifyUser,
 } from './_push.js';
 import { checkPersistentRateLimit } from './_rateLimit.js';
+import { isSafeAppPath } from './_callerIdentity.js';
+
+/**
+ * Notification types a PORTAL CLIENT (token with `pbid`, no `bid`) may relay. A
+ * client's actions can only ever produce these; letting a client send
+ * `invoice_paid` / `task_assigned` / `billing` to staff is a phishing primitive
+ * ("your invoice was paid — open this link"). Staff callers are unrestricted.
+ */
+const CLIENT_ORIGINATED_TYPES = new Set([
+  'client_message', 'client_request', 'lead_created', 'new_client', 'project_comment',
+  'task_comment', 'quote_accepted', 'quote_rejected', 'mention', 'guest_task_update', 'blocker_reported',
+]);
 
 // Simple in-memory per-caller rate limiter (best-effort; resets on cold start).
 // A fan-out (e.g. "goal achieved" → every active member) issues one call PER
@@ -61,6 +73,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const { userId, type, title, message, actionUrl, actionLabel, imageUrl, conversationKey, channelFanout } = req.body || {};
+
+  const callerIsStaff = caller.superAdmin === true || (typeof (caller as any).bid === 'string' && !!(caller as any).bid);
+  const callerIsPortal = !callerIsStaff && typeof (caller as any).pbid === 'string' && !!(caller as any).pbid;
+
+  // The bell/push/email navigate to `actionUrl` on tap. It must be an in-app path —
+  // an absolute URL here is a phishing link delivered by the platform's own sender.
+  if (actionUrl != null && actionUrl !== '' && !isSafeAppPath(actionUrl)) {
+    return res.status(400).json({ error: 'actionUrl must be a relative /app/… or /portal/… path' });
+  }
+  if (callerIsPortal) {
+    if (channelFanout) return res.status(403).json({ error: 'Forbidden' });
+    if (type != null && !CLIENT_ORIGINATED_TYPES.has(String(type))) {
+      return res.status(403).json({ error: 'Notification type not allowed for a portal client' });
+    }
+  }
 
   // ── Group-channel fan-out ───────────────────────────────────────────────────
   // The documented browser path is one notification document per recipient through
@@ -140,7 +167,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({ skipped: 'recipient-in-conversation' });
   }
 
-  const url = actionUrl ? String(actionUrl) : '/';
+  const url = isSafeAppPath(actionUrl) ? actionUrl : '/';
 
   // Both transports run even if one fails — they are independent channels.
   const [push, email] = await Promise.all([

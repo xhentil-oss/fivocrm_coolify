@@ -7,6 +7,7 @@ import {
 import { syncAccount, syncAllAccounts, currentPeriod } from './_social.js';
 import { sendCustomerReport } from './_socialEmail.js';
 import { buildGoogleAuthUrl, exchangeGoogleCode, listGscSites } from './_gsc.js';
+import { activeMemberships, businessIdOfTeam } from './_callerIdentity.js';
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
@@ -80,26 +81,52 @@ async function requireAuth(req: VercelRequest): Promise<string | null> {
   }
 }
 
-// A caller is authorized for a scope if they hold a teamMembers doc matching the
-// requested teamId OR businessId. businessId is the real tenant boundary (the app
-// moved off teamId scoping), so we accept either — one query, checked in memory.
+// A caller is authorized for a scope when their ACTIVE memberships cover EVERY key
+// given: the requested teamId AND the requested businessId (mirrors _gmb-api.ts
+// `scopeMember`). The old OR let a member of business X pass `teamId=<team of Y>`
+// and list/sync/disconnect Y's accounts through the teamId branch below.
 async function memberOf(uid: string, teamId?: string | null, businessId?: string | null): Promise<boolean> {
   if (!teamId && !businessId) return false;
-  const snap = await adminDb.collection('teamMembers').where('userId', '==', uid).limit(50).get();
-  return snap.docs.some((d) => {
-    const m = d.data();
-    return (!!teamId && m.teamId === teamId) || (!!businessId && m.businessId === businessId);
-  });
+  const ms = await activeMemberships(uid);
+  const coversTeam = !teamId || ms.some((m) => m.teamId === teamId);
+  const coversBiz = !businessId || ms.some((m) => m.businessId === businessId);
+  if (!coversTeam || !coversBiz) return false;
+  // Both given → the team must live inside that business (teams are immutable children).
+  if (teamId && businessId && (await businessIdOfTeam(teamId)) !== businessId) return false;
+  return true;
 }
 
-// All socialAccounts matching a scope (businessId primary, teamId fallback),
-// de-duplicated by doc id.
+// All socialAccounts of a scope. `businessId` is the tenant boundary: when it is
+// known, only ITS accounts are returned (a teamId can never union in a foreign
+// tenant's rows). Without a businessId (legacy team-only caller) the team's rows
+// are used, still excluding any row stamped with a different business.
 async function accountsForScope(teamId?: string | null, businessId?: string | null) {
   const byId = new Map<string, any>();
   const col = adminDb.collection('socialAccounts');
-  if (businessId) (await col.where('businessId', '==', businessId).get()).forEach((d) => byId.set(d.id, d));
+  if (businessId) {
+    (await col.where('businessId', '==', businessId).get()).forEach((d) => byId.set(d.id, d));
+    if (teamId) {
+      // Legacy rows stamped only with the team — accept them unless they claim another business.
+      (await col.where('teamId', '==', teamId).get()).forEach((d) => {
+        const b = d.data()?.businessId;
+        if (!b || b === businessId) byId.set(d.id, d);
+      });
+    }
+    return [...byId.values()];
+  }
   if (teamId) (await col.where('teamId', '==', teamId).get()).forEach((d) => byId.set(d.id, d));
   return [...byId.values()];
+}
+
+// A staff-initiated connect names a customer; it must be one of the caller's tenant.
+async function customerInScope(customerId: string, teamId?: string | null, businessId?: string | null): Promise<boolean> {
+  if (!customerId || customerId.length > 128) return false;
+  const snap = await adminDb.collection('customers').doc(customerId).get();
+  if (!snap.exists) return false;
+  const cust = snap.data() || {};
+  if (businessId) return cust.businessId === businessId || (!cust.businessId && !!teamId && cust.teamId === teamId);
+  if (teamId) return cust.teamId === teamId;
+  return false;
 }
 
 // Resolve a PORTAL client's own customer from their uid (server-trusted, via
@@ -159,6 +186,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         customerId = String(req.query.customerId || '');
         if (!customerId || (!teamId && !businessId)) return res.status(400).json({ error: 'customerId dhe teamId/businessId janë të detyrueshëm' });
         if (!(await memberOf(uid, teamId, businessId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
+        if (!(await customerInScope(customerId, teamId, businessId))) return res.status(404).json({ error: 'Klienti nuk u gjet' });
       }
       const state = signState({ uid, teamId, businessId, customerId, portal });
       return res.status(200).json({ url: buildLoginUrl(APP_ID, redirectUri(req), state) });
@@ -302,6 +330,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         customerId = String(req.query.customerId || '');
         if (!customerId || (!teamId && !businessId)) return res.status(400).json({ error: 'customerId dhe teamId/businessId janë të detyrueshëm' });
         if (!(await memberOf(uid, teamId, businessId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
+        if (!(await customerInScope(customerId, teamId, businessId))) return res.status(404).json({ error: 'Klienti nuk u gjet' });
       }
       const state = signState({ uid, teamId, businessId, customerId, provider: 'google', portal });
       return res.status(200).json({ url: buildGoogleAuthUrl(GOOGLE_CLIENT_ID, googleRedirectUri(req), state) });

@@ -51,3 +51,23 @@ firestore.rules.hardened
 
 # TypeScript incremental build artefacts (tsconfig.api.tsbuildinfo etc.)
 *.tsbuildinfo
+
+# Claude Code per-machine files (permission allow-lists may embed local paths/passwords)
+.claude/settings.local.json
+.claude/worktrees/
+
+# Signing material & platform console downloads (also live under gitignored android/ and ios/)
+*.jks
+*.keystore
+keystore.properties
+google-services.json
+GoogleService-Info.plist
+*.p8
+*.p12
+*.mobileprovision
+
+# Pulled env + VPS runtime state
+.env.vercel*
+vps/.env
+auth_info*/
+vps/uploads/

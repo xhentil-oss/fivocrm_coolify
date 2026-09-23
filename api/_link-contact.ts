@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import admin, { adminDb as db, Timestamp } from './_firebaseAdmin.js';
 import { normContactEmail, findLeadForContact, crossLinkLeadCustomer } from './_contactIdentity.js';
+import { verifiedEmail } from './_callerIdentity.js';
 
 /**
  * POST /api/link-contact
@@ -38,8 +39,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'Missing customerId' });
   }
 
-  const callerEmail = normContactEmail(decoded.email);
-  if (!callerEmail) return res.status(403).json({ error: 'Token has no email' });
+  // Only a VERIFIED email is identity: a freshly-registered password account could
+  // otherwise claim any customer's address and pair itself with that customer's lead.
+  const callerEmail = normContactEmail(verifiedEmail(decoded));
+  if (!callerEmail) return res.status(403).json({ error: 'Token has no verified email' });
 
   const customerSnap = await db.collection('customers').doc(customerId).get();
   if (!customerSnap.exists) return res.status(404).json({ error: 'Customer not found' });

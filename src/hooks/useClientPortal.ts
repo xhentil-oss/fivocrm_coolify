@@ -7,6 +7,8 @@ import { collection, addDoc, updateDoc, doc, Timestamp, getDocs, query, where } 
 import { db } from '../lib/firebase';
 import { notifyStaff } from '../lib/notifyStaff';
 import { getStaffIdentity } from '../lib/staffIdentity';
+import { needsEmailVerification } from '../components/VerifyEmailScreen';
+import { loadPortalRegistrationDraft, clearPortalRegistrationDraft } from '../lib/portalRegistrationDraft';
 import type { ClientPortalAccess, Customer } from '../types';
 
 /**
@@ -195,6 +197,10 @@ export function useClientPortal() {
   useEffect(() => {
     if (previewCustomerId) return; // admin preview — never auto-create records
     if (!user?.email || authLoading || byUserIdLoading || byEmailLoading || customersLoading) return;
+    // An UNVERIFIED password account may not bootstrap anything: the rules deny the
+    // writes (they would fail and re-arm this effect on every render) and
+    // PortalLayout shows the "verify your email" screen instead.
+    if (needsEmailVerification(user)) return;
     // Staff (or invited staff) are not customers — see staffIdentity above.
     if (!staffIdentity.resolved || staffIdentity.isStaffOrInvited) return;
     if (autoCreating || didAutoCreate.current) return;
@@ -274,13 +280,20 @@ export function useClientPortal() {
           return;
         }
 
-        const displayName = user.displayName || user.email || 'Klient';
+        // Details typed on /register, parked until the address was verified.
+        const draft = loadPortalRegistrationDraft(user.email);
+        const displayName = draft?.name || user.displayName || user.email || 'Klient';
 
       createDoc('customers', {
         name: displayName,
         email: user.email?.toLowerCase(),
         status: 'Pending',
+        ...(draft?.phone ? { phone: draft.phone } : {}),
+        ...(draft?.company ? { company: draft.company } : {}),
+        ...(draft?.serviceInterested ? { serviceInterested: draft.serviceInterested } : {}),
+        ...(draft?.message ? { notes: draft.message } : {}),
       }).then(async (newCustomer) => {
+        clearPortalRegistrationDraft();
         if (mountedRef.current) setCreatedCustomerId(newCustomer.id);
 
         // Create portal access

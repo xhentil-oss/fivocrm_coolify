@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 import admin, { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 import { priceIdFor, type BillablePlan, type BillingInterval } from './_billingPlans.js';
 import { writeAudit } from './_audit.js';
+import { isPlatformUrl, isPlatformHost, platformBaseUrl } from './_callerIdentity.js';
 
 /**
  * POST /api/billing?action=checkout|portal
@@ -23,13 +24,19 @@ function stripeClient(): Stripe {
   return new Stripe(key, { apiVersion: '2026-02-25.clover' });
 }
 
+/**
+ * Where Stripe sends the owner back. `APP_BASE_URL` first; a header-derived origin is
+ * accepted only when it is a platform host (an attacker-set Origin / X-Forwarded-Host
+ * used to become the post-checkout redirect); otherwise the fixed production URL.
+ */
 function appBaseUrl(req: VercelRequest): string {
   const envUrl = process.env.APP_BASE_URL || process.env.VITE_APP_BASE_URL;
-  if (envUrl) return envUrl.replace(/\/$/, '');
+  if (envUrl && isPlatformUrl(envUrl)) return envUrl.replace(/\/$/, '');
   const origin = (req.headers.origin as string) || '';
-  if (origin) return origin.replace(/\/$/, '');
-  const host = (req.headers['x-forwarded-host'] || req.headers.host) as string;
-  return host ? `https://${host}` : 'https://fivocrm.vercel.app';
+  if (origin && isPlatformUrl(origin)) return origin.replace(/\/$/, '');
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  if (host && isPlatformHost(host.split(':')[0])) return `https://${host}`;
+  return platformBaseUrl();
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -141,6 +148,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'Unknown action (checkout|portal)' });
   } catch (err: any) {
     console.error('[billing] failed:', err?.message || err);
-    return res.status(500).json({ error: err?.message || 'Faturimi dështoi' });
+    return res.status(500).json({ error: 'Faturimi dështoi' });
   }
 }

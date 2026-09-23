@@ -9,6 +9,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card } from '../components/ui/card';
 import { Loader2, Building2 } from 'lucide-react';
+import { toast } from '../hooks/use-toast';
 
 /**
  * Self-serve SaaS workspace signup. Distinct from RegisterView (which captures a
@@ -54,7 +55,16 @@ const WorkspaceSignupView: React.FC = () => {
       // 1. Create the owner's auth account (auto-signs them in).
       const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
       await updateProfile(cred.user, { displayName: fullName.trim() }).catch(() => {});
-      sendEmailVerification(cred.user).catch(() => {});
+      // Not awaited (the workspace must still be provisioned), but never silent: an
+      // owner who never gets the mail would otherwise not know why.
+      sendEmailVerification(cred.user).catch((err: any) => {
+        console.error('[signup] sendEmailVerification failed:', err?.code, err?.message);
+        toast({
+          variant: 'destructive',
+          title: 'Email-i i verifikimit nuk u dërgua',
+          description: `Mund ta ridërgosh nga ekrani "Verifiko email-in"${err?.code ? ` (${err.code})` : ''}.`,
+        });
+      });
 
       // 2. Provision their isolated workspace (team + membership + settings).
       await createTenant({

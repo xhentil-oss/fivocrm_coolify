@@ -13,6 +13,18 @@ import { Capacitor } from '@capacitor/core';
 import { auth, googleProvider } from '../lib/firebase';
 import { clearPushToken } from '../hooks/usePushNotifications';
 
+// Lazily loaded: `lib/sessionReset` reaches into `hooks/useFirestore`, which imports
+// this context — a static import would be an ESM cycle. Failures are logged, never
+// thrown: a storage error must not keep the user signed in.
+async function resetTenantSession(): Promise<void> {
+  try {
+    const mod = await import('../lib/sessionReset');
+    mod.resetTenantSession();
+  } catch (err) {
+    console.error('[auth] tenant session reset failed:', err);
+  }
+}
+
 interface AuthContextType {
   user: User | null;
   loading: boolean;
@@ -60,6 +72,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
+      // No user (sign-out, expired/revoked session, a second tab logging out):
+      // forget the previous tenant — in-memory scope, cached rows, storage keys.
+      // Lazy import: `useFirestore` imports this context, a static import here
+      // would be a cycle.
+      if (!user) void resetTenantSession();
       setUser(user);
       setLoading(false);
     });
@@ -114,11 +131,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // previous user's notifications to the device after someone else logged in.
       await clearPushToken(auth.currentUser?.uid);
       await signOut(auth);
-      // Clear sensitive cached data on logout
-      localStorage.removeItem('stripe_publishable_key');
-      localStorage.removeItem('stripe_mode');
-      localStorage.removeItem('cron_settings');
-      localStorage.removeItem('cron_last_runs');
+      // Forget the tenant: global businessId/teamId, the collection cache, the
+      // super-admin tenant pin, role preview and every tenant-derived storage key
+      // (bank accounts, company profile, rates, stripe/cron settings, VPS host).
+      await resetTenantSession();
     } catch (error) {
       console.error('Error signing out:', error);
       throw error;

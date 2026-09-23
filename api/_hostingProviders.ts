@@ -19,6 +19,8 @@
  *     do with the result.
  */
 
+import { lookup as dnsLookup } from 'dns/promises';
+
 export class ProviderError extends Error {
   provider: 'whm' | 'dynadot' | 'proxy';
   code?: string;
@@ -49,12 +51,96 @@ export function providerProxyConfigured(): boolean {
   return !!proxyUrl();
 }
 
+// ── Direct-mode SSRF guard ─────────────────────────────────────────────────────
+// In proxy mode the VPS relay enforces this (vps/server.ts: isPrivateIp /
+// resolvesToPrivate + the host/port allow-list). In DIRECT mode nothing did:
+// `server.hostname` is tenant-editable, so a hostname resolving to 10.x / the
+// metadata endpoint / localhost:2087 would have been fetched with the WHM token
+// attached. Same predicate as the VPS copy — keep the two in sync.
+
+/**
+ * Private / loopback / link-local / unspecified / CGNAT / multicast, v4 and v6,
+ * including the `::ffff:a.b.c.d` IPv4-mapped forms a dual-stack resolver returns.
+ */
+function isPrivateAddress(raw: string): boolean {
+  let ip = String(raw || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!ip) return true;
+  const zone = ip.indexOf('%'); if (zone !== -1) ip = ip.slice(0, zone);
+  const mappedDotted = /^(?:0*:)*:?ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(ip);
+  if (mappedDotted) ip = mappedDotted[1];
+  const mappedHex = /^(?:0*:)*:?ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ip);
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16); const lo = parseInt(mappedHex[2], 16);
+    ip = `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+  }
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+    const o = ip.split('.').map(Number);
+    if (o.some((n) => n > 255)) return true;
+    if (o[0] === 0 || o[0] === 10 || o[0] === 127) return true;
+    if (o[0] === 169 && o[1] === 254) return true;
+    if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true;
+    if (o[0] === 192 && o[1] === 168) return true;
+    if (o[0] === 100 && o[1] >= 64 && o[1] <= 127) return true;
+    if (o[0] === 192 && o[1] === 0 && (o[2] === 0 || o[2] === 2)) return true;
+    if (o[0] === 198 && (o[1] === 18 || o[1] === 19)) return true;
+    if (o[0] >= 224) return true;
+    return false;
+  }
+  if (!ip.includes(':')) return true;
+  const groups = ip.split(':').map((g) => g.replace(/^0+(?=[0-9a-f])/, ''));
+  const norm = groups.join(':');
+  if (norm === '::' || norm === '::1' || norm === '0:0:0:0:0:0:0:0' || norm === '0:0:0:0:0:0:0:1') return true;
+  if (groups.every((g) => g === '' || g === '0')) return true;
+  if (/(^|:)ffff:\d{1,3}\./.test(norm) || /(^|:)ffff:[0-9a-f]{1,4}:[0-9a-f]{1,4}$/.test(norm)) return true;
+  const first = parseInt(groups[0] || '0', 16);
+  if ((first & 0xfe00) === 0xfc00) return true; // fc00::/7
+  if ((first & 0xffc0) === 0xfe80) return true; // fe80::/10
+  if ((first & 0xff00) === 0xff00) return true; // ff00::/8
+  if (first === 0x2001 && /^2001:db8:/.test(norm)) return true;
+  if (/^64:ff9b:/.test(norm)) return true;
+  return false;
+}
+
+/**
+ * Direct mode only: https, an allowed port (2087/2083 for WHM/cPanel, 443 for
+ * Dynadot), and NO resolved address may be private. Resolves once, up front;
+ * throws a ProviderError('proxy') with the reason so the caller stores it.
+ */
+async function assertSafeDirectTarget(url: string): Promise<void> {
+  let target: URL;
+  try { target = new URL(url); } catch { throw new ProviderError('proxy', 'URL e ofruesit e pavlefshme'); }
+  if (target.protocol !== 'https:') throw new ProviderError('proxy', 'Ofruesi thirret vetëm përmes https');
+  if (target.username || target.password) throw new ProviderError('proxy', 'URL me kredenciale e refuzuar');
+  const host = target.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const port = target.port || '443';
+  const isDynadot = host === 'api.dynadot.com';
+  if (isDynadot ? port !== '443' : !(port === '2087' || port === '2083')) {
+    throw new ProviderError('proxy', `Porta ${port} nuk lejohet për ofruesin (vetëm 2087/2083 për WHM, 443 për Dynadot)`);
+  }
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) {
+    throw new ProviderError('proxy', 'Hostname lokal i refuzuar');
+  }
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')) {
+    if (isPrivateAddress(host)) throw new ProviderError('proxy', 'Adresë private/loopback e refuzuar');
+    return;
+  }
+  let addrs: Array<{ address: string }>;
+  try { addrs = await dnsLookup(host, { all: true, verbatim: true }); }
+  catch { throw new ProviderError('proxy', `Hostname-i ${host} nuk u zgjidh (DNS)`); }
+  if (!addrs.length || addrs.some((a) => isPrivateAddress(a.address))) {
+    throw new ProviderError('proxy', 'Hostname-i i ofruesit zgjidhet në adresë private/loopback — refuzohet');
+  }
+}
+
 async function providerFetch(
   url: string,
   init: { method?: 'GET' | 'POST'; headers?: Record<string, string>; body?: string; timeoutMs?: number },
 ): Promise<RawResponse> {
   const timeout = init.timeoutMs ?? 25_000;
   const proxy = proxyUrl();
+  // Direct mode gets the same allow-list the relay enforces; proxy mode is unchanged
+  // (the VPS validates the target itself and refuses redirects).
+  if (!proxy) await assertSafeDirectTarget(url);
   try {
     if (proxy) {
       const r = await fetch(proxy, {
@@ -80,8 +166,12 @@ async function providerFetch(
       method: init.method || 'POST',
       headers: init.headers,
       body: init.body,
+      // Never follow a provider redirect: it would carry the Authorization header
+      // to whatever host the redirect names, past the check above.
+      redirect: 'manual',
       signal: AbortSignal.timeout(timeout),
     });
+    if (r.status >= 300 && r.status < 400) throw new ProviderError('proxy', `Ofruesi ktheu ridrejtim (${r.status}) — nuk ndiqet`);
     return { status: r.status, text: await r.text() };
   } catch (err) {
     if (err instanceof ProviderError) throw err;

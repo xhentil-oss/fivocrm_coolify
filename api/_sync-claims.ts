@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import admin, { adminAuth } from './_firebaseAdmin.js';
 import { syncTenantClaims } from './_tenantClaims.js';
 import { writeAudit } from './_audit.js';
+import { verifiedEmail } from './_callerIdentity.js';
 
 /**
  * POST /api/sync-claims
@@ -48,15 +49,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // shows an operator walking into a customer's workspace and never coming out.
   const endingImpersonation = body.endImpersonation === true;
 
+  // An unverified email is not identity: the resolver re-checks it against the Auth
+  // record anyway, but the hint (and the audit trail) must not carry a self-declared address.
+  const email = verifiedEmail(decoded);
+
   try {
-    const claims = await syncTenantClaims(decoded.uid, decoded.email, { preferTeamId, preferBusinessId });
+    const claims = await syncTenantClaims(decoded.uid, email, { preferTeamId, preferBusinessId });
 
     if (endingImpersonation) {
       await writeAudit({
         // The business being LEFT is what matters for that tenant's trail.
         businessId: (typeof body.businessId === 'string' && body.businessId) || null,
         actorUid: decoded.uid,
-        actorEmail: decoded.email || null,
+        actorEmail: email,
         action: 'claims.impersonate_end',
         target: 'business:left',
         meta: { backTo: claims.bid || null },
@@ -67,7 +72,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await writeAudit({
         businessId: preferBusinessId,
         actorUid: decoded.uid,
-        actorEmail: decoded.email || null,
+        actorEmail: email,
         action: 'claims.impersonate',
         target: `business:${preferBusinessId}`,
       });

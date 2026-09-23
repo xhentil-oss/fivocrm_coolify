@@ -1,5 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminAuth, adminDb, Timestamp } from './_firebaseAdmin.js';
+import { checkPersistentRateLimit } from './_rateLimit.js';
+import { activeMembership } from './_callerIdentity.js';
 import { getTeamConfig } from './_tenantConfig.js';
 import { markConversationAnswered } from './_waInbound.js';
 
@@ -43,37 +45,38 @@ function validatePhoneStrict(raw: string): string | null {
   return n;
 }
 
-// Per-uid rate limiter (10 / min) — shared semantics with /api/meta-send.
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX = 10;
-const rateBuckets: Map<string, number[]> = new Map();
-function checkRateLimit(uid: string): boolean {
-  const now = Date.now();
-  const cutoff = now - RATE_LIMIT_WINDOW_MS;
-  const recent = (rateBuckets.get(uid) || []).filter((t) => t > cutoff);
-  if (recent.length >= RATE_LIMIT_MAX) {
-    rateBuckets.set(uid, recent);
-    return false;
-  }
-  recent.push(now);
-  rateBuckets.set(uid, recent);
-  return true;
-}
+// Persistent (Firestore-backed) per-uid ceiling — shared semantics with /api/meta-send.
+const SEND_PER_HOUR = 120;
 
 const ALLOWED_TYPES = new Set(['image', 'video', 'audio', 'document']);
 const MAX_BYTES = 16 * 1024 * 1024; // Meta limit for most media types
 
-function isAllowedMediaUrl(u: string, allowedVpsHost?: string | null): boolean {
+/**
+ * Hosts the server will FETCH media from. Platform-controlled only: Firebase
+ * Storage, the platform file host (`vps.fivocrm.com`) and the hosts named by the
+ * platform env (`WHATSAPP_VPS_URL`, `VPS_FILES_URL`). A host taken from a tenant's
+ * own `teamSettings.whatsappVpsUrl` used to qualify — that field is written from
+ * the browser by any Admin, so it was an SSRF primitive (point it at 169.254.169.254
+ * or an internal service and have Vercel fetch it).
+ */
+function platformMediaHosts(): Set<string> {
+  const hosts = new Set<string>(['firebasestorage.googleapis.com', 'storage.googleapis.com', 'vps.fivocrm.com']);
+  for (const v of [process.env.WHATSAPP_VPS_URL, process.env.VPS_FILES_URL, process.env.VITE_VPS_FILES_URL]) {
+    if (!v) continue;
+    try { const h = new URL(v).hostname.toLowerCase(); if (h && !/^(localhost|127\.0\.0\.1)$/.test(h)) hosts.add(h); } catch { /* ignore */ }
+  }
+  return hosts;
+}
+
+function isAllowedMediaUrl(u: string): boolean {
   try {
     const url = new URL(u);
     if (url.protocol !== 'https:') return false;
+    if (url.username || url.password) return false;
+    const host = url.hostname.toLowerCase();
     // Firebase Storage download URLs
-    if (url.hostname === 'firebasestorage.googleapis.com') return true;
-    if (url.hostname.endsWith('.firebasestorage.app')) return true;
-    if (url.hostname === 'storage.googleapis.com') return true;
-    // The team's own VPS file host (attachments now live on the VPS).
-    if (allowedVpsHost && url.hostname === allowedVpsHost) return true;
-    return false;
+    if (host.endsWith('.firebasestorage.app')) return true;
+    return platformMediaHosts().has(host);
   } catch {
     return false;
   }
@@ -96,7 +99,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
-  if (!checkRateLimit(uid)) {
+  if (!(await checkPersistentRateLimit('metaSendMedia', uid, SEND_PER_HOUR))) {
     return res.status(429).json({ error: 'Limiti i dërgimeve u arrit. Provoni përsëri pas pak.' });
   }
 
@@ -139,14 +142,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!strict) return res.status(400).json({ error: 'Numri i telefonit është i pavlefshëm' });
   const cleanPhone = strict;
 
-  // Verify team membership
-  const memberSnap = await adminDb.collection('teamMembers')
-    .where('teamId', '==', teamId)
-    .where('userId', '==', uid)
-    .limit(1)
-    .get();
-  if (memberSnap.empty) {
+  // Verify ACTIVE team membership (a removed employee keeps nothing).
+  if (typeof teamId !== 'string' || !(await activeMembership(uid, { teamId }))) {
     return res.status(403).json({ error: 'Forbidden: nuk jeni anëtar i këtij ekipi' });
+  }
+  // Media-URL host allowlist is platform-only (see platformMediaHosts) — checked
+  // before any tenant config is read so a tenant setting can never widen it.
+  if (!isAllowedMediaUrl(mediaUrl)) {
+    return res.status(400).json({ error: 'mediaUrl i pavlefshëm' });
   }
 
   // Load Meta credentials
@@ -154,15 +157,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const settings = await getTeamConfig(teamId);
   if (!settings || Object.keys(settings).length === 0) return res.status(404).json({ error: 'Team settings nuk u gjetën' });
 
-  // Now that we know the team's VPS, enforce the media-URL host whitelist
-  // (Firebase/Google or the team's own VPS file host).
-  const vpsHost = (() => {
-    try { return settings.whatsappVpsUrl ? new URL(settings.whatsappVpsUrl).hostname : null; }
-    catch { return null; }
-  })();
-  if (!isAllowedMediaUrl(mediaUrl, vpsHost)) {
-    return res.status(400).json({ error: 'mediaUrl i pavlefshëm' });
-  }
 
   let accessToken: string | undefined;
   let phoneNumberId: string | undefined;

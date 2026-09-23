@@ -272,6 +272,18 @@ interface CacheEntry {
 }
 const _collectionCache = new Map<string, CacheEntry>();
 
+// Empty the whole cache — sign-out. Every live listener is unsubscribed here, so a
+// consumer still mounted for a moment finds no entry on cleanup and skips its own
+// unsubscribe (no leak, no double call). Without this the previous user's tenant
+// rows (teamMembers, teams, services… the 5-min static reads above all) stayed in
+// memory and were served to whoever signed in next on the same device.
+export function clearCollectionCache(): void {
+  for (const entry of _collectionCache.values()) {
+    try { entry.unsubscribe(); } catch { /* already closed */ }
+  }
+  _collectionCache.clear();
+}
+
 // Drop / refresh cached reads for a static collection after a write, so edits are
 // reflected immediately instead of waiting for the TTL. Mounted views (refCount>0)
 // are refreshed in place; unused entries are dropped and re-fetched on next mount.

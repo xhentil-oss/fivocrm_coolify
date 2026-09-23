@@ -212,17 +212,26 @@ function defaultDueOffset(frequency: string): number {
 // JOB: report-schedules — generate draft reports
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function runReportSchedules(): Promise<{ created: number; skipped: number; failed: number }> {
+/**
+ * `opts.businessId` = a manual run from one tenant's Admin ("Gjenero tani"): only
+ * that tenant's schedules generate — and notify — anything. Equality + equality,
+ * so the clause needs no composite index.
+ */
+export async function runReportSchedules(opts?: { businessId?: string | null }): Promise<{ created: number; skipped: number; failed: number }> {
+  const scopeId = opts?.businessId || null;
   const now = new Date();
   let created = 0;
   let skipped = 0;
   let failed = 0;
 
   // Only ACTIVE schedules — never a full-collection scan.
-  const schedules = await db.collection('reportSchedules').where('active', '==', true).get();
+  let q: admin.firestore.Query = db.collection('reportSchedules').where('active', '==', true);
+  if (scopeId) q = q.where('businessId', '==', scopeId);
+  const schedules = await q.get();
 
   for (const doc of schedules.docs) {
     const sched = { id: doc.id, ...(doc.data() as any) };
+    if (scopeId && sched.businessId !== scopeId) { skipped++; continue; }
     const verdict = shouldRunNow(sched, now);
     if (!verdict.run) {
       skipped++;
@@ -381,7 +390,13 @@ const DEFAULT_ESCALATION = [
   { afterMinutes: 480, notify: 'management', markMissing: true },
 ];
 
-export async function runReportReminders(): Promise<{ reminded: number; escalated: number; missing: number }> {
+/**
+ * `opts.businessId` = a manual run from one tenant's Admin: other tenants' reports
+ * are skipped in memory BEFORE any reminder or escalation goes out (the read is a
+ * composite-index query and cannot take another clause).
+ */
+export async function runReportReminders(opts?: { businessId?: string | null }): Promise<{ reminded: number; escalated: number; missing: number }> {
+  const scopeId = opts?.businessId || null;
   const now = new Date();
   let reminded = 0;
   let escalated = 0;
@@ -397,6 +412,7 @@ export async function runReportReminders(): Promise<{ reminded: number; escalate
 
   for (const doc of snap.docs) {
     const r = { id: doc.id, ...(doc.data() as any) };
+    if (scopeId && r.businessId !== scopeId) continue;
     if (r.deletedAt) continue;
     const dueAt: Date | null = r.dueAt?.toDate?.() || null;
     if (!dueAt) continue;
@@ -500,13 +516,17 @@ async function resolveEscalationTargets(report: any, notifyTarget: string): Prom
 // JOB: client-health-rollup — persist a snapshot per client per month
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function runClientHealthRollup(): Promise<{ written: number; tenants: number }> {
+/** `opts.businessId` = a manual run from one tenant's Admin: only that tenant is rolled up. */
+export async function runClientHealthRollup(opts?: { businessId?: string | null }): Promise<{ written: number; tenants: number }> {
+  const scopeId = opts?.businessId || null;
   const now = new Date();
   const periodKey = toIso(now).slice(0, 7);
   let written = 0;
 
   // Walk businesses, then read each tenant's own data — never a cross-tenant scan.
-  const businesses = await db.collection('businesses').get();
+  const businesses = scopeId
+    ? await (async () => { const d = await db.collection('businesses').doc(scopeId).get(); return { size: d.exists ? 1 : 0, docs: d.exists ? [d] : [] }; })()
+    : await db.collection('businesses').get();
 
   for (const biz of businesses.docs) {
     const businessId = biz.id;
@@ -717,7 +737,12 @@ function mapSocialToKpis(list: any[]): Record<string, number | null> {
 
 export async function runReportMetricsSocial(
   periodKey?: string,
+  opts?: { businessId?: string | null },
 ): Promise<{ written: number; skipped: number; period: string }> {
+  // `opts.businessId` = a manual run from one tenant's Admin: snapshots of other
+  // tenants are skipped in memory (a snapshot keyed by teamId alone is not provably
+  // the caller's, so it is left to the scheduled run).
+  const scopeId = opts?.businessId || null;
   // Default to the month that just ended, which is what the social sync fetches.
   const now = new Date();
   const target = periodKey || (() => {
@@ -737,6 +762,7 @@ export async function runReportMetricsSocial(
   const groups = new Map<string, any[]>();
   for (const d of snaps.docs) {
     const data = d.data() as any;
+    if (scopeId && data.businessId !== scopeId) continue; // another tenant's — not this run's to write
     const businessId = data.businessId || data.teamId;
     if (!businessId || !data.customerId) continue;
     const key = `${businessId}|${data.customerId}`;

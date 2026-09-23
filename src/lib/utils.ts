@@ -1,82 +1,91 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import DOMPurify from "dompurify";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/**
- * Sanitize HTML by stripping dangerous tags/attributes (script, onerror, etc.)
- * Allows safe formatting tags only.
- */
-export function sanitizeHtml(html: string): string {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const allowedTags = new Set([
-    'h1','h2','h3','h4','h5','h6','p','br','hr','ul','ol','li',
-    'strong','b','em','i','u','s','a','span','div','blockquote',
-    'table','thead','tbody','tr','th','td','img','pre','code','sub','sup',
-  ]);
-  const allowedAttrs: Record<string, Set<string>> = {
-    a: new Set(['href', 'target', 'rel']),
-    img: new Set(['src', 'alt', 'width', 'height']),
-    '*': new Set(['style', 'class']),
-  };
+const SANITIZE_ALLOWED_TAGS = [
+  'h1','h2','h3','h4','h5','h6','p','br','hr','ul','ol','li',
+  'strong','b','em','i','u','s','a','span','div','blockquote',
+  'table','thead','tbody','tr','th','td','img','pre','code','sub','sup',
+];
+const SANITIZE_ALLOWED_ATTR = ['href', 'src', 'alt', 'width', 'height', 'class', 'target', 'rel'];
+const HREF_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
+const SRC_PROTOCOLS = new Set(['http:', 'https:']);
 
-  function clean(node: Node): void {
-    const children = Array.from(node.childNodes);
-    for (const child of children) {
-      if (child.nodeType === Node.ELEMENT_NODE) {
-        const el = child as Element;
-        const tag = el.tagName.toLowerCase();
-        if (!allowedTags.has(tag)) {
-          el.replaceWith(...Array.from(el.childNodes));
-          continue;
-        }
-        // Remove disallowed attributes
-        const tagAllowed = allowedAttrs[tag] || new Set();
-        const globalAllowed = allowedAttrs['*'];
-        for (const attr of Array.from(el.attributes)) {
-          if (!tagAllowed.has(attr.name) && !globalAllowed.has(attr.name)) {
-            el.removeAttribute(attr.name);
-          }
-          // Block javascript: URLs
-          if ((attr.name === 'href' || attr.name === 'src') && /^\s*javascript:/i.test(attr.value)) {
-            el.removeAttribute(attr.name);
-          }
-          // Remove event handlers
-          if (attr.name.startsWith('on')) {
-            el.removeAttribute(attr.name);
-          }
-        }
-        // Force safe link attributes
-        if (tag === 'a') {
-          el.setAttribute('target', '_blank');
-          el.setAttribute('rel', 'noopener noreferrer');
-        }
-        clean(el);
-      }
+function documentOrigin(): string {
+  if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin;
+  return 'http://localhost';
+}
+
+// One DOMPurify instance with our URL hook installed exactly once. The previous
+// hand-rolled walker promoted the children of a stripped tag without revisiting them
+// (`<form><img onerror>` survived), allowed `style` on every element and matched
+// `javascript:` with a regex the URL parser does not share (`java\tscript:` IS
+// `javascript:` to a browser). DOMPurify walks the result properly; the hook is the
+// part DOMPurify does not do for us — a scheme allow-list decided by PARSING the URL.
+let _purifier: ReturnType<typeof DOMPurify> | null = null;
+function getPurifier(): ReturnType<typeof DOMPurify> {
+  if (_purifier) return _purifier;
+  const purifier = DOMPurify(window);
+  purifier.addHook('afterSanitizeAttributes', (node) => {
+    const el = node as Element;
+    for (const attr of ['href', 'src'] as const) {
+      if (!el.hasAttribute(attr)) continue;
+      const raw = el.getAttribute(attr) || '';
+      let protocol = '';
+      try { protocol = new URL(raw, documentOrigin()).protocol; } catch { protocol = ''; }
+      const allowed = attr === 'src' ? SRC_PROTOCOLS : HREF_PROTOCOLS;
+      if (!allowed.has(protocol)) el.removeAttribute(attr);
     }
-  }
-
-  clean(doc.body);
-  return doc.body.innerHTML;
+    if (el.tagName === 'A') {
+      el.setAttribute('target', '_blank');
+      el.setAttribute('rel', 'noopener noreferrer');
+    }
+  });
+  _purifier = purifier;
+  return purifier;
 }
 
 /**
+ * Sanitize HTML by stripping dangerous tags/attributes (script, onerror, style, etc.)
+ * Allows safe formatting tags only; `href` = http/https/mailto, `src` = http/https.
+ */
+export function sanitizeHtml(html: string): string {
+  if (!html) return '';
+  return getPurifier().sanitize(html, {
+    ALLOWED_TAGS: SANITIZE_ALLOWED_TAGS,
+    ALLOWED_ATTR: SANITIZE_ALLOWED_ATTR,
+    FORBID_ATTR: ['style'],
+    ALLOW_DATA_ATTR: false,
+  }) as string;
+}
+
+const SAFE_HREF_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:']);
+
+/**
  * Validate a URL is safe for use in href (blocks javascript:, data:, etc.)
- * Returns the URL if safe, or '#' if unsafe.
+ * Returns the URL if safe, or '#' if unsafe. Allowed: absolute http/https/mailto/tel
+ * URLs and relative paths that stay on THIS origin (`//evil.com` and `/\evil.com`
+ * resolve elsewhere and are refused). The value is PARSED — a regex on the raw
+ * string misses `java\tscript:`, which the browser's URL parser reads as `javascript:`.
  */
 export function safeHref(url: string | undefined | null): string {
   if (!url) return '#';
   const trimmed = url.trim();
-  if (/^\s*javascript:/i.test(trimmed) || /^\s*data:/i.test(trimmed) || /^\s*vbscript:/i.test(trimmed)) {
-    return '#';
+  if (!trimmed) return '#';
+  const origin = documentOrigin();
+  let parsed: URL;
+  try { parsed = new URL(trimmed, origin); } catch { return '#'; }
+  if (!SAFE_HREF_PROTOCOLS.has(parsed.protocol)) return '#';
+  if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+    const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(trimmed);
+    // A relative value must not escape the page's origin.
+    if (!hasScheme && parsed.origin !== origin) return '#';
   }
-  // Allow http, https, mailto, tel
-  if (/^(https?:|mailto:|tel:|\/)/i.test(trimmed)) return trimmed;
-  // Allow relative URLs
-  if (!trimmed.includes(':')) return trimmed;
-  return '#';
+  return trimmed;
 }
 
 // ── Foreign currency → ALL exchange rates ──

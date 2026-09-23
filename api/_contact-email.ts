@@ -140,13 +140,16 @@ export async function handleContactEmail(req: VercelRequest, res: VercelResponse
   }
   const [teamSnap, bizSnap] = await Promise.all([
     contactTeamId
-      ? adminDb.collection('teamMembers').where('teamId', '==', contactTeamId).where('userId', '==', decoded.uid).limit(1).get()
+      ? adminDb.collection('teamMembers').where('teamId', '==', contactTeamId).where('userId', '==', decoded.uid).limit(5).get()
       : Promise.resolve(null),
     contactBusinessId
-      ? adminDb.collection('teamMembers').where('businessId', '==', contactBusinessId).where('userId', '==', decoded.uid).limit(1).get()
+      ? adminDb.collection('teamMembers').where('businessId', '==', contactBusinessId).where('userId', '==', decoded.uid).limit(5).get()
       : Promise.resolve(null),
   ]);
-  const memberDoc = (teamSnap && !teamSnap.empty ? teamSnap.docs[0] : null) || (bizSnap && !bizSnap.empty ? bizSnap.docs[0] : null);
+  // Only an ACTIVE membership authorizes (legacy rows without `status` count as Active).
+  const firstActive = (snap: FirebaseFirestore.QuerySnapshot | null) =>
+    snap?.docs.find((d) => (d.data() as any)?.status !== 'Inactive') || null;
+  const memberDoc = firstActive(teamSnap) || firstActive(bizSnap);
   if (!memberDoc) return res.status(403).json({ error: 'Forbidden' });
   const member = memberDoc.data() as Record<string, any>;
   // The provider config is per TEAM: the contact's team, else the caller's team in that business.

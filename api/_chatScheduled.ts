@@ -36,7 +36,14 @@ async function displayNameFor(uid: string): Promise<string> {
   return 'Koleg';
 }
 
-export async function runChatScheduled() {
+/**
+ * `opts.businessId` = a manual run from one tenant's Admin: rows of other tenants
+ * — and rows that carry no businessId at all, which cannot be proven to be the
+ * caller's — are left for the scheduled run. Applied in memory before the claim,
+ * because the range read cannot take a businessId clause without a composite index.
+ */
+export async function runChatScheduled(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const now = admin.firestore.Timestamp.now();
   const nowIso = new Date().toISOString();
   const snap = await db.collection('chatScheduledMessages')
@@ -57,6 +64,7 @@ export async function runChatScheduled() {
   for (const d of snap.docs) {
     const s = d.data() as any;
     if (s.sent) { block('already-sent'); continue; }
+    if (scopeId && s.businessId !== scopeId) { block('out-of-scope'); continue; }
     if (s.businessId && suspended.has(s.businessId)) { block('tenant-suspended'); continue; }
     const senderId = typeof s.senderId === 'string' ? s.senderId : '';
     const channelId = typeof s.channelId === 'string' && s.channelId ? s.channelId : null;

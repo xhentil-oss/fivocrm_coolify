@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import admin, { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 import { SECRET_FIELDS, SECRET_FLAGS, writeTeamSecrets } from './_tenantConfig.js';
 import { writeAudit } from './_audit.js';
+import { isBusinessOwner } from './_callerIdentity.js';
 
 /**
  * POST /api/tenant-secrets
@@ -16,6 +17,9 @@ import { writeAudit } from './_audit.js';
  * Authorization: the caller must be the team owner or an Admin/Manager of that team.
  * An empty string clears a credential.
  */
+const MAX_SECRET_BYTES = 4096;
+const MAX_META_CHANNEL_TOKENS = 20;
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -41,7 +45,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!teamSnap.exists) return res.status(404).json({ error: 'Team not found' });
     const team = teamSnap.data() as any;
     businessId = team.businessId || teamId;
-    if (team.createdByUserId === decoded.uid) authorized = true;
+    // "Owner" = businesses/{bid}.ownerId — a team someone once created does not by
+    // itself outrank their current membership role (same law as the claims resolver).
+    if (await isBusinessOwner(decoded.uid, businessId)) authorized = true;
     if (!authorized) {
       const direct = await db.collection('teamMembers').doc(`${teamId}_${decoded.uid}`).get();
       const m = direct.exists ? (direct.data() as any) : null;
@@ -58,10 +64,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   if (!authorized) return res.status(403).json({ error: 'Vetëm administratori i ekipit mund të ruajë kredencialet.' });
 
-  // Only known credential fields are accepted (no arbitrary writes into the vault).
+  // Only known credential fields are accepted (no arbitrary writes into the vault),
+  // and each value is size-capped: a credential is a short string, and the vault
+  // document must stay far below Firestore's 1 MiB limit however many are set.
   const filtered: Record<string, any> = {};
   for (const field of SECRET_FIELDS) {
-    if (field in secrets) filtered[field] = secrets[field];
+    if (!(field in secrets)) continue;
+    const value = secrets[field];
+    if (field === 'metaChannelTokens') {
+      if (value === '' || value === null) { filtered[field] = value; continue; }
+      if (typeof value !== 'object' || Array.isArray(value)) return res.status(400).json({ error: 'metaChannelTokens duhet të jetë një objekt' });
+      const entries = Object.entries(value as Record<string, unknown>);
+      if (entries.length > MAX_META_CHANNEL_TOKENS) return res.status(400).json({ error: `metaChannelTokens: maksimumi ${MAX_META_CHANNEL_TOKENS} kanale` });
+      const cleaned: Record<string, string> = {};
+      for (const [k, v] of entries) {
+        if (!/^[A-Za-z0-9_-]{1,64}$/.test(k)) return res.status(400).json({ error: 'metaChannelTokens: phoneNumberId i pavlefshëm' });
+        if (typeof v !== 'string' || Buffer.byteLength(v, 'utf8') > MAX_SECRET_BYTES) return res.status(400).json({ error: 'metaChannelTokens: token i pavlefshëm ose shumë i gjatë' });
+        cleaned[k] = v;
+      }
+      filtered[field] = cleaned;
+      continue;
+    }
+    if (value !== '' && value !== null && (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > MAX_SECRET_BYTES)) {
+      return res.status(400).json({ error: `${field}: vlera është e pavlefshme ose shumë e gjatë (max ${MAX_SECRET_BYTES} bytes)` });
+    }
+    filtered[field] = value;
   }
   if (Object.keys(filtered).length === 0) {
     return res.status(400).json({ error: `No known secret fields. Allowed: ${SECRET_FIELDS.join(', ')}` });

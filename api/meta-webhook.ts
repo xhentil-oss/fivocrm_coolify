@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import crypto from 'crypto';
 import { adminDb, Timestamp } from './_firebaseAdmin.js';
 import { processWaEvent } from './_waInbound.js';
+import { timingSafeEqualStr } from './_callerIdentity.js';
 
 /**
  * Meta WhatsApp Cloud API Webhook
@@ -148,7 +149,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(500).send('Server not configured');
     }
 
-    if (mode === 'subscribe' && token === verifyToken) {
+    if (mode === 'subscribe' && timingSafeEqualStr(Array.isArray(token) ? token[0] : token, verifyToken)) {
       console.log('[meta-webhook] Webhook verified');
       return res.status(200).send(challenge);
     }

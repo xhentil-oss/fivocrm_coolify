@@ -1,21 +1,11 @@
 import { safeSenderAddress, safeSenderName } from './_emailIdentity.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
-import { adminAuth } from './_firebaseAdmin.js';
+import { adminDb as db } from './_firebaseAdmin.js';
+import { checkPersistentRateLimit } from './_rateLimit.js';
+import { authenticate, isPortalOnlyToken, resolveStaffTenant, isPlatformUrl } from './_callerIdentity.js';
 
-// Simple in-memory rate limiter
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
-function checkRateLimit(uid: string, maxPerHour = 30): boolean {
-  const now = Date.now();
-  const entry = rateLimitMap.get(uid);
-  if (entry && entry.resetAt > now) {
-    if (entry.count >= maxPerHour) return false;
-    entry.count++;
-    return true;
-  }
-  rateLimitMap.set(uid, { count: 1, resetAt: now + 3_600_000 });
-  return true;
-}
+const WELCOME_PER_HOUR = 30;
 
 function escapeHtml(str: string): string {
   return str
@@ -27,69 +17,87 @@ function escapeHtml(str: string): string {
 }
 
 function isValidEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && !email.includes('\n') && !email.includes('\r');
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254 && !email.includes('\n') && !email.includes('\r');
 }
 
 /**
  * POST /api/send-welcome-email
- * Body: { customerName: string, customerEmail: string, portalUrl: string, teamName?: string }
+ * Body: { customerName: string, customerEmail: string, portalUrl: string, teamName?: string, customerId?: string }
  * Header: Authorization: Bearer <Firebase ID token>
  *
  * Sends a welcome email to a newly created customer with a portal login button.
+ *
+ * Audit Sep 2026: any signed-in account could mail any address a "welcome" with an
+ * arbitrary `*.vercel.app` link — an open phishing relay from the platform's own
+ * sender. Now the caller must be STAFF (claims / active membership), the customer
+ * is looked up INSIDE the caller's business (by `customerId`, or by the given
+ * email), and the recipient is `customers/{id}.email` — never the body's address.
+ * The portal link must point at a platform host.
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Verify Firebase Auth token
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing authorization header' });
-  }
-  let decodedToken;
-  try {
-    decodedToken = await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
-  } catch {
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
+  const c = await authenticate(req);
+  if (!c) return res.status(401).json({ error: 'Invalid or expired token' });
+  if (isPortalOnlyToken(c)) return res.status(403).json({ error: 'Forbidden' });
+  const tenant = await resolveStaffTenant(c);
+  if (!tenant || !tenant.bid) return res.status(403).json({ error: 'Forbidden' });
 
-  if (!checkRateLimit(decodedToken.uid)) {
+  if (!(await checkPersistentRateLimit('welcomeEmail', c.uid, WELCOME_PER_HOUR))) {
     return res.status(429).json({ error: 'Too many emails. Please try again later.' });
   }
 
-  const { customerName, customerEmail, portalUrl, teamName } = req.body;
+  const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+  const customerName = typeof body.customerName === 'string' ? body.customerName.trim().slice(0, 120) : '';
+  const customerEmail = typeof body.customerEmail === 'string' ? body.customerEmail.trim() : '';
+  const portalUrl = typeof body.portalUrl === 'string' ? body.portalUrl.trim() : '';
+  const teamName = typeof body.teamName === 'string' ? body.teamName.trim().slice(0, 120) : '';
+  const customerId = typeof body.customerId === 'string' ? body.customerId.trim() : '';
 
   if (!customerName || !customerEmail || !portalUrl) {
     return res.status(400).json({ error: 'Missing required fields: customerName, customerEmail, portalUrl' });
   }
-
   if (!isValidEmail(customerEmail)) {
     return res.status(400).json({ error: 'Invalid email address' });
   }
-
-  // Validate portalUrl domain — accept same-origin (the URL is built from the
-  // app the user is on, so custom domains / previews work) or an allowed host.
-  try {
-    const parsed = new URL(portalUrl);
-    if (!['http:', 'https:'].includes(parsed.protocol)) {
-      return res.status(400).json({ error: 'Invalid portal URL' });
-    }
-    const reqHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').toLowerCase();
-    const allowedHosts = (process.env.ALLOWED_HOSTS || 'fivocrm.vercel.app,fivoo.net,localhost,vercel.app').split(',').map(h => h.trim()).filter(Boolean);
-    const sameOrigin = !!reqHost && (parsed.host.toLowerCase() === reqHost || parsed.hostname.toLowerCase() === reqHost.split(':')[0]);
-    const inAllowlist = allowedHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h));
-    if (!sameOrigin && !inAllowlist) {
-      return res.status(400).json({ error: `Invalid portal URL domain: ${parsed.hostname}` });
-    }
-  } catch {
+  if (portalUrl.length > 2000 || !isPlatformUrl(portalUrl)) {
     return res.status(400).json({ error: 'Invalid portal URL' });
+  }
+
+  // ── The customer must exist in the caller's business; the recipient is ITS email ──
+  let customer: Record<string, any> | null = null;
+  try {
+    if (customerId) {
+      const snap = await db.collection('customers').doc(customerId).get();
+      const d = snap.exists ? (snap.data() as any) : null;
+      if (d && d.businessId === tenant.bid) customer = d;
+    } else {
+      const lower = customerEmail.toLowerCase();
+      const col = db.collection('customers').where('businessId', '==', tenant.bid);
+      const [a, b] = await Promise.all([
+        col.where('email', '==', lower).limit(1).get(),
+        lower !== customerEmail ? col.where('email', '==', customerEmail).limit(1).get() : Promise.resolve(null),
+      ]);
+      const doc = a.docs[0] || b?.docs[0];
+      if (doc) customer = doc.data() as any;
+    }
+  } catch (err: any) {
+    console.error('[send-welcome-email] customer lookup failed:', err?.message || err);
+    return res.status(503).json({ error: 'Customer lookup failed' });
+  }
+  if (!customer) return res.status(404).json({ error: 'Klienti nuk u gjet në biznesin tuaj' });
+
+  const recipient = typeof customer.email === 'string' ? customer.email.trim() : '';
+  if (!recipient || !isValidEmail(recipient)) {
+    return res.status(422).json({ error: 'Klienti nuk ka një email të vlefshëm' });
   }
 
   const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const smtpPass = process.env.SMTP_PASS;
   if (!smtpUser || !smtpPass) {
-    return res.status(500).json({ error: 'SMTP not configured' });
+    return res.status(503).json({ error: 'SMTP not configured' });
   }
 
   const transporter = nodemailer.createTransport({
@@ -99,7 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     auth: { user: smtpUser, pass: smtpPass },
   });
 
-  const safeName = escapeHtml(String(customerName));
+  const safeName = escapeHtml(String(customer.name || customerName));
   const safeTeam = escapeHtml(String(teamName || 'FivoCRM'));
   const safePortalUrl = encodeURI(portalUrl);
   // Header-safe display name (NOT HTML-escaped — entities like &#x27; trip
@@ -110,7 +118,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     await transporter.sendMail({
       from: { name: fromName, address: smtpUser },
-      to: customerEmail,
+      to: recipient,
       subject: `Mirë se vini në ${String(teamName || 'FivoCRM').replace(/["\n\r]/g, '')}!`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background: #f9fafb; border-radius: 8px;">
@@ -138,7 +146,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               Ose kopjoni këtë link: <a href="${safePortalUrl}" style="color: #3b82f6;">${escapeHtml(portalUrl)}</a>
             </p>
             <p style="color: #6b7280; font-size: 14px;">
-              Për tu identifikuar, përdorni email-in tuaj (<strong>${escapeHtml(customerEmail)}</strong>) me Google Sign-In.
+              Për tu identifikuar, përdorni email-in tuaj (<strong>${escapeHtml(recipient)}</strong>) me Google Sign-In.
             </p>
             <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
             <p style="color: #9ca3af; font-size: 12px; margin: 0;">
@@ -154,7 +162,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({ success: true });
   } catch (err: any) {
-    console.error('Failed to send welcome email:', err);
-    return res.status(500).json({ error: `Failed to send email: ${err.message || 'Unknown SMTP error'}` });
+    console.error('[send-welcome-email] SMTP send failed:', err?.message || err);
+    return res.status(502).json({ error: 'Failed to send email' });
   }
 }

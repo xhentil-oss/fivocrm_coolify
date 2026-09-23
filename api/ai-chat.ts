@@ -1,6 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { adminAuth, adminDb } from './_firebaseAdmin.js';
+import { adminDb } from './_firebaseAdmin.js';
 import { generateChatWith, resolveAiConfig, type ChatMsg } from './_aiProvider.js';
+import { checkPersistentRateLimit } from './_rateLimit.js';
+import { authenticate, isPortalOnlyToken, activeMembership, businessIdOfTeam } from './_callerIdentity.js';
 
 const SYSTEM_PROMPT = `Ti je FivoAI, asistenti inteligjent i platformës FivoCRM. Flet shqip dhe ndihmon stafin dhe klientët me detyra specifike biznesi.
 
@@ -22,26 +24,9 @@ Rregullat:
 - Mos shpik informacion. Nëse nuk di, thuaj "Nuk kam informacion të mjaftueshëm"
 - Ji konciz — mos shkruaj paragrafë të gjata pa nevojë`;
 
-// Rate limiting: max 20 requests per user per hour
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
-
-function checkRateLimit(userId: string): boolean {
-  const now = Date.now();
-
-  // Purge expired entries to prevent unbounded memory growth
-  for (const [key, val] of rateLimitMap) {
-    if (now > val.resetAt) rateLimitMap.delete(key);
-  }
-
-  const entry = rateLimitMap.get(userId);
-  if (!entry || now > entry.resetAt) {
-    rateLimitMap.set(userId, { count: 1, resetAt: now + 3600000 });
-    return true;
-  }
-  if (entry.count >= 20) return false;
-  entry.count++;
-  return true;
-}
+// Persistent (Firestore-backed) per-user ceiling. The old in-memory Map was per
+// instance and reset on every cold start, so it never limited anything under load.
+const CHAT_PER_HOUR = 30;
 
 /**
  * POST /api/ai-chat — FivoAI assistant.
@@ -50,32 +35,26 @@ function checkRateLimit(userId: string): boolean {
  * fallback) lives in `api/_aiProvider.ts`, shared with the GMB review drafts and
  * the WhatsApp "Sugjerim AI". This file keeps only what is specific to the chat:
  * auth, the per-user rate limit, the team-membership gate and the usage log.
+ *
+ * Who pays (audit Sep 2026): the PLATFORM's API key is spent only for a caller with
+ * a proven STAFF tenant (claim `bid`, or an active membership in the requested
+ * team). A portal client may chat only when THEIR tenant configured its own key
+ * (`cfg.preferred` set) — otherwise 403, never the platform's budget.
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Verify Firebase Auth token
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing authorization header' });
-  }
+  const c = await authenticate(req);
+  if (!c) return res.status(401).json({ error: 'Missing or invalid token' });
+  const uid = c.uid;
 
-  let uid: string;
-  try {
-    const decoded = await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
-    uid = decoded.uid;
-  } catch {
-    return res.status(401).json({ error: 'Invalid token' });
-  }
-
-  // Rate limit
-  if (!checkRateLimit(uid)) {
+  if (!(await checkPersistentRateLimit('aiChat', uid, CHAT_PER_HOUR))) {
     return res.status(429).json({ error: 'Keni arritur limitin e kërkesave. Provoni përsëri pas pak.' });
   }
 
-  const { messages, context, teamId } = req.body;
+  const { messages, context, teamId } = (req.body || {}) as Record<string, any>;
 
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'Messages array required' });
@@ -104,39 +83,47 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (context.teamName) systemMessage += `\n- Ekipi: ${sanitize(context.teamName)}`;
   }
 
-  // The team's AI key is used only when the caller is a member OR a portal client
-  // of that team. The key never reaches the client either way — this gate exists
-  // to prevent cross-team quota abuse, not key exfiltration.
-  let teamAuthorized = false;
-  if (teamId && typeof teamId === 'string') {
+  // The team's AI key is used only when the caller is an ACTIVE member OR a portal
+  // client of that team. The key never reaches the client either way — this gate
+  // exists to prevent cross-team quota abuse, not key exfiltration.
+  let staffOfTeam = false;
+  let portalOfTeam = false;
+  const wantedTeam = typeof teamId === 'string' && teamId ? teamId : null;
+  if (wantedTeam) {
     try {
-      const [memberSnap, portalSnap] = await Promise.all([
-        adminDb.collection('teamMembers')
-          .where('teamId', '==', teamId)
-          .where('userId', '==', uid)
-          .limit(1)
-          .get(),
-        adminDb.collection('clientPortalAccess')
-          .where('userId', '==', uid)
-          .limit(20)
-          .get(),
-      ]);
-      const isMember = !memberSnap.empty;
-      const isPortalClient = portalSnap.docs.some((d) => d.data()?.teamId === teamId);
-      teamAuthorized = isMember || isPortalClient;
+      if (!isPortalOnlyToken(c)) {
+        staffOfTeam = c.tid === wantedTeam && !!c.bid
+          ? true
+          : !!(await activeMembership(uid, { teamId: wantedTeam }));
+      }
+      if (!staffOfTeam) {
+        const teamBid = await businessIdOfTeam(wantedTeam);
+        if (c.pbid && c.pbid === teamBid) portalOfTeam = true;
+        else {
+          const portalSnap = await adminDb.collection('clientPortalAccess').where('userId', '==', uid).limit(20).get();
+          portalOfTeam = portalSnap.docs.some((d) => {
+            const a = d.data() || {};
+            return (a.status ?? 'Active') === 'Active' && (a.teamId === wantedTeam || a.businessId === teamBid);
+          });
+        }
+      }
     } catch (e) {
       console.error('Failed to verify team membership for AI chat:', e);
     }
   }
 
-  const scopedTeamId = teamAuthorized && typeof teamId === 'string' ? teamId : null;
+  // A proven staff tenant: the requested team, or the token's own `bid` (no team named).
+  const provenStaff = staffOfTeam || (!wantedTeam && !!c.bid && !isPortalOnlyToken(c)) || c.superAdmin;
+  const scopedTeamId = (staffOfTeam || portalOfTeam) && wantedTeam ? wantedTeam : null;
   const cfg = await resolveAiConfig(scopedTeamId);
 
+  // Only a tenant's OWN key may serve a caller who is not proven staff.
+  if (!provenStaff && !cfg.preferred) {
+    return res.status(403).json({ error: 'Asistenti AI nuk është i disponueshëm për këtë llogari.' });
+  }
   if (!cfg.hasKey) {
-    return res.status(500).json({
-      error: 'AI service not configured',
-      detail: `teamId=${teamId ? 'sent' : 'none'}, authorized=${teamAuthorized}, teamKey=${!!cfg.preferred}, envGemini=${!!process.env.GEMINI_API_KEY}, envOpenAI=${!!process.env.OPENAI_API_KEY}`,
-    });
+    console.error('[ai-chat] no AI key', { teamId: wantedTeam, staffOfTeam, portalOfTeam, teamKey: !!cfg.preferred });
+    return res.status(503).json({ error: 'AI nuk është konfiguruar (Cilësimet → Integrime).' });
   }
 
   // Last 10 messages, capped at 4000 chars each
@@ -153,6 +140,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     adminDb.collection('aiUsageLogs').add({
       userId: uid,
       teamId: scopedTeamId,
+      businessId: c.bid || c.pbid || null,
       feature: 'chat',
       tokensUsed: result.tokensUsed,
       model: result.model,
@@ -162,16 +150,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({ reply });
   } catch (err: any) {
-    console.error('AI Chat error:', err);
+    console.error('AI Chat error:', err?.message || err);
     if (err?.status === 429 || err?.statusCode === 429) {
-      return res.status(429).json({
-        error: 'Serveri AI është i ngarkuar. Provoni përsëri.',
-        detail: String(err?.message || err).slice(0, 400),
-      });
+      return res.status(429).json({ error: 'Serveri AI është i ngarkuar. Provoni përsëri.' });
     }
-    return res.status(500).json({
-      error: 'Gabim i brendshëm',
-      detail: String(err?.message || err).slice(0, 400),
-    });
+    return res.status(500).json({ error: 'Gabim i brendshëm' });
   }
 }

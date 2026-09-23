@@ -1,37 +1,67 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    // Staff uploads: scoped by teamId in the path
-    // Path layout: {teamId}/{folder}/{filename}
-    match /{teamId}/{folder}/{fileName} {
-      // Public read so <img src=...> works without a token round-trip.
-      // Files only get a signed URL by accident if we wanted privacy.
-      allow read: if true;
-
-      // Only authenticated users may write; max 15 MB; images or common docs.
-      // text/html and text/javascript blocked — XSS vector when served inline.
-      allow write: if request.auth != null
-        && request.resource.size < 15 * 1024 * 1024
-        && (
-          request.resource.contentType.matches('image/(png|jpeg|gif|webp)')
-          || request.resource.contentType.matches('audio/.*')
-          || request.resource.contentType.matches('video/.*')
-          || request.resource.contentType == 'application/pdf'
-          || request.resource.contentType.matches('application/.*officedocument.*')
-          || request.resource.contentType == 'application/msword'
-          || request.resource.contentType == 'application/vnd.ms-excel'
-          || request.resource.contentType == 'application/vnd.ms-powerpoint'
-          || request.resource.contentType == 'text/plain'
-          || request.resource.contentType == 'text/csv'
-        );
+    // ══════════════════════════════════════════════════════════════════════════
+    // FIREBASE STORAGE IS NOT USED BY THIS APP — DENY EVERYTHING.
+    // ══════════════════════════════════════════════════════════════════════════
+    // Every upload (chat attachments, voice notes, avatars, task files) goes to the
+    // self-hosted VPS (`useFileUpload` → POST {vpsUrl}/upload → vps.fivocrm.com);
+    // `src/lib/firebase.ts` still exports `storage`, but nothing imports it
+    // (grep: no `uploadBytes` / `ref(storage` / `getDownloadURL` anywhere in src/).
+    //
+    // The previous rules were `allow read: if true` on the whole bucket and "any
+    // signed-in user may write under ANY {teamId}/ prefix" — i.e. a free, public,
+    // 15 MB-per-object file host under our project id, with cross-tenant paths,
+    // where any authenticated account (a portal client of another tenant included)
+    // could plant a PDF or an image that then served from our origin.
+    //
+    // LEGACY OBJECTS: files uploaded through the SDK in the past carry a download
+    // token, and a `?alt=media&token=…` URL is authorised by that token, NOT by
+    // these rules — so links already saved on old messages keep resolving. Only
+    // token-less reads and every write are refused.
+    match /{allPaths=**} {
+      allow read, write: if false;
     }
 
-    // Legacy "shared" path used when no teamId is set yet
-    match /shared/{folder}/{fileName} {
-      allow read: if true;
-      allow write: if request.auth != null
-        && request.resource.size < 15 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
-    }
+    // ── If Firebase Storage is ever re-adopted, start from this template — ────────
+    // tenant-scoped like Firestore: the path's first segment is the TEAM, the caller
+    // proves membership through the same signed claims the Firestore rules use
+    // (`tid` for the team, `bid`/`pbid` against the team's business via a Firestore
+    // lookup), reads require sign-in, writes are staff-only, deletes staff-only, and
+    // the size / content-type limits stay (text/html, text/javascript and svg are
+    // XSS vectors when served inline and are deliberately absent).
+    //
+    // function teamBusiness(teamId) {
+    //   return firestore.get(/databases/(default)/documents/teams/$(teamId)).data.businessId;
+    // }
+    // function isStaffOf(teamId) {
+    //   return request.auth != null && (
+    //     request.auth.token.get('superAdmin', false) == true
+    //     || request.auth.token.get('tid', '') == teamId
+    //     || request.auth.token.get('bid', '') == teamBusiness(teamId)
+    //   );
+    // }
+    // function isClientOf(teamId) {
+    //   return request.auth != null && request.auth.token.get('pbid', '') == teamBusiness(teamId);
+    // }
+    // function allowedType() {
+    //   return request.resource.size < 15 * 1024 * 1024 && (
+    //     request.resource.contentType.matches('image/(png|jpeg|gif|webp)')
+    //     || request.resource.contentType.matches('audio/.*')
+    //     || request.resource.contentType.matches('video/.*')
+    //     || request.resource.contentType == 'application/pdf'
+    //     || request.resource.contentType.matches('application/.*officedocument.*')
+    //     || request.resource.contentType == 'application/msword'
+    //     || request.resource.contentType == 'application/vnd.ms-excel'
+    //     || request.resource.contentType == 'application/vnd.ms-powerpoint'
+    //     || request.resource.contentType == 'text/plain'
+    //     || request.resource.contentType == 'text/csv'
+    //   );
+    // }
+    // match /{teamId}/{folder}/{fileName} {
+    //   allow read: if isStaffOf(teamId) || isClientOf(teamId);
+    //   allow create, update: if isStaffOf(teamId) && allowedType();
+    //   allow delete: if isStaffOf(teamId);
+    // }
   }
 }

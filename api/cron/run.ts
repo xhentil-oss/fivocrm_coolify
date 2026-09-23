@@ -1,5 +1,6 @@
 import { safeSenderAddress, senderHeader } from '../_emailIdentity.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import crypto from 'node:crypto';
 import nodemailer from 'nodemailer';
 import { buildInvoiceEmail, publicInvoicePayUrl } from '../_invoiceEmail.js';
 import admin, { adminDb as db, adminAuth } from '../_firebaseAdmin.js';
@@ -46,40 +47,66 @@ import { costRateFor, resolveFinanceSettings, nextBudgetAlert, type FinanceSetti
 import { formatMoney } from '../_money.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
+// Constant-time compare: `===` on the secret leaks its length and the position
+// of the first mismatch through timing. Fails closed when the env is unset.
 function authorize(req: VercelRequest): boolean {
   const cronSecret = process.env.CRON_SECRET;
-  return !!(cronSecret && req.headers.authorization === `Bearer ${cronSecret}`);
+  if (!cronSecret) return false;
+  const header = req.headers.authorization;
+  if (typeof header !== 'string') return false;
+  const expected = Buffer.from(`Bearer ${cronSecret}`, 'utf8');
+  const provided = Buffer.from(header, 'utf8');
+  if (expected.length !== provided.length) return false;
+  return crypto.timingSafeEqual(expected, provided);
 }
 
-// Manual admin trigger: verify Firebase ID token + admin role
-// Returns null on success, or an error string describing why auth failed.
+// Manual admin trigger: verify Firebase ID token + Admin/Owner role FOR THE
+// TENANT THE TOKEN BELONGS TO (`bid`). Returns null on success, or an error
+// string describing why auth failed.
+//
+// The old check was "Admin/Owner of ANY team, or creator of any team": a user
+// who was Admin in one tenant (or had once created a team anywhere) could trigger
+// jobs while `callerBusinessId` resolved a DIFFERENT tenant from the `bid` claim.
+// Role and tenant are now the same fact: either the server-minted `roles` claim
+// says admin/owner, or a live Admin/Owner membership exists in `bid` itself.
 async function authorizeManual(req: VercelRequest): Promise<string | null> {
   const authHeader = req.headers.authorization as string;
   if (!authHeader?.startsWith('Bearer ')) return 'Missing Authorization header';
   const token = authHeader.slice(7);
-  let uid: string;
+  let decoded: admin.auth.DecodedIdToken;
   try {
-    const decoded = await adminAuth.verifyIdToken(token);
-    uid = decoded.uid;
+    decoded = await adminAuth.verifyIdToken(token);
   } catch (err: any) {
     const msg = err?.message || String(err);
     console.error('[manual-auth] verifyIdToken failed:', msg);
     return `Token invalid: ${msg}`;
   }
+  if ((decoded as any).superAdmin === true) return null;
+
+  const bid = (decoded as any).bid;
+  if (typeof bid !== 'string' || !bid) {
+    // No tenant claim = no proof of staff membership anywhere. `ensureTenantClaims()`
+    // mints it on the next sign-in; a token that predates the rollout must be refreshed.
+    return 'Token carries no tenant claim (bid) — sign out and in again';
+  }
+  const claimRoles: string[] = Array.isArray((decoded as any).roles)
+    ? (decoded as any).roles.map((r: unknown) => String(r).toLowerCase())
+    : [];
+  if (claimRoles.includes('admin') || claimRoles.includes('owner')) return null;
+
   try {
+    // Membership-backed fallback for tokens minted before `roles` existed — but ONLY
+    // inside the tenant the token names, never "any team anywhere".
     const snap = await db.collection('teamMembers')
-      .where('userId', '==', uid)
+      .where('userId', '==', decoded.uid)
+      .where('businessId', '==', bid)
       .limit(10)
       .get();
-    const roles = snap.docs.map(d => d.data().role as string);
-    console.log(`[manual-auth] uid=${uid} roles=[${roles.join(', ') || 'none'}]`);
-    // Accept Admin OR Owner — matches the Settings tab gating (isAdmin || isOwner).
-    if (roles.some(r => r === 'Admin' || r === 'Owner')) return null;
-    // Fallback: a team OWNER (createdByUserId) is privileged even without an Admin
-    // teamMember role (or any teamMember doc) — covers the agency super-admin.
-    const ownedTeam = await db.collection('teams').where('createdByUserId', '==', uid).limit(1).get();
-    if (!ownedTeam.empty) return null;
-    return `Not Admin/Owner and owns no team (roles: ${roles.join(', ') || 'none'})`;
+    const rows = snap.docs.map(d => d.data() as any);
+    const ok = rows.some(m => (m.role === 'Admin' || m.role === 'Owner') && m.status !== 'Inactive');
+    console.log(`[manual-auth] uid=${decoded.uid} bid=${bid} roles=[${rows.map(m => m.role).join(', ') || 'none'}] ok=${ok}`);
+    if (ok) return null;
+    return `Not an Admin/Owner of business ${bid} (roles: ${rows.map(m => m.role).join(', ') || 'none'})`;
   } catch (err: any) {
     const msg = err?.message || String(err);
     console.error('[manual-auth] Firestore query failed:', msg);
@@ -417,6 +444,38 @@ async function loadSuspendedBusinessIds(): Promise<Set<string>> {
   return out;
 }
 
+/**
+ * H5 mirror of the rules audit: a campaign document names BOTH a `teamId` and a
+ * `businessId`, and the audience/settings reads key on each of them separately
+ * (`tenantScopedDocs` unions the two; `getTeamConfig(teamId)` supplies the
+ * channel). A doc whose team does not belong to its business would therefore send
+ * one tenant's list through another tenant's channel. The rules refuse such a
+ * write from the browser; the Admin SDK does not, so the sender proves it itself.
+ *
+ * Returns `true` when the pair is consistent (or cannot be judged: no teamId, or
+ * no businessId on a legacy doc). A missing team document is a mismatch — nothing
+ * can be configured for a team that does not exist.
+ */
+function teamBusinessChecker() {
+  const cache = new Map<string, string | null | undefined>(); // teamId → team.businessId (undefined = team missing)
+  return async (teamId: unknown, businessId: unknown): Promise<boolean> => {
+    if (typeof teamId !== 'string' || !teamId) return true;
+    if (typeof businessId !== 'string' || !businessId) return true;
+    if (!cache.has(teamId)) {
+      try {
+        const t = await db.collection('teams').doc(teamId).get();
+        cache.set(teamId, t.exists ? ((t.data() as any)?.businessId ?? null) : undefined);
+      } catch (err) {
+        console.warn(`[cron] teams/${teamId} lookup failed — treating as mismatch:`, err);
+        cache.set(teamId, undefined);
+      }
+    }
+    const teamBusiness = cache.get(teamId);
+    return teamBusiness === businessId;
+  };
+}
+const TEAM_BUSINESS_MISMATCH = 'team-business-mismatch';
+
 /** `projects/{id}` → { status, businessId } with a per-run cache; null when missing. */
 function projectStatusCache() {
   const cache = new Map<string, { status: string | null; businessId: string | null } | null>();
@@ -583,7 +642,11 @@ function taskReminderBlockReason(task: any, now: Date): string | null {
   return null;
 }
 
-async function runTaskReminders() {
+// `opts.businessId` = a manual run from one tenant: the range query cannot take a
+// businessId clause without a composite index, so the scope is applied in memory
+// BEFORE anything is sent or marked.
+async function runTaskReminders(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const remindersEnabledFor = cronToggleReader('task_reminders');
   let toggledOffSkipped = 0;
   const now = new Date();
@@ -600,8 +663,10 @@ async function runTaskReminders() {
 
   const suspended = await loadSuspendedBusinessIds();
   let suspendedSkipped = 0;
+  let outOfScope = 0;
   for (const doc of snap.docs) {
     const task = doc.data();
+    if (scopeId && task.businessId !== scopeId) { outOfScope++; continue; }
     if (task.businessId && suspended.has(task.businessId)) { suspendedSkipped++; continue; }
     if (!(await remindersEnabledFor(task.teamId))) { toggledOffSkipped++; continue; }
     const reason = taskReminderBlockReason(task, now);
@@ -651,7 +716,7 @@ async function runTaskReminders() {
   }
 
   await settleAll(ops, 'task-reminders');
-  return { scanned: snap.size, sent, blocked, toggledOffSkipped, suspendedSkipped };
+  return { scanned: snap.size, sent, blocked, toggledOffSkipped, suspendedSkipped, ...(scopeId ? { outOfScope } : {}) };
 }
 
 // ── JOB: invoice-reminders ───────────────────────────────────────────────────
@@ -1010,11 +1075,19 @@ async function runOverdueReminders(opts?: { businessId?: string | null }) {
 }
 
 // ── JOB: recurring-tasks ─────────────────────────────────────────────────────
-async function runRecurringTasks() {
+// `opts.businessId` = a manual run from one tenant's Cilësimet: only that tenant's
+// series are advanced (two equality clauses — no composite index needed). A
+// suspended tenant gets no new occurrences and no "detyrë e re" notifications.
+async function runRecurringTasks(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const recurrenceEnabledFor = cronToggleReader('recurring_tasks');
   let toggledOffSkipped = 0;
   const now = new Date();
-  const tasksSnap = await db.collection('tasks').where('isRecurring', '==', true).get();
+  let tasksQuery: admin.firestore.Query = db.collection('tasks').where('isRecurring', '==', true);
+  if (scopeId) tasksQuery = tasksQuery.where('businessId', '==', scopeId);
+  const tasksSnap = await tasksQuery.get();
+  const suspended = await loadSuspendedBusinessIds();
+  let suspendedSkipped = 0;
   let created = 0;
   let skippedDuplicate = 0;
   const ops: Promise<any>[] = [];
@@ -1087,6 +1160,7 @@ async function runRecurringTasks() {
   const bizCache = new Map<string, string | null>();
   for (const doc of tasksSnap.docs) {
     const task = doc.data();
+    if (task.businessId && suspended.has(task.businessId)) { suspendedSkipped++; continue; }
     if (!(await recurrenceEnabledFor(task.teamId))) { toggledOffSkipped++; continue; }
     // Self-heal: a recurring task must carry businessId or it disappears from the
     // business-scoped list & calendar. If it's missing, derive it from the project
@@ -1200,7 +1274,7 @@ async function runRecurringTasks() {
   await settleAll(ops, 'recurring-tasks');
   if (projectTerminalSkipped) console.log(`[recurring-tasks] ${projectTerminalSkipped} tip(s) inside archived/cancelled projects — no cycle spawned`);
   if (skippedNoDates) console.warn(`[recurring-tasks] ${skippedNoDates} Done tip(s) skipped: missing nextRecurringDate/frequency or both date anchors`);
-  return { created, skippedDuplicate, toggledOffSkipped, projectTerminalSkipped, skippedNoDates };
+  return { created, skippedDuplicate, toggledOffSkipped, projectTerminalSkipped, skippedNoDates, suspendedSkipped };
 }
 
 // ── helpers for recurring-invoices ───────────────────────────────────────────
@@ -2358,9 +2432,12 @@ async function runRecurringExpenses(opts?: { businessId?: string | null }) {
 }
 
 // ── JOB: expire-invitations ───────────────────────────────────────────────────
-async function runExpireInvitations() {
+// `opts.businessId` = a manual run: only that tenant's invites (equality + equality).
+async function runExpireInvitations(opts?: { businessId?: string | null }) {
   const now = admin.firestore.Timestamp.fromDate(new Date());
-  const invitesSnap = await db.collection('teamInvites').where('status', '==', 'Pending').get();
+  let q: admin.firestore.Query = db.collection('teamInvites').where('status', '==', 'Pending');
+  if (opts?.businessId) q = q.where('businessId', '==', opts.businessId);
+  const invitesSnap = await q.get();
   if (invitesSnap.empty) return { expired: 0 };
 
   let expired = 0;
@@ -2381,9 +2458,16 @@ async function runExpireInvitations() {
 }
 
 // ── JOB: goal-overdue-alerts ─────────────────────────────────────────────────
-async function runGoalOverdueAlerts() {
+// `opts.businessId` = a manual run from one tenant. Both reads are range queries
+// (no businessId clause without a composite index), so the scope — and the
+// suspended-tenant exclusion — are applied in memory before anything is sent.
+async function runGoalOverdueAlerts(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const now = new Date();
   const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+  const suspended = await loadSuspendedBusinessIds();
+  let suspendedSkipped = 0;
+  let outOfScope = 0;
 
   // A goal can only be overdue by dueDate, or (when it has none) by being older than
   // two weeks — two indexed range queries instead of reading every tenant's goals.
@@ -2401,6 +2485,8 @@ async function runGoalOverdueAlerts() {
 
   for (const goalDoc of goalsSnap.docs) {
     const goal = goalDoc.data();
+    if (scopeId && goal.businessId !== scopeId) { outOfScope++; continue; }
+    if (goal.businessId && suspended.has(goal.businessId)) { suspendedSkipped++; continue; }
 
     // Skip if already achieved or already notified
     if (goal.status === 'Achieved') continue;
@@ -2439,7 +2525,7 @@ async function runGoalOverdueAlerts() {
   }
 
   await settleAll(ops, 'goal-overdue-alerts');
-  return { notified };
+  return { notified, suspendedSkipped, ...(scopeId ? { outOfScope } : {}) };
 }
 
 // ── JOB: lead-follow-up-reminders (leads + customers) ────────────────────────
@@ -2630,10 +2716,17 @@ async function runFollowUpReminders(opts: { businessId?: string | null } = {}) {
 // Flags leads that breached the first-response SLA (no outbound touch within
 // SLA_HOURS) and leads that went stale (no activity for STALE_DAYS), notifying
 // the owner (or team admins if unassigned). Debounced via per-lead flags.
-async function runLeadSlaAndStaleAlerts() {
+// `opts.businessId` = a manual run from one tenant. The read uses `status in`, so
+// the scope is applied in memory (before any notification); a suspended tenant's
+// leads are skipped for the same reason as every other notifier here.
+async function runLeadSlaAndStaleAlerts(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const STALE_RENOTIFY_DAYS = 7;
   const now = Date.now();
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
+  const suspended = await loadSuspendedBusinessIds();
+  let suspendedSkipped = 0;
+  let outOfScope = 0;
 
   // SLA hours / stale days are tenant settings (Cilësimet → Automatizime →
   // Ndjekja), validated by the same resolver the UI's leadIntel uses — one
@@ -2669,6 +2762,8 @@ async function runLeadSlaAndStaleAlerts() {
 
   for (const doc of leadsSnap.docs) {
     const lead = doc.data();
+    if (scopeId && lead.businessId !== scopeId) { outOfScope++; continue; }
+    if (lead.businessId && suspended.has(lead.businessId)) { suspendedSkipped++; continue; }
     if (lead.status === 'Lost' || lead.status === 'Converted') continue;
 
     const recipients = lead.assignedToUserId ? [lead.assignedToUserId] : await getTeamAdmins(lead.teamId, lead.businessId);
@@ -2704,7 +2799,7 @@ async function runLeadSlaAndStaleAlerts() {
   }
 
   await settleAll(ops, 'lead-sla-stale-alerts');
-  return { slaBreaches, staleLeads };
+  return { slaBreaches, staleLeads, suspendedSkipped, ...(scopeId ? { outOfScope } : {}) };
 }
 
 // ── JOB: conversation-sla ────────────────────────────────────────────────────
@@ -2716,7 +2811,11 @@ async function runLeadSlaAndStaleAlerts() {
 // (`slaBreachNotified`). Every 15 min from the VPS — NOT in run-all: "two hours
 // without an answer" must mean two hours.
 // Index: conversations (awaitingReply, slaBreachNotified, slaFirstResponseDueAt).
-async function runConversationSla() {
+// `opts.businessId` = a manual run from one tenant; the composite-index query
+// cannot take another clause, so the scope is applied in memory before notifying.
+async function runConversationSla(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
+  let outOfScope = 0;
   const now = admin.firestore.Timestamp.now();
   const snap = await db.collection('conversations')
     .where('awaitingReply', '==', true)
@@ -2750,6 +2849,7 @@ async function runConversationSla() {
     const conv = doc.data() as any;
     const businessId: string | null = conv.businessId || null;
     const teamId: string | null = conv.teamId || null;
+    if (scopeId && businessId !== scopeId) { outOfScope++; continue; }
     if (businessId && suspendedBusinessIds.has(businessId)) { suspendedSkipped++; continue; }
 
     const recipients = conv.ownerId
@@ -2783,14 +2883,18 @@ async function runConversationSla() {
   }
 
   await settleAll(ops, 'conversation-sla');
-  return { checked: snap.size, breached, notified, suspendedSkipped, noRecipient };
+  return { checked: snap.size, breached, notified, suspendedSkipped, noRecipient, ...(scopeId ? { outOfScope } : {}) };
 }
 
 // ── JOB: lead-wa-auto-reminders ──────────────────────────────────────────────
 // Sends an automatic WhatsApp template to "waiting" leads (configured statuses)
 // that have had no communication for waAutoReminderDays (default 7). Requires the
 // team to enable it + configure a template/channel (Settings → WhatsApp automation).
-async function runLeadWhatsappAutoReminders() {
+// `opts.businessId` = a manual run from one tenant. This job messages REAL people
+// on WhatsApp, so the scope is applied in memory before any send, and a suspended
+// tenant's leads are never messaged.
+async function runLeadWhatsappAutoReminders(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const now = Date.now();
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
 
@@ -2798,7 +2902,10 @@ async function runLeadWhatsappAutoReminders() {
   const leadsSnap = await db.collection('leads')
     .where('status', 'in', ['New', 'Contacted', 'Qualified', 'Proposal', 'Follow-up'])
     .get();
-  if (leadsSnap.empty) return { sent: 0 };
+  if (leadsSnap.empty) return { sent: 0, suspendedSkipped: 0 };
+  const suspended = await loadSuspendedBusinessIds();
+  let suspendedSkipped = 0;
+  let outOfScope = 0;
 
   const tsCache = new Map<string, any>();
   const tplCache = new Map<string, any>();
@@ -2821,6 +2928,8 @@ async function runLeadWhatsappAutoReminders() {
 
   for (const leadDoc of leadsSnap.docs) {
     const lead = leadDoc.data();
+    if (scopeId && lead.businessId !== scopeId) { outOfScope++; continue; }
+    if (lead.businessId && suspended.has(lead.businessId)) { suspendedSkipped++; continue; }
     if (['Won', 'Lost', 'Converted'].includes(lead.status)) continue;
     const phone = lead.phone || lead.phoneNumber;
     if (!phone || !lead.teamId) continue;
@@ -2880,7 +2989,7 @@ async function runLeadWhatsappAutoReminders() {
   }
 
   await settleAll(ops, 'lead-wa-auto-reminders');
-  return { sent };
+  return { sent, suspendedSkipped, ...(scopeId ? { outOfScope } : {}) };
 }
 
 // ── JOB: daily-report-check ──────────────────────────────────────────────────
@@ -3050,12 +3159,20 @@ async function runNotificationDigest(opts?: { businessId?: string }) {
   );
 
   // Tenant list: one business when asked for, otherwise every active business.
+  // "Active" is literal: a suspended tenant's staff get no digest of a workspace
+  // they cannot open (the Admin SDK bypasses tenantActive(), so we filter here).
   const businessIds: string[] = [];
+  let suspendedSkipped = 0;
   if (opts?.businessId) {
-    businessIds.push(opts.businessId);
+    const biz = await db.collection('businesses').doc(opts.businessId).get();
+    if ((biz.data() as any)?.status === 'suspended') suspendedSkipped++;
+    else businessIds.push(opts.businessId);
   } else {
     const bizSnap = await db.collection('businesses').get();
-    for (const b of bizSnap.docs) businessIds.push(b.id);
+    for (const b of bizSnap.docs) {
+      if ((b.data() as any)?.status === 'suspended') { suspendedSkipped++; continue; }
+      businessIds.push(b.id);
+    }
   }
 
   const byUser = new Map<string, { title: string; message?: string; type?: string }[]>();
@@ -3162,7 +3279,7 @@ async function runNotificationDigest(opts?: { businessId?: string }) {
   }
 
   await settleAll(ops, 'notification-digest');
-  return { sent, scanned, tenants: businessIds.length, skippedPrefs, unstampedLegacyRows: unstamped };
+  return { sent, scanned, tenants: businessIds.length, skippedPrefs, suspendedSkipped, unstampedLegacyRows: unstamped };
 }
 
 // ── JOB: cleanup-old-notifications ───────────────────────────────────────────
@@ -3827,19 +3944,36 @@ async function sendWaCampaignBatch(
   return { total, succeeded, blocked, considered };
 }
 
-async function runWhatsappBroadcasts() {
+// `opts.businessId` = a manual run ("Nis tani" in Marketing) from one tenant: only
+// that tenant's campaigns are processed (applied in memory — the read is a
+// `status in`). A suspended tenant's campaigns wait; a campaign whose team does not
+// belong to its business is FAILED with `team-business-mismatch` instead of sent.
+async function runWhatsappBroadcasts(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const now = new Date();
   const snap = await db.collection('waBroadcasts')
     .where('status', 'in', ['queued', 'sending'])
     .get();
+  const suspended = await loadSuspendedBusinessIds();
+  const teamBelongsToBusiness = teamBusinessChecker();
 
   let processed = 0;
   let sent = 0;
+  let suspendedSkipped = 0;
+  let outOfScope = 0;
+  let mismatched = 0;
 
   for (const bDoc of snap.docs) {
     const b = bDoc.data() as any;
     // Evergreen rules are driven by `whatsapp-automations`, not here.
     if (b.trigger === 'dormant') continue;
+    if (scopeId && b.businessId !== scopeId) { outOfScope++; continue; }
+    if (b.businessId && suspended.has(b.businessId)) { suspendedSkipped++; continue; }
+    if (!(await teamBelongsToBusiness(b.teamId, b.businessId))) {
+      mismatched++;
+      await bDoc.ref.update({ status: 'failed', error: TEAM_BUSINESS_MISMATCH, updatedAt: now }).catch(() => {});
+      continue;
+    }
     try {
       // Respect scheduling.
       if (b.scheduledAt?.toDate && b.scheduledAt.toDate() > now) continue;
@@ -3870,7 +4004,7 @@ async function runWhatsappBroadcasts() {
     }
   }
 
-  return { processed, sent };
+  return { processed, sent, suspendedSkipped, mismatched, ...(scopeId ? { outOfScope } : {}) };
 }
 
 // ── JOB: whatsapp-automations ────────────────────────────────────────────────
@@ -3887,17 +4021,32 @@ async function runWhatsappBroadcasts() {
 //
 // Mirrors the email module's `purchase-campaigns` in spirit. NOT part of run-all
 // on purpose — an evergreen sender should be scheduled deliberately, once a day.
-async function runWhatsappAutomations() {
+async function runWhatsappAutomations(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const now = new Date();
-  const snap = await db.collection('waBroadcasts').where('trigger', '==', 'dormant').get();
+  let q: admin.firestore.Query = db.collection('waBroadcasts').where('trigger', '==', 'dormant');
+  if (scopeId) q = q.where('businessId', '==', scopeId); // equality + equality: no composite index
+  const snap = await q.get();
   const rules = snap.docs.filter((d) => (d.data() as any).status === 'active');
-  if (!rules.length) return { rules: 0, processed: 0, sent: 0 };
+  if (!rules.length) return { rules: 0, processed: 0, sent: 0, suspendedSkipped: 0, mismatched: 0 };
+  const suspended = await loadSuspendedBusinessIds();
+  const teamBelongsToBusiness = teamBusinessChecker();
 
   let processed = 0;
   let sent = 0;
+  let suspendedSkipped = 0;
+  let mismatched = 0;
 
   for (const bDoc of rules) {
     const b = bDoc.data() as any;
+    // A suspended tenant's evergreen rule is left ACTIVE but not run — it resumes
+    // by itself when the tenant pays. Pausing it would make them re-enable it by hand.
+    if (b.businessId && suspended.has(b.businessId)) { suspendedSkipped++; continue; }
+    if (!(await teamBelongsToBusiness(b.teamId, b.businessId))) {
+      mismatched++;
+      await bDoc.ref.update({ status: 'paused', error: TEAM_BUSINESS_MISMATCH, updatedAt: now }).catch(() => {});
+      continue;
+    }
     try {
       if (b.scheduledAt?.toDate && b.scheduledAt.toDate() > now) continue;
       // A rule with no dormancy threshold would message the whole segment on
@@ -3931,7 +4080,7 @@ async function runWhatsappAutomations() {
     }
   }
 
-  return { rules: rules.length, processed, sent };
+  return { rules: rules.length, processed, sent, suspendedSkipped, mismatched };
 }
 
 // ── JOB: email-campaigns ─────────────────────────────────────────────────────
@@ -3945,18 +4094,33 @@ function normalizeEmail(e: string): string {
 const isValidCampaignEmail = (e: string): boolean =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && !e.includes('\n') && !e.includes('\r');
 
-async function runEmailCampaigns() {
+// `opts.businessId` = a manual run from one tenant (in memory — `status in` read).
+// Suspended tenants wait; a team/business mismatch fails the campaign unsent.
+async function runEmailCampaigns(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const PER_RUN = 100; // matches Resend batch limit; safe for SMTP too
   const now = new Date();
   const snap = await db.collection('emailCampaigns')
     .where('status', 'in', ['queued', 'sending'])
     .get();
+  const suspended = await loadSuspendedBusinessIds();
+  const teamBelongsToBusiness = teamBusinessChecker();
 
   let processed = 0;
   let sent = 0;
+  let suspendedSkipped = 0;
+  let outOfScope = 0;
+  let mismatched = 0;
 
   for (const cDoc of snap.docs) {
     const c = cDoc.data() as any;
+    if (scopeId && c.businessId !== scopeId) { outOfScope++; continue; }
+    if (c.businessId && suspended.has(c.businessId)) { suspendedSkipped++; continue; }
+    if (!(await teamBelongsToBusiness(c.teamId, c.businessId))) {
+      mismatched++;
+      await cDoc.ref.update({ status: 'failed', error: TEAM_BUSINESS_MISMATCH, updatedAt: now }).catch(() => {});
+      continue;
+    }
     try {
       // Respect scheduling.
       if (c.scheduledAt?.toDate && c.scheduledAt.toDate() > now) continue;
@@ -4081,7 +4245,7 @@ async function runEmailCampaigns() {
     }
   }
 
-  return { processed, sent };
+  return { processed, sent, suspendedSkipped, mismatched, ...(scopeId ? { outOfScope } : {}) };
 }
 
 // Per-team email provider config (Settings → Integrime) → MailerConfig, cached.
@@ -4122,33 +4286,53 @@ function campaignSteps(c: any): { delayDays: number; subject?: string; templateI
 // enrollment is recorded on the invoice's `marketingCampaignsSent`; only invoices
 // paid AFTER the campaign was created are eligible (so activating an automation
 // never blasts old buyers). The actual emails are delivered by runCampaignSteps.
-async function runPurchaseCampaigns() {
+// `opts.businessId` = a manual run from one tenant: only that tenant's automations
+// (equality + equality read) and only its invoices can enrol anyone. A suspended
+// tenant's automations enrol nobody until it is active again.
+async function runPurchaseCampaigns(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const now = new Date();
   const LOOKBACK_MS = 60 * 24 * 3600 * 1000; // safety cap: ignore purchases older than 60d
   const MAX_INVOICES = 300;                   // bound Firestore reads per run
+  const suspended = await loadSuspendedBusinessIds();
+  let suspendedSkipped = 0;
 
   // Single-field query (no composite index); filter status in memory.
-  const campSnap = await db.collection('emailCampaigns').where('trigger', '==', 'purchase').get();
+  let campQuery: admin.firestore.Query = db.collection('emailCampaigns').where('trigger', '==', 'purchase');
+  if (scopeId) campQuery = campQuery.where('businessId', '==', scopeId);
+  const campSnap = await campQuery.get();
   const campaigns = campSnap.docs
     .map((d) => ({ id: d.id, ...(d.data() as any) }))
     .filter((c) => c.status === 'active')
+    .filter((c) => {
+      if (c.businessId && suspended.has(c.businessId)) { suspendedSkipped++; return false; }
+      return true;
+    })
     .map((c) => ({
       ...c,
       _createdAt: c.createdAt?.toDate ? c.createdAt.toDate() : new Date(0),
       _wants: new Set<string>((c.triggerServiceIds || []).filter(Boolean)),
     }));
-  if (campaigns.length === 0) return { campaigns: 0, enrolled: 0 };
+  if (campaigns.length === 0) return { campaigns: 0, enrolled: 0, suspendedSkipped };
 
-  const invSnap = await db.collection('invoices').where('status', '==', 'Paid').limit(MAX_INVOICES).get();
+  let invQuery: admin.firestore.Query = db.collection('invoices').where('status', '==', 'Paid');
+  if (scopeId) invQuery = invQuery.where('businessId', '==', scopeId);
+  const invSnap = await invQuery.limit(MAX_INVOICES).get();
 
   let enrolled = 0;
   for (const invDoc of invSnap.docs) {
     const inv = invDoc.data() as any;
+    if (inv.businessId && suspended.has(inv.businessId)) continue;
     const paidAt = inv.paidAt?.toDate ? inv.paidAt.toDate() : (inv.updatedAt?.toDate ? inv.updatedAt.toDate() : null);
     if (!paidAt || now.getTime() - paidAt.getTime() > LOOKBACK_MS) continue;
 
     const already = new Set<string>(inv.marketingCampaignsSent || []);
-    const candidates = campaigns.filter((c) => c.teamId === inv.teamId && !already.has(c.id) && paidAt >= c._createdAt);
+    // Same team AND (when both say so) same business — a campaign must never enrol
+    // a buyer from another tenant's invoice that happens to share a teamId.
+    const candidates = campaigns.filter((c) =>
+      c.teamId === inv.teamId
+      && (!c.businessId || !inv.businessId || c.businessId === inv.businessId)
+      && !already.has(c.id) && paidAt >= c._createdAt);
     if (candidates.length === 0 || !inv.customerId) continue;
 
     const custDoc = await db.collection('customers').doc(inv.customerId).get();
@@ -4187,18 +4371,26 @@ async function runPurchaseCampaigns() {
     }
   }
 
-  return { campaigns: campaigns.length, enrolled };
+  return { campaigns: campaigns.length, enrolled, suspendedSkipped };
 }
 
 // ── JOB: campaign-steps ──────────────────────────────────────────────────────
 // Delivers due drip-sequence steps for active enrollments. For each enrollment
 // whose nextSendAt has passed: send the current step, advance to the next (with
 // its delayDays from enrollment), or complete. Idempotent via `sentSteps`.
-async function runCampaignSteps() {
+// `opts.businessId` = a manual run from one tenant (equality + equality read; a
+// legacy enrolment without businessId is not provably the caller's and is left to
+// the scheduled run). A suspended tenant's drips are held, not stopped.
+async function runCampaignSteps(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const now = new Date();
   const MAX = 200; // recipients processed per run
-  const snap = await db.collection('campaignEnrollments').where('status', '==', 'active').limit(MAX).get();
-  if (snap.empty) return { processed: 0, sent: 0 };
+  let q: admin.firestore.Query = db.collection('campaignEnrollments').where('status', '==', 'active');
+  if (scopeId) q = q.where('businessId', '==', scopeId);
+  const snap = await q.limit(MAX).get();
+  if (snap.empty) return { processed: 0, sent: 0, suspendedSkipped: 0 };
+  const suspended = await loadSuspendedBusinessIds();
+  let suspendedSkipped = 0;
 
   const { cfgFor } = makeTeamSettingsCache();
   const campCache = new Map<string, any>();
@@ -4224,6 +4416,10 @@ async function runCampaignSteps() {
         await eDoc.ref.update({ status: 'stopped', updatedAt: now }); continue;
       }
       if (camp.status === 'paused') continue; // hold; resume when reactivated
+      // The enrolment may predate the businessId stamp — the campaign carries it too.
+      const tenantId: string | null = e.businessId || camp.businessId || null;
+      if (tenantId && suspended.has(tenantId)) { suspendedSkipped++; continue; }
+      if (scopeId && tenantId !== scopeId) continue; // belt and braces over the query clause
 
       const steps = campaignSteps(camp);
       const idx: number = e.currentStep || 0;
@@ -4285,7 +4481,7 @@ async function runCampaignSteps() {
     }
   }
 
-  return { processed, sent };
+  return { processed, sent, suspendedSkipped };
 }
 
 // ── JOB: backfill-businessid (two-level tenancy, Phase 2) ────────────────────
@@ -4877,7 +5073,7 @@ const TENANT_DATA_COLLECTIONS = [
  * Super-admin only. Time-budgeted: returns `truncated: true` with the collections it
  * did not reach, so a huge tenant can be exported in several calls.
  */
-async function runTenantExport(businessId: string, opts?: { maxDocs?: number }) {
+async function runTenantExport(businessId: string, opts?: { maxDocs?: number; actorUid?: string | null }) {
   if (!businessId) throw new Error('businessId required');
   const started = Date.now();
   const BUDGET_MS = 40_000;
@@ -4913,8 +5109,10 @@ async function runTenantExport(businessId: string, opts?: { maxDocs?: number }) 
     }
   }
 
+  // A GDPR export is an access to every record of a tenant — the audit row must
+  // name WHO pulled it; `null` is only honest for the scheduled cron.
   await writeAudit({
-    businessId, actorUid: null, action: 'tenant.export',
+    businessId, actorUid: opts?.actorUid ?? null, action: 'tenant.export',
     target: `business:${businessId}`, meta: { docs: total, truncated: skipped.length > 0 },
   });
 
@@ -5486,9 +5684,17 @@ async function runSetSuperAdminClaim(req: VercelRequest) {
   try { decoded = await adminAuth.verifyIdToken(token); }
   catch (err: any) { return { error: `Token invalid: ${err?.message || err}` }; }
   const email = String(decoded.email || '').toLowerCase();
-  const allow = String(process.env.SUPER_ADMIN_EMAILS || process.env.VITE_SUPER_ADMIN_EMAILS || '')
+  // The allowlist is matched on the EMAIL, so the email must be proven: an
+  // unverified account created with an allowlisted address would otherwise mint
+  // itself the platform claim.
+  if (decoded.email_verified !== true) {
+    return { error: 'Email-i i llogarisë nuk është verifikuar — verifikoje dhe provo sërish.' };
+  }
+  // Server-side allowlist ONLY. The `VITE_` variable is bundled into the browser
+  // and exists for UI hints; it must never be what the server trusts.
+  const allow = String(process.env.SUPER_ADMIN_EMAILS || '')
     .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
-  if (!allow.includes(email)) {
+  if (!email || !allow.includes(email)) {
     return { error: `Email "${email}" is not in the super-admin allowlist.` };
   }
   await adminAuth.setCustomUserClaims(decoded.uid, { superAdmin: true });
@@ -5543,7 +5749,11 @@ function buildInquiryMaterialsEmail(firstName: string, missingLabels: string[], 
   `;
 }
 
-async function runInquiryMaterialsReminders() {
+// `opts.businessId` = a manual run from one tenant: only that tenant's inquiries
+// are read (an inquiry stamped with teamId alone is not provably the caller's).
+// This job emails CLIENTS, so a suspended tenant's inquiries are never reminded.
+async function runInquiryMaterialsReminders(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const transporter = makeTransporter();
   const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   if (!transporter || !smtpUser) return { sent: 0, skipped: 0 };
@@ -5555,8 +5765,12 @@ async function runInquiryMaterialsReminders() {
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
   const daysSince = (t: number) => (t ? (now - t) / 86_400_000 : Infinity);
 
-  const snap = await db.collection('serviceInquiries').get();
+  const snap = scopeId
+    ? await db.collection('serviceInquiries').where('businessId', '==', scopeId).get()
+    : await db.collection('serviceInquiries').get();
   if (snap.empty) return { sent: 0, skipped: 0 };
+  const suspended = await loadSuspendedBusinessIds();
+  let suspendedSkipped = 0;
 
   const tsCache = new Map<string, any>();
   const getTeamSettings = async (teamId: string) => {
@@ -5571,6 +5785,7 @@ async function runInquiryMaterialsReminders() {
 
   for (const doc of snap.docs) {
     const q = doc.data();
+    if (q.businessId && suspended.has(q.businessId)) { suspendedSkipped++; continue; }
     // Only submitted, still-open inquiries with a team + valid client email
     if (q.isDraft === true) { skipped++; continue; }
     if (q.status !== 'New' && q.status !== 'Reviewed') { skipped++; continue; }
@@ -5615,7 +5830,7 @@ async function runInquiryMaterialsReminders() {
   }
 
   await settleAll(ops, 'inquiry-materials-reminders');
-  return { sent, skipped };
+  return { sent, skipped, suspendedSkipped };
 }
 
 // ── JOB: lead-cadence-steps ──────────────────────────────────────────────────
@@ -5631,7 +5846,10 @@ async function runInquiryMaterialsReminders() {
 // A lead without a playbook — or whose playbook was deleted/deactivated — falls
 // back to the team's default `leadCadenceDays`. After the last playbook step an
 // optional nurture reminder (`nurtureEveryDays`) re-surfaces the lead.
-async function runLeadCadenceSteps() {
+// `opts.businessId` = a manual run from one tenant (equality + equality read). A
+// suspended tenant's cadences are held — no tasks, no notifications — not closed.
+async function runLeadCadenceSteps(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const now = Date.now();
   const DAY = 86_400_000;
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
@@ -5681,8 +5899,12 @@ async function runLeadCadenceSteps() {
     return nameCache.get(businessId)!.get(userId) ?? '';
   };
 
-  const snap = await db.collection('leads').where('cadenceActive', '==', true).get();
-  if (snap.empty) return { created: 0, completed: 0, nurtured: 0, playbookSteps: 0, defaultSteps: 0 };
+  let leadsQuery: admin.firestore.Query = db.collection('leads').where('cadenceActive', '==', true);
+  if (scopeId) leadsQuery = leadsQuery.where('businessId', '==', scopeId);
+  const snap = await leadsQuery.get();
+  if (snap.empty) return { created: 0, completed: 0, nurtured: 0, playbookSteps: 0, defaultSteps: 0, suspendedSkipped: 0 };
+  const suspended = await loadSuspendedBusinessIds();
+  let suspendedSkipped = 0;
 
   let created = 0, completed = 0, nurtured = 0, playbookSteps = 0, defaultSteps = 0;
   const ops: Promise<any>[] = [];
@@ -5705,6 +5927,7 @@ async function runLeadCadenceSteps() {
 
   for (const doc of snap.docs) {
     const lead = doc.data();
+    if (lead.businessId && suspended.has(lead.businessId)) { suspendedSkipped++; continue; }
     if (TERMINAL.includes(lead.status)) {
       ops.push(doc.ref.update({ cadenceActive: false, updatedAt: admin.firestore.Timestamp.now() }));
       completed++;
@@ -5834,7 +6057,7 @@ async function runLeadCadenceSteps() {
   }
 
   await settleAll(ops, 'lead-cadence-steps');
-  return { created, completed, nurtured, playbookSteps, defaultSteps };
+  return { created, completed, nurtured, playbookSteps, defaultSteps, suspendedSkipped };
 }
 
 // ── JOB: project-spend-rollup ────────────────────────────────────────────────
@@ -5842,7 +6065,14 @@ async function runLeadCadenceSteps() {
 // each project's `spent`, so Reports/Customer360 margins reflect real labor cost
 // instead of the stale creation-time 0. Also stores laborCost/billableValue/
 // loggedHours for realization. Mirrors src/lib/finance/laborCost.ts — keep in sync.
-async function runProjectSpendRollup(opts?: { full?: boolean }) {
+// `opts.businessId` = a manual run from one tenant: a TENANT-FULL recompute
+// (businessId-filtered reads of projects / timeEntries / expenses / teamMembers —
+// equality clauses only), and the platform cursor is NOT touched: advancing
+// `lastRunAt` from a one-tenant pass would make the next scheduled incremental run
+// skip every other tenant's changes in between. `full: true` (whole platform) is
+// super-admin only at the dispatcher.
+async function runProjectSpendRollup(opts?: { full?: boolean; businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
   const DEFAULT_RATES: Record<string, number> = { EUR: 100, USD: 92, GBP: 118, ALL: 1, LEK: 1 };
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
   const entryHours = (e: any): number => {
@@ -5874,7 +6104,7 @@ async function runProjectSpendRollup(opts?: { full?: boolean }) {
   const forceFull = !!opts?.full || fullDue;
 
   const lastRunAt: admin.firestore.Timestamp | null =
-    (!forceFull && stateSnap.exists ? state?.lastRunAt : null) || null;
+    (!scopeId && !forceFull && stateSnap.exists ? state?.lastRunAt : null) || null;
 
   let projectDocs: admin.firestore.QueryDocumentSnapshot[];
   let entryDocs: admin.firestore.QueryDocumentSnapshot[];
@@ -5892,7 +6122,7 @@ async function runProjectSpendRollup(opts?: { full?: boolean }) {
   // the comp document wins where it exists, the legacy fields are the fallback —
   // mirroring src/lib/finance/compensation.ts. Keep the two in sync.
   const [membersSnap, tsSnap, compSnap] = await Promise.all([
-    db.collection('teamMembers').get(),
+    scopeId ? db.collection('teamMembers').where('businessId', '==', scopeId).get() : db.collection('teamMembers').get(),
     db.collection('teamSettings').get(),
     db.collection('teamMemberComp').get(),
   ]);
@@ -5948,6 +6178,16 @@ async function runProjectSpendRollup(opts?: { full?: boolean }) {
     projectDocs = projectChunks.flatMap((s) => s.docs);
     entryDocs = entryChunks.flatMap((s) => s.docs);
     expenseDocs = expenseChunks.flatMap((s) => s.docs);
+  } else if (scopeId) {
+    mode = 'full';
+    const [projectsSnapT, entriesSnapT, expensesSnapT] = await Promise.all([
+      db.collection('projects').where('businessId', '==', scopeId).get(),
+      db.collection('timeEntries').where('businessId', '==', scopeId).get(),
+      db.collection('expenses').where('businessId', '==', scopeId).get(),
+    ]);
+    projectDocs = projectsSnapT.docs;
+    entryDocs = entriesSnapT.docs;
+    expenseDocs = expensesSnapT.docs;
   } else {
     const [projectsSnapFull, entriesSnapFull, expensesSnapFull] = await Promise.all([
       db.collection('projects').get(),
@@ -6116,13 +6356,15 @@ async function runProjectSpendRollup(opts?: { full?: boolean }) {
     }
   }
   await settleAll(ops, 'project-spend-rollup');
-  await stateRef.set(
-    mode === 'full'
-      ? { lastRunAt: scanStartedAt, lastFullRunAt: scanStartedAt }
-      : { lastRunAt: scanStartedAt },
-    { merge: true },
-  );
-  return { updated, projects: projectsSnap.size, mode, budgetAlerts: alertsSent };
+  if (!scopeId) {
+    await stateRef.set(
+      mode === 'full'
+        ? { lastRunAt: scanStartedAt, lastFullRunAt: scanStartedAt }
+        : { lastRunAt: scanStartedAt },
+      { merge: true },
+    );
+  }
+  return { updated, projects: projectsSnap.size, mode, budgetAlerts: alertsSent, ...(scopeId ? { scope: scopeId } : {}) };
 }
 
 // ── JOB: client-profitability-report ─────────────────────────────────────────
@@ -6295,6 +6537,57 @@ async function recordJobRun(entry: {
   } catch { /* history is a convenience, never a dependency */ }
 }
 
+// ── Manual-run classification ────────────────────────────────────────────────
+// Every job is in EXACTLY one of these sets. A manual caller who is not a platform
+// super-admin (i.e. a tenant's Admin pressing "Ekzekuto tani") may run:
+//   • a SCOPED job — inside their own tenant only (`{ businessId }` is passed to the
+//     runner, which filters its primary read or, where the read cannot take the
+//     clause without a new index, filters in memory BEFORE any send);
+//   • a BOOTSTRAP job — self-gated (`set-superadmin-claim` checks its allowlist).
+// PLATFORM_ONLY jobs (cross-tenant migrations, billing lifecycle, the single WHMCS
+// integration, run-all, …) answer 403 to them. A job in none of the sets is unknown
+// and is refused for a manual tenant caller BEFORE the switch — default-deny, so a
+// new case added below without a classification can never be reached by a tenant.
+const PLATFORM_ONLY_JOBS = new Set<string>([
+  'run-all',
+  'subscription-lifecycle',
+  'tenant-usage-rollup', 'platform-metrics-rollup',
+  'tenant-export', 'tenant-delete',
+  'backfill-businessid', 'backfill-portal-customerid', 'backfill-customerid',
+  'backfill-member-keys', 'clear-legacy-member-pay', 'backfill-member-compensation',
+  'migrate-team-secrets', 'tenant-hierarchy', 'backfill-tenant-keys', 'sync-tenant-claims',
+  // ONE WHMCS integration for the platform (env-configured, `integrations/whmcs`):
+  // a tenant Admin running it acts on every mirrored record, not on their own.
+  'whmcs-sync', 'whmcs-clients',
+  // Pulls every connected social account and EMAILS every client its report.
+  'social-monthly-sync',
+  // Retention sweep across the whole `notifications` collection.
+  'cleanup-old-notifications',
+]);
+const SCOPED_JOBS = new Set<string>([
+  'task-deadline-alerts', 'task-reminders', 'chat-scheduled', 'invoice-reminders',
+  'recurring-tasks', 'recurring-invoices', 'project-completion-reminder',
+  'recurring-project-reset', 'goal-overdue-alerts', 'recurring-expenses',
+  'expire-invitations', 'lead-follow-up-reminders', 'whatsapp-broadcasts',
+  'whatsapp-automations', 'email-campaigns', 'purchase-campaigns', 'campaign-steps',
+  'lead-sla-stale-alerts', 'conversation-sla', 'lead-wa-auto-reminders',
+  'overdue-reminders', 'notification-digest', 'daily-report-check',
+  'inquiry-materials-reminders',
+  'project-spend-rollup', // `full=1` (whole platform) is refused below
+  'client-profitability-report', 'lead-cadence-steps',
+  'hosting-lifecycle', 'hosting-sync', 'hosting-backups', 'hosting-expiry-report',
+  'crm-automations', 'report-schedules', 'report-reminders', 'client-health-rollup',
+  'report-metrics-social', 'gmb-sync',
+]);
+const BOOTSTRAP_JOBS = new Set<string>(['set-superadmin-claim']);
+
+const PERIOD_RE = /^\d{4}-\d{2}$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** Today's calendar day in the office zone, `YYYY-MM-DD` — the same day the daily report is due on. */
+function todayKeyInRecurrenceZone(now = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: RECURRENCE_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const isManual = req.query.manual === '1';
@@ -6305,9 +6598,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!authorize(req)) return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const job = req.query.job as string;
+  const job = typeof req.query.job === 'string' ? req.query.job : '';
   const startedAt = Date.now();
   const actorUid = await callerUid(req);
+
+  // ── Default-deny for a tenant's manual trigger ──
+  // `restricted` = manual AND not a platform super-admin. `manualScope` is that
+  // caller's own tenant (`bid`), and is null for the scheduled cron and for a
+  // super-admin, whose runs stay platform-wide.
+  const superAdmin = isManual ? await callerIsSuperAdmin(req) : false;
+  const restricted = isManual && !superAdmin;
+  let manualScope: string | null = null;
+  if (restricted) {
+    if (PLATFORM_ONLY_JOBS.has(job)) {
+      return res.status(403).json({ error: `Forbidden: "${job}" është punë e platformës — kërkon super-admin.` });
+    }
+    if (!BOOTSTRAP_JOBS.has(job)) {
+      if (!SCOPED_JOBS.has(job)) {
+        return res.status(403).json({ error: `Forbidden: job "${job}" is not runnable manually.` });
+      }
+      manualScope = await callerBusinessId(req);
+      if (!manualScope) {
+        return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — ekzekutimi manual u ndal.' });
+      }
+    }
+  }
+  // Query-string parameters a tenant caller may pass are validated ONCE, here.
+  if (typeof req.query.period === 'string' && req.query.period && !PERIOD_RE.test(req.query.period)) {
+    return res.status(400).json({ error: 'Parametri "period" duhet të jetë YYYY-MM.' });
+  }
+  const periodParam = typeof req.query.period === 'string' && PERIOD_RE.test(req.query.period) ? req.query.period : undefined;
 
   try {
     let result: Record<string, unknown>;
@@ -6323,13 +6643,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       case 'task-reminders':
-        result = await runTaskReminders();
+        result = await runTaskReminders({ businessId: manualScope });
         break;
       case 'chat-scheduled':
         // Scheduled chat messages ("Programo") — a wall-clock promise, every 5 min
         // from the VPS, never in run-all. Claims each row in a transaction so the
         // browser poll and this job can never both send it.
-        result = await runChatScheduled();
+        result = await runChatScheduled({ businessId: manualScope });
         break;
       case 'invoice-reminders': {
         // Any job that SENDS something to a customer runs inside ONE tenant when
@@ -6342,7 +6662,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       case 'recurring-tasks':
-        result = await runRecurringTasks();
+        result = await runRecurringTasks({ businessId: manualScope });
         break;
       case 'recurring-invoices': {
         // Manual = one tenant's Admin pressing the button: scope it to their
@@ -6358,10 +6678,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         result = await runRecurringInvoices({ businessId: scopeId });
         break;
       }
+      // ── Platform-only (PLATFORM_ONLY_JOBS): the dispatcher guard above already
+      // answered 403 to a manual tenant caller; the scheduled cron path is unchanged.
       case 'backfill-businessid':
         result = await runBackfillBusinessId({ reset: req.query.reset === '1' });
         break;
       case 'set-superadmin-claim':
+        // BOOTSTRAP: self-gated by the server allowlist + a verified email.
         result = await runSetSuperAdminClaim(req);
         break;
       case 'backfill-portal-customerid':
@@ -6430,6 +6753,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         result = await runTenantExport(String(req.query.businessId || ''), {
           maxDocs: req.query.maxDocs ? Number(req.query.maxDocs) : undefined,
+          actorUid, // null for the cron; the operator's uid on a manual pull
         });
         break;
       }
@@ -6490,7 +6814,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       case 'goal-overdue-alerts':
-        result = await runGoalOverdueAlerts();
+        result = await runGoalOverdueAlerts({ businessId: manualScope });
         break;
       case 'recurring-expenses': {
         const scopeId = await manualScopeId(req, isManual);
@@ -6501,7 +6825,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       case 'expire-invitations':
-        result = await runExpireInvitations();
+        result = await runExpireInvitations({ businessId: manualScope });
         break;
       case 'lead-follow-up-reminders': {
         // Leads + customers due today/overdue → owner. 08:30 Europe/Tirane from
@@ -6517,33 +6841,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         result = await runFollowUpReminders({ businessId: scopeId });
         break;
       }
+      // ── Campaign senders: they message real people. A manual run from Marketing
+      // ("Nis tani") is one tenant's — `manualScope` — never the platform's list.
       case 'whatsapp-broadcasts':
-        result = await runWhatsappBroadcasts();
+        result = await runWhatsappBroadcasts({ businessId: manualScope });
         break;
       // Evergreen dormancy rules. NOT in run-all — schedule it once a day so an
       // always-on sender can never fire several times an hour.
       case 'whatsapp-automations':
-        result = await runWhatsappAutomations();
+        result = await runWhatsappAutomations({ businessId: manualScope });
         break;
       case 'email-campaigns':
-        result = await runEmailCampaigns();
+        result = await runEmailCampaigns({ businessId: manualScope });
         break;
       case 'purchase-campaigns':
-        result = await runPurchaseCampaigns();
+        result = await runPurchaseCampaigns({ businessId: manualScope });
         break;
       case 'campaign-steps':
-        result = await runCampaignSteps();
+        result = await runCampaignSteps({ businessId: manualScope });
         break;
       case 'lead-sla-stale-alerts':
-        result = await runLeadSlaAndStaleAlerts();
+        result = await runLeadSlaAndStaleAlerts({ businessId: manualScope });
         break;
       case 'conversation-sla':
         // Unanswered WhatsApp threads past the tenant's response SLA. Every 15 min
         // from the VPS, NOT in run-all (a wall-clock promise, like task-reminders).
-        result = await runConversationSla();
+        result = await runConversationSla({ businessId: manualScope });
         break;
       case 'lead-wa-auto-reminders':
-        result = await runLeadWhatsappAutoReminders();
+        result = await runLeadWhatsappAutoReminders({ businessId: manualScope });
         break;
       case 'overdue-reminders': {
         const scopeId = await manualScopeId(req, isManual);
@@ -6563,33 +6889,60 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         result = await runCleanupOldNotifications();
         break;
       case 'notification-digest':
-        result = await runNotificationDigest();
+        result = await runNotificationDigest({ businessId: manualScope ?? undefined });
         break;
-      case 'daily-report-check':
+      case 'daily-report-check': {
         // Deliberately NOT part of run-all: it is time-of-day sensitive and must be
         // scheduled at ~17:35 (stage=remind) and ~18:35 (stage=escalate).
+        //
+        // `businessId` and `date` come from the query string. For a tenant's manual
+        // run the business is FORCED to the caller's own (the parameter used to let
+        // any Admin nag any tenant's staff), the date must be a real past-or-today
+        // calendar day (a future date would pre-stamp `dailyReportMisses` and silence
+        // the real evening run), and the manager escalation — which names colleagues
+        // as absent — is the scheduler's or a super-admin's call, never a tenant's.
+        const stage: 'remind' | 'escalate' = req.query.stage === 'escalate' ? 'escalate' : 'remind';
+        const dateParam = typeof req.query.date === 'string' && req.query.date ? req.query.date : undefined;
+        if (dateParam !== undefined) {
+          if (!DATE_RE.test(dateParam) || isNaN(new Date(`${dateParam}T12:00:00Z`).getTime())) {
+            return res.status(400).json({ error: 'Parametri "date" duhet të jetë YYYY-MM-DD.' });
+          }
+          if (dateParam > todayKeyInRecurrenceZone()) {
+            return res.status(400).json({ error: 'Parametri "date" nuk mund të jetë në të ardhmen.' });
+          }
+        }
+        if (restricted && stage === 'escalate') {
+          return res.status(403).json({ error: 'Forbidden: stage=escalate niset vetëm nga planifikuesi ose një super-admin.' });
+        }
         result = await runDailyReportCheck({
-          stage: req.query.stage === 'escalate' ? 'escalate' : 'remind',
-          businessId: (req.query.businessId as string) || undefined,
-          date: (req.query.date as string) || undefined,
+          stage,
+          businessId: restricted ? manualScope! : ((req.query.businessId as string) || undefined),
+          date: dateParam,
         });
         break;
+      }
       case 'inquiry-materials-reminders':
-        result = await runInquiryMaterialsReminders();
+        result = await runInquiryMaterialsReminders({ businessId: manualScope });
         break;
       case 'project-spend-rollup':
-        result = await runProjectSpendRollup({ full: req.query.full === '1' });
+        // `full=1` recomputes EVERY tenant's projects from scratch — platform-only.
+        // A tenant's manual run is a tenant-full recompute that leaves the platform
+        // cursor untouched (see the runner).
+        if (restricted && req.query.full === '1') {
+          return res.status(403).json({ error: 'Forbidden: project-spend-rollup?full=1 është punë e platformës — kërkon super-admin.' });
+        }
+        result = await runProjectSpendRollup({ full: req.query.full === '1', businessId: manualScope });
         break;
       case 'client-profitability-report': {
         // Day 2 of the month from the VPS (NOT in run-all — it notifies people). A
         // manual run is scoped to the caller's own tenant, super-admin excepted.
         const scopeId = await manualScopeId(req, isManual);
         if (scopeId === MANUAL_SCOPE_UNRESOLVED) return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — ekzekutimi manual u ndal.' });
-        result = await runClientProfitabilityReport({ businessId: scopeId, period: (req.query.period as string) || undefined });
+        result = await runClientProfitabilityReport({ businessId: scopeId, period: periodParam });
         break;
       }
       case 'lead-cadence-steps':
-        result = await runLeadCadenceSteps();
+        result = await runLeadCadenceSteps({ businessId: manualScope });
         break;
       case 'hosting-lifecycle': {
         // Hosting & domains: renewal invoices, suspend/terminate on non-payment, domain
@@ -6656,23 +7009,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       case 'report-schedules':
         // Generate draft reports from active schedules. Idempotent via generationKey.
-        result = await runReportSchedules();
+        result = await runReportSchedules({ businessId: manualScope });
         break;
       case 'report-reminders':
         // Deadline reminders + the overdue escalation ladder. Each rung fires once.
-        result = await runReportReminders();
+        result = await runReportReminders({ businessId: manualScope });
         break;
       case 'client-health-rollup':
         // Persist a client-health snapshot per tenant per month (trend history).
-        result = await runClientHealthRollup();
+        result = await runClientHealthRollup({ businessId: manualScope });
         break;
       case 'report-metrics-social':
         // socialSnapshots → reportMetrics, so the monthly client report can carry
         // real social figures. Additive: /app/social keeps its own email.
-        result = await runReportMetricsSocial(req.query.period as string | undefined);
+        result = await runReportMetricsSocial(periodParam, { businessId: manualScope });
         break;
       case 'social-monthly-sync':
-        result = await runSocialMonthlySync(req.query.period as string | undefined, { email: req.query.email !== '0' });
+        // Platform-only (guard above): pulls every account and emails every client.
+        result = await runSocialMonthlySync(periodParam, { email: req.query.email !== '0' });
         break;
       case 'gmb-sync': {
         // Google Reviews pull for every connected location (hourly, VPS-scheduled).
@@ -6680,7 +7034,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // bounded diffs — writes are proportional to actual review change. Runs
         // under a time budget; a truncated run reports `skipped` and those
         // accounts go FIRST next hour (ordered by lastSyncedAt asc).
-        const { results: gmbResults, skipped } = await syncAllGmbAccounts();
+        // A tenant's manual run passes its own businessId as the scope (the sync
+        // then reads `gmbAccounts where businessId ==` only) — and is refused
+        // outright when that tenant is suspended, since the sync posts AI replies.
+        if (manualScope) {
+          const biz = await db.collection('businesses').doc(manualScope).get();
+          if ((biz.data() as any)?.status === 'suspended') {
+            return res.status(403).json({ error: 'Biznesi është i pezulluar — sinkronizimi manual u ndal.' });
+          }
+        }
+        const { results: gmbResults, skipped } = await syncAllGmbAccounts(manualScope ? { businessId: manualScope } : undefined);
         const failed = gmbResults.filter((r) => r.error);
         if (failed.length) console.error(`[CRON:gmb-sync] ${failed.length} dështuan:`, failed);
         result = {
@@ -6774,7 +7137,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, task-reminders, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, daily-report-check, whatsapp-broadcasts, whatsapp-automations, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social, gmb-sync, hosting-lifecycle, hosting-sync, hosting-backups, hosting-expiry-report` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: ${[...SCOPED_JOBS, ...PLATFORM_ONLY_JOBS, ...BOOTSTRAP_JOBS].sort().join(', ')}` });
     }
 
     await recordJobRun({

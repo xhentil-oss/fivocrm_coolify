@@ -13,27 +13,209 @@ import { join } from 'path';
 import cors from 'cors';
 import multer from 'multer';
 import pino from 'pino';
-import { randomUUID } from 'crypto';
+import { randomUUID, timingSafeEqual } from 'crypto';
 import { lookup as dnsLookup } from 'dns/promises';
 
 process.on('unhandledRejection', (err) => { console.error('[WA] Unhandled rejection:', err); });
 process.on('uncaughtException', (err) => { console.error('[WA] Uncaught exception:', err); });
 
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+// ── CORS ──────────────────────────────────────────────────────────────────────
+// Browser origins that may call this server directly (uploads, status polls).
+// Server-to-server calls (Vercel → VPS) carry no Origin header and are not
+// affected. `https://*.fivocrm.com` matches exactly one subdomain label.
+// `cors()` with no options used to reflect ANY origin.
+const DEFAULT_CORS_ORIGINS = ['https://fivocrm.vercel.app', 'https://fivocrm.com', 'https://*.fivocrm.com'];
+const DEV_CORS_ORIGINS = ['capacitor://localhost', 'https://localhost', 'http://localhost:5173'];
+const envCorsOrigins = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+const CORS_ORIGINS: string[] = envCorsOrigins.length ? envCorsOrigins : [...DEFAULT_CORS_ORIGINS];
+if (!IS_PRODUCTION) CORS_ORIGINS.push(...DEV_CORS_ORIGINS);
+
+function originAllowed(origin: string): boolean {
+  let o: URL;
+  try { o = new URL(origin); } catch { return false; }
+  const originNorm = `${o.protocol}//${o.host}`.toLowerCase();
+  for (const pattern of CORS_ORIGINS) {
+    const p = pattern.toLowerCase().replace(/\/$/, '');
+    if (!p.includes('*')) { if (p === originNorm) return true; continue; }
+    // Wildcard subdomain: "<scheme>://*.<domain>[:port]" — one label, never the apex.
+    const m = /^([a-z]+:\/\/)\*\.([^/*]+)$/.exec(p);
+    if (!m) continue;
+    const scheme = m[1]; const suffix = m[2];
+    if (`${o.protocol}//` !== scheme) continue;
+    const host = o.host.toLowerCase();
+    if (!host.endsWith(`.${suffix}`)) continue;
+    const label = host.slice(0, -(suffix.length + 1));
+    if (/^[a-z0-9-]+$/.test(label)) return true;
+  }
+  return false;
+}
+
 const app = express();
 app.set('trust proxy', true); // respect X-Forwarded-Proto for https URLs behind a proxy
-app.use(cors());
+app.disable('x-powered-by');
+// Global hardening headers (no helmet dependency needed for two headers).
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
+app.use(cors({
+  origin(origin, cb) {
+    // No Origin = server-to-server / curl / same-origin navigation → allow (no CORS headers needed).
+    if (!origin) { cb(null, true); return; }
+    if (originAllowed(origin)) { cb(null, true); return; }
+    // Not an error: simply answer without CORS headers so the browser blocks it.
+    cb(null, false);
+  },
+  credentials: false,
+  maxAge: 600,
+}));
 app.use(express.json());
 
 // ── File hosting (replaces Firebase Storage for chat/comment attachments) ──────
 const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
 mkdirSync(UPLOAD_DIR, { recursive: true });
-app.use('/files', express.static(UPLOAD_DIR, { maxAge: '7d', immutable: true }));
-const uploadMw = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
-// Mirror storage.rules: images / audio / video / pdf / office / text only.
-// Legacy Office (.doc/.xls/.ppt = msword / vnd.ms-excel / vnd.ms-powerpoint) is
-// allowed alongside the OOXML "officedocument" types — the CRM document upload
-// accepts both generations.
-const ALLOWED_UPLOAD = /^(image\/(png|jpe?g|gif|webp)|audio\/.*|video\/.*|application\/(pdf|msword|vnd\.ms-excel|vnd\.ms-powerpoint)|application\/.*officedocument.*|text\/(plain|csv))$/;
+
+/**
+ * Upload type policy. The stored extension used to come straight from the client
+ * filename while express.static picks Content-Type BY extension — so anyone with
+ * a Firebase login could park an .html/.svg on the vps.fivocrm.com origin.
+ * Three checks now agree before a byte is written: extension allow-list, the
+ * declared mimetype must belong to that extension, and for binary media the
+ * magic bytes must match. Mirrors storage.rules (images / audio / video / pdf /
+ * office / text). Legacy Office (.doc/.xls/.ppt) stays allowed alongside OOXML.
+ */
+const UPLOAD_EXT_MIME: Record<string, string[]> = {
+  png: ['image/png'],
+  jpg: ['image/jpeg', 'image/jpg', 'image/pjpeg'],
+  jpeg: ['image/jpeg', 'image/jpg', 'image/pjpeg'],
+  gif: ['image/gif'],
+  webp: ['image/webp'],
+  pdf: ['application/pdf'],
+  mp3: ['audio/mpeg', 'audio/mp3', 'audio/mpeg3', 'audio/x-mpeg-3'],
+  m4a: ['audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/aac'],
+  ogg: ['audio/ogg', 'application/ogg', 'video/ogg', 'audio/opus'],
+  wav: ['audio/wav', 'audio/x-wav', 'audio/wave', 'audio/vnd.wave'],
+  mp4: ['video/mp4', 'audio/mp4'],
+  webm: ['video/webm', 'audio/webm'],
+  // Phone cameras / recorders (WhatsAppChatPanel accepts image/*, video/*, audio/*).
+  mov: ['video/quicktime'],
+  '3gp': ['video/3gpp', 'audio/3gpp'],
+  heic: ['image/heic', 'image/heif'],
+  heif: ['image/heif', 'image/heic'],
+  aac: ['audio/aac', 'audio/x-aac', 'audio/aacp'],
+  opus: ['audio/opus', 'audio/ogg'],
+  amr: ['audio/amr', 'audio/3gpp'],
+  doc: ['application/msword'],
+  docx: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  xls: ['application/vnd.ms-excel'],
+  xlsx: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  ppt: ['application/vnd.ms-powerpoint'],
+  pptx: ['application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+  txt: ['text/plain'],
+  csv: ['text/csv', 'application/csv', 'text/plain', 'application/vnd.ms-excel'],
+};
+/** Never stored, whatever the mimetype says — these execute or script on our origin. */
+const FORBIDDEN_UPLOAD_EXT = new Set(['html', 'htm', 'svg', 'js', 'mjs', 'xml', 'shtml', 'xhtml', 'xht', 'php', 'cgi']);
+/** Types a browser may render inline; everything else is served as a download. */
+const INLINE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'pdf', 'mp3', 'm4a', 'aac', 'opus', 'amr', 'ogg', 'wav', 'mp4', 'mov', '3gp', 'webm']);
+
+/**
+ * Magic-byte sniffer for the binary media types we accept. Returns a canonical
+ * family tag or null when the content is not one of them (office/text pass through
+ * without sniffing — they have no single reliable signature).
+ */
+function sniffType(buf: Buffer): 'png' | 'jpeg' | 'gif' | 'webp' | 'pdf' | 'wav' | 'ogg' | 'mp3' | 'mp4' | 'webm' | 'aac' | 'amr' | null {
+  if (buf.length < 12) return null;
+  const ascii = (from: number, len: number) => buf.subarray(from, from + len).toString('latin1');
+  if (buf[0] === 0x89 && ascii(1, 3) === 'PNG' && buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a) return 'png';
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpeg';
+  if (ascii(0, 6) === 'GIF87a' || ascii(0, 6) === 'GIF89a') return 'gif';
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP') return 'webp';
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WAVE') return 'wav';
+  if (ascii(0, 5) === '%PDF-') return 'pdf';
+  if (ascii(0, 4) === 'OggS') return 'ogg';
+  // AMR-NB / AMR-WB (Android voice notes).
+  if (ascii(0, 5) === '#!AMR') return 'amr';
+  // Raw ADTS AAC: 12-bit sync 0xFFF, layer bits 00 (checked BEFORE the MP3 frame sync,
+  // which shares the 0xFFE prefix but has non-zero layer bits).
+  if (buf[0] === 0xff && (buf[1] & 0xf6) === 0xf0) return 'aac';
+  // MP3: ID3v2 tag, or a raw MPEG audio frame sync (0xFFE? / 0xFFF?).
+  if (ascii(0, 3) === 'ID3') return 'mp3';
+  if (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0 && (buf[1] & 0x06) !== 0) return 'mp3';
+  // MP4 / M4A / MOV / HEIC / 3GP: ISO BMFF "ftyp" box at offset 4 (brand differs; all
+  // are the same container family). Old QuickTime files may start with another atom.
+  if (ascii(4, 4) === 'ftyp') return 'mp4';
+  if (['moov', 'mdat', 'wide', 'free', 'skip'].includes(ascii(4, 4))) return 'mp4';
+  // WebM (and Matroska): EBML header.
+  if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) return 'webm';
+  return null;
+}
+/** Which sniffed families are acceptable content for a given (allow-listed) extension. */
+const EXT_SNIFF: Record<string, Array<ReturnType<typeof sniffType>>> = {
+  png: ['png'], jpg: ['jpeg'], jpeg: ['jpeg'], gif: ['gif'], webp: ['webp'], pdf: ['pdf'],
+  mp3: ['mp3'], m4a: ['mp4', 'aac'], ogg: ['ogg'], wav: ['wav'], mp4: ['mp4'], webm: ['webm'],
+  mov: ['mp4'], '3gp': ['mp4'], heic: ['mp4'], heif: ['mp4'], aac: ['aac', 'mp4'], opus: ['ogg'], amr: ['amr'],
+};
+
+function uploadExtension(originalName: string, mimetype: string): string {
+  const m = /\.([a-zA-Z0-9]{1,8})$/.exec(String(originalName || ''));
+  if (m) return m[1].toLowerCase();
+  // No extension in the name (e.g. a Blob from MediaRecorder): derive it from the mimetype.
+  const mt = String(mimetype || '').toLowerCase().split(';')[0].trim();
+  for (const [ext, mimes] of Object.entries(UPLOAD_EXT_MIME)) if (mimes.includes(mt)) return ext;
+  return '';
+}
+
+// /files: only ever serve an allow-listed extension (a file stored before this
+// policy existed with a scripting extension is refused, not served), with nosniff,
+// a sandboxing CSP and Content-Disposition: attachment for everything a browser
+// need not render inline. Documents/text download; images/audio/video/pdf inline.
+app.use('/files', (req, res, next) => {
+  const ext = (/\.([a-zA-Z0-9]{1,8})$/.exec(req.path) || [])[1]?.toLowerCase() || '';
+  if (!ext || !UPLOAD_EXT_MIME[ext] || FORBIDDEN_UPLOAD_EXT.has(ext)) { res.status(404).json({ error: 'Skedari nuk u gjet' }); return; }
+  next();
+});
+app.use('/files', express.static(UPLOAD_DIR, {
+  maxAge: '7d', immutable: true, dotfiles: 'deny', index: false, redirect: false,
+  setHeaders(res, filePath) {
+    const ext = (/\.([a-zA-Z0-9]{1,8})$/.exec(filePath) || [])[1]?.toLowerCase() || '';
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'");
+    res.setHeader('Content-Disposition', INLINE_EXT.has(ext) ? 'inline' : 'attachment');
+  },
+}));
+const uploadMw = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 1 } });
+
+// Per-user upload quota: 200 files / 500 MB per rolling 24h, in memory.
+const UPLOAD_QUOTA_WINDOW_MS = 24 * 60 * 60 * 1000;
+const UPLOAD_QUOTA_MAX_FILES = 200;
+const UPLOAD_QUOTA_MAX_BYTES = 500 * 1024 * 1024;
+const uploadQuota = new Map<string, Array<{ t: number; size: number }>>();
+/** Returns null when allowed (and records the upload), or the reason when over quota. */
+function checkUploadQuota(uid: string, size: number): string | null {
+  const now = Date.now(); const cutoff = now - UPLOAD_QUOTA_WINDOW_MS;
+  const rows = (uploadQuota.get(uid) || []).filter((r) => r.t > cutoff);
+  const bytes = rows.reduce((s, r) => s + r.size, 0);
+  if (rows.length >= UPLOAD_QUOTA_MAX_FILES) { uploadQuota.set(uid, rows); return 'Kuota e ngarkimeve (200 skedarë / 24 orë) u arrit'; }
+  if (bytes + size > UPLOAD_QUOTA_MAX_BYTES) { uploadQuota.set(uid, rows); return 'Kuota e ngarkimeve (500 MB / 24 orë) u arrit'; }
+  rows.push({ t: now, size });
+  uploadQuota.set(uid, rows);
+  return null;
+}
+// Prune idle users hourly so the map cannot grow with every uid that ever uploaded.
+setInterval(() => {
+  const cutoff = Date.now() - UPLOAD_QUOTA_WINDOW_MS;
+  for (const [uid, rows] of uploadQuota) {
+    const live = rows.filter((r) => r.t > cutoff);
+    if (live.length) uploadQuota.set(uid, live); else uploadQuota.delete(uid);
+  }
+}, 60 * 60 * 1000).unref?.();
+
+/** The custom claims we mint (api/_tenantClaims.ts); anything else is a legacy token. */
+interface TenantClaims { uid: string; bid: string | null; tid: string | null; pbid: string | null; cid: string | null; superAdmin: boolean }
 
 // Verify a Firebase ID token (so clients never need the VPS API secret to upload).
 async function requireFirebaseAuth(req: any, res: any, next: any) {
@@ -42,10 +224,61 @@ async function requireFirebaseAuth(req: any, res: any, next: any) {
   try {
     const decoded = await admin.auth().verifyIdToken(h.slice(7));
     req.uid = decoded.uid;
+    const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
+    req.claims = {
+      uid: decoded.uid,
+      bid: str((decoded as any).bid), tid: str((decoded as any).tid),
+      pbid: str((decoded as any).pbid), cid: str((decoded as any).cid),
+      superAdmin: (decoded as any).superAdmin === true,
+    } satisfies TenantClaims;
     next();
   } catch {
     res.status(401).json({ error: 'Token i pavlefshëm' });
   }
+}
+
+const teamBusinessCache = new Map<string, { bid: string | null; at: number }>();
+/** `teams/{teamId}.businessId`, cached 5 min. null = team does not exist / has no business. */
+async function businessOfTeam(teamId: string): Promise<string | null> {
+  const hit = teamBusinessCache.get(teamId);
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.bid;
+  let bid: string | null = null;
+  try {
+    const snap = await db.collection('teams').doc(teamId).get();
+    bid = snap.exists ? (String((snap.data() as any)?.businessId || '') || null) : null;
+  } catch (err) { console.error('[upload] teams lookup failed', err); }
+  teamBusinessCache.set(teamId, { bid, at: Date.now() });
+  return bid;
+}
+
+/**
+ * May this token write under `<teamId>/<folder>/…`?
+ *  - staff: `tid` equals the team, or the team's business equals `bid`;
+ *  - portal client (`pbid`, never `bid`): only portal/client folders (and its own
+ *    avatar), and when a real team is named it must belong to the client's tenant;
+ *  - a token that predates the claims rollout: membership-backed fallback
+ *    (`teamMembers` where teamId + userId), same as the rest of the platform.
+ */
+async function uploadTeamAllowed(claims: TenantClaims, teamId: string, folder: string): Promise<{ ok: boolean; error?: string }> {
+  if (claims.superAdmin) return { ok: true };
+  if (claims.bid || claims.tid) {
+    if (claims.tid && claims.tid === teamId) return { ok: true };
+    if (claims.bid && teamId !== 'shared' && (await businessOfTeam(teamId)) === claims.bid) return { ok: true };
+    return { ok: false, error: 'Nuk jeni anëtar i këtij ekipi' };
+  }
+  if (claims.pbid) {
+    const portalFolder = /^(portal|client)/i.test(folder) || folder === 'avatars';
+    if (!portalFolder) return { ok: false, error: 'Dosje e palejuar për klientët e portalit' };
+    if (teamId !== 'shared' && (await businessOfTeam(teamId)) !== claims.pbid) return { ok: false, error: 'Ekipi nuk i përket llogarisë suaj' };
+    return { ok: true };
+  }
+  // Legacy token without tenant claims → prove membership from Firestore.
+  if (teamId === 'shared') return { ok: false, error: 'Mungon ekipi (teamId)' };
+  try {
+    const snap = await db.collection('teamMembers').where('teamId', '==', teamId).where('userId', '==', claims.uid).limit(1).get();
+    if (!snap.empty) return { ok: true };
+  } catch (err) { console.error('[upload] teamMembers lookup failed', err); }
+  return { ok: false, error: 'Nuk jeni anëtar i këtij ekipi' };
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -277,9 +510,46 @@ const normalizePhone = (phone: string): string => {
   return digits;
 };
 
+/** Constant-time comparison; a length mismatch is simply "not equal". */
+function secretEquals(given: unknown, expected: string): boolean {
+  if (typeof given !== 'string' || !given || !expected) return false;
+  const a = Buffer.from(given, 'utf8'); const b = Buffer.from(expected, 'utf8');
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
 function requireApiKey(req: express.Request, res: express.Response, next: express.NextFunction): void {
-  if (req.headers['x-api-key'] !== API_SECRET) { res.status(401).json({ error: 'Unauthorized' }); return; }
+  if (!secretEquals(req.headers['x-api-key'], API_SECRET!)) { res.status(401).json({ error: 'Unauthorized' }); return; }
   next();
+}
+
+/** HTML-escape for the few server-rendered pages (/qr). Never interpolate raw. */
+function escapeHtml(v: unknown): string {
+  return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+}
+
+// ── Log hygiene ───────────────────────────────────────────────────────────────
+// Phone numbers and message bodies are personal data; by default the log keeps
+// the last 4 digits + the length. WA_LOG_BODIES=1 restores full logging for a
+// debugging session — never leave it on.
+const WA_LOG_BODIES = process.env.WA_LOG_BODIES === '1';
+function maskPhone(v: unknown): string {
+  const s = String(v ?? '');
+  if (WA_LOG_BODIES) return s;
+  const digits = s.replace(/\D/g, '');
+  if (!digits) return s ? '…' : '';
+  return `…${digits.slice(-4)}(${digits.length})`;
+}
+/** A jid like `355…@s.whatsapp.net` → `…1234(12)@s.whatsapp.net`. */
+function maskJid(v: unknown): string {
+  const s = String(v ?? '');
+  if (WA_LOG_BODIES) return s;
+  const at = s.indexOf('@');
+  return at === -1 ? maskPhone(s) : `${maskPhone(s.slice(0, at))}${s.slice(at)}`;
+}
+function maskBody(v: unknown): string {
+  const s = String(v ?? '');
+  return WA_LOG_BODIES ? s.slice(0, 80) : `[${s.length} karaktere]`;
 }
 
 const authDir = (agentId: string) => {
@@ -331,14 +601,14 @@ async function backfillLidMessages(agent: AgentState, lidJid: string, phoneJid: 
       if (++count >= 500) break;
     }
     await batch.commit();
-    console.log(`[${agent.config.id}] Backfill: ${lidPhone} → ${realPhone} (${count} msgs)`);
+    console.log(`[${agent.config.id}] Backfill: ${maskPhone(lidPhone)} → ${maskPhone(realPhone)} (${count} msgs)`);
   } catch (e) { console.error(`[${agent.config.id}] Backfill error:`, e); }
 }
 
 async function registerLidMapping(agent: AgentState, lid: string, phoneJid: string): Promise<void> {
   if (!lid || !phoneJid || agent.lidToPhoneMap.has(lid)) return;
   agent.lidToPhoneMap.set(lid, phoneJid);
-  console.log(`[${agent.config.id}] LID: ${lid} → ${phoneJid} (${agent.lidToPhoneMap.size} total)`);
+  console.log(`[${agent.config.id}] LID: ${maskJid(lid)} → ${maskJid(phoneJid)} (${agent.lidToPhoneMap.size} total)`);
   persistLidMapping(agent, lid, phoneJid);
   backfillLidMessages(agent, lid, phoneJid);
 
@@ -442,7 +712,7 @@ async function loadPendingLidMessages(agent: AgentState): Promise<void> {
       }
       await batch.commit();
       agent.pendingLidMessages.delete(lid);
-      console.log(`[${agent.config.id}] Startup resolved ${docIds.length} LID docs for ${lid}`);
+      console.log(`[${agent.config.id}] Startup resolved ${docIds.length} LID docs for ${maskJid(lid)}`);
     }
     console.log(`[${agent.config.id}] ${agent.pendingLidMessages.size} pending LID queues remaining`);
   } catch (e) { console.error(`[${agent.config.id}] Error loading pending LID messages:`, e); }
@@ -697,7 +967,7 @@ async function connectAgent(agent: AgentState): Promise<void> {
           queue.push(docId);
           agent.pendingLidMessages.set(rawJid, queue);
         } else {
-          console.log(`[${agent.config.id}] ${isFromMe ? '→' : '←'} ${phone}: ${body.slice(0, 80)}`);
+          console.log(`[${agent.config.id}] ${isFromMe ? '→' : '←'} ${maskPhone(phone)}: ${maskBody(body)}`);
         }
 
         // Hand the event to the CRM's shared inbound handler (identity → conversation →
@@ -790,10 +1060,47 @@ async function loadAgents(): Promise<void> {
   }
 }
 
+/**
+ * Loose lookup for the legacy single-agent routes (/qr, /sync redirects): any
+ * agent will do because nothing tenant-scoped is written. NOT for /send.
+ */
 function getAgent(agentId?: string): AgentState | null {
   if (agentId && agents.has(agentId)) return agents.get(agentId)!;
   for (const agent of agents.values()) { if (agent.connectionStatus === 'connected') return agent; }
   return agents.size > 0 ? agents.values().next().value : null;
+}
+
+/**
+ * Tenant-safe agent resolution for /send. Until Sep 2026 the fallback was "the
+ * first connected agent of ANY tenant", and `teamId || agent.config.teamId` let
+ * the body relabel the row — so a tenant with no connected number sent through a
+ * stranger's WhatsApp, and the message was filed under the caller's team.
+ *
+ *  - `agentId` given → that agent, and if `teamId` is also given it must be the
+ *    agent's own team (mismatch = 400, never a silent relabel);
+ *  - only `teamId` given → a CONNECTED agent whose config.teamId is that team;
+ *    never one from another tenant;
+ *  - neither → 400. The row is always stamped with the AGENT's team.
+ */
+interface SendAgentResolution { ok: boolean; agent?: AgentState; status?: number; error?: string }
+function resolveSendAgent(agentId: string | undefined, teamId: string | undefined): SendAgentResolution {
+  if (!agentId && !teamId) return { ok: false, status: 400, error: 'Kërkohet "agentId" ose "teamId"' };
+  if (agentId) {
+    const agent = agents.get(agentId);
+    if (!agent) return { ok: false, status: 404, error: 'Agenti nuk u gjet' };
+    if (teamId && agent.config.teamId !== teamId) return { ok: false, status: 400, error: 'agentId dhe teamId nuk përputhen' };
+    if (agent.connectionStatus !== 'connected' || !agent.sock) return { ok: false, status: 503, error: 'WhatsApp jo i lidhur. Hap /qr/:agentId dhe skano.' };
+    return { ok: true, agent };
+  }
+  let sameTeam = 0;
+  for (const agent of agents.values()) {
+    if (agent.config.teamId !== teamId) continue;
+    sameTeam++;
+    if (agent.connectionStatus === 'connected' && agent.sock) return { ok: true, agent };
+  }
+  return sameTeam
+    ? { ok: false, status: 503, error: 'Asnjë agent WhatsApp i këtij ekipi nuk është i lidhur. Hap /qr/:agentId dhe skano.' }
+    : { ok: false, status: 404, error: 'Ky ekip nuk ka asnjë agent WhatsApp të konfiguruar' };
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────
@@ -856,13 +1163,18 @@ app.post('/reload', requireApiKey, async (_req: any, res: any) => {
 app.get('/qr/:agentId', requireApiKey, (req: any, res: any) => {
   const agent = agents.get(req.params.agentId);
   if (!agent) return res.status(404).send('<html><body style="font-family:sans-serif;padding:40px"><h2>Agent nuk u gjet</h2></body></html>');
+  // `label` comes from a Firestore document any tenant admin can edit — escape it.
+  const label = escapeHtml(agent.config.label);
+  res.setHeader('Content-Security-Policy', "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'");
   if (agent.connectionStatus === 'connected') {
-    return res.send(`<html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;background:#f0fdf4"><h2 style="color:#16a34a">✅ ${agent.config.label} — I lidhur!</h2><p style="color:#555">WhatsApp është aktiv.</p></body></html>`);
+    return res.send(`<html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;background:#f0fdf4"><h2 style="color:#16a34a">✅ ${label} — I lidhur!</h2><p style="color:#555">WhatsApp është aktiv.</p></body></html>`);
   }
   if (!agent.qrDataUrl) {
-    return res.send(`<html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column"><h2>⏳ Duke pritur QR — ${agent.config.label}...</h2><p style="color:#666">Prit disa sekonda dhe rifresko faqen.</p><script>setTimeout(() => location.reload(), 3000)</script></body></html>`);
+    return res.send(`<html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column"><h2>⏳ Duke pritur QR — ${label}...</h2><p style="color:#666">Prit disa sekonda dhe rifresko faqen.</p><script>setTimeout(() => location.reload(), 3000)</script></body></html>`);
   }
-  res.send(`<html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:16px"><h2 style="color:#111">📱 ${agent.config.label}</h2><img src="${agent.qrDataUrl}" style="width:260px;border:1px solid #eee;border-radius:12px;padding:8px"/><p style="color:#666;text-align:center;max-width:300px">Hap <strong>WhatsApp</strong> → <strong>Cilësimet</strong> → <strong>Pajisjet e lidhura</strong> → <strong>Lidh pajisje</strong></p><script>setTimeout(() => location.reload(), 30000)</script></body></html>`);
+  // qrDataUrl is generated by us (QRCode.toDataURL) — still only ever emitted as a data: PNG.
+  const qrSrc = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(agent.qrDataUrl) ? agent.qrDataUrl : '';
+  res.send(`<html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:16px"><h2 style="color:#111">📱 ${label}</h2><img src="${escapeHtml(qrSrc)}" style="width:260px;border:1px solid #eee;border-radius:12px;padding:8px"/><p style="color:#666;text-align:center;max-width:300px">Hap <strong>WhatsApp</strong> → <strong>Cilësimet</strong> → <strong>Pajisjet e lidhura</strong> → <strong>Lidh pajisje</strong></p><script>setTimeout(() => location.reload(), 30000)</script></body></html>`);
 });
 
 // Backward compat /qr
@@ -901,30 +1213,37 @@ app.post('/sync', requireApiKey, async (req, res) => {
 
 // Send message
 app.post('/send', requireApiKey, async (req, res) => {
-  const { to, message, leadId, leadName, teamId, jid: rawJidFromBody, agentId, isAutoReply, sentByUid } = req.body as {
+  const { to, message, leadId, leadName, teamId: rawTeamId, jid: rawJidFromBody, agentId: rawAgentId, isAutoReply, sentByUid } = (req.body || {}) as {
     to: string; message: string; leadId?: string; leadName?: string;
-    teamId?: string; jid?: string; agentId?: string;
+    teamId?: string | null; jid?: string; agentId?: string | null;
     /** Auto-reply echo (from api/_waInbound.ts) — must never count as a staff answer. */
     isAutoReply?: boolean;
     /** The staff uid that pressed send (api/whatsapp.ts); null for automation. */
     sentByUid?: string | null;
   };
+  // Callers send `null` for "unknown"; treat anything but a non-empty string as absent.
+  const agentId = typeof rawAgentId === 'string' && rawAgentId ? rawAgentId : undefined;
+  const teamId = typeof rawTeamId === 'string' && rawTeamId ? rawTeamId : undefined;
 
-  // Defence-in-depth rate limit: max 30 sends/min per agent (VPS-side guard
-  // in addition to the per-user limit on Vercel).
-  if (agentId) {
-    if (!checkSendRate(agentId)) {
-      res.status(429).json({ error: 'Limiti i dërgimeve nga ky agent u arrit. Provoni pas pak.' });
-      return;
-    }
+  if (!to || !message || typeof to !== 'string' || typeof message !== 'string') {
+    res.status(400).json({ error: 'Fushat "to" dhe "message" janë të detyrueshme' }); return;
   }
 
-  const agent = getAgent(agentId);
-  if (!agent || agent.connectionStatus !== 'connected' || !agent.sock) {
-    res.status(503).json({ error: 'WhatsApp jo i lidhur. Hap /qr/:agentId dhe skano.', agentId });
+  // Tenant-safe resolution — never a foreign tenant's number, never a relabelled row.
+  const resolved = resolveSendAgent(agentId, teamId);
+  if (!resolved.ok || !resolved.agent) {
+    res.status(resolved.status || 500).json({ error: resolved.error || 'Agenti nuk u zgjidh', agentId: agentId || null, teamId: teamId || null });
     return;
   }
-  if (!to || !message) { res.status(400).json({ error: 'Fushat "to" dhe "message" janë të detyrueshme' }); return; }
+  const agent: AgentState = resolved.agent;
+
+  // Defence-in-depth rate limit: max 30 sends/min per RESOLVED agent (VPS-side
+  // guard in addition to the per-user limit on Vercel). Keyed on the agent that
+  // will actually send, so a teamId-only call cannot bypass it.
+  if (!checkSendRate(agent.config.id)) {
+    res.status(429).json({ error: 'Limiti i dërgimeve nga ky agent u arrit. Provoni pas pak.', agentId: agent.config.id });
+    return;
+  }
 
   const cleanPhone = normalizePhone(String(to));
   const isValidJid = rawJidFromBody && (rawJidFromBody.endsWith('@s.whatsapp.net') || rawJidFromBody.endsWith('@lid'));
@@ -938,7 +1257,9 @@ app.post('/send', requireApiKey, async (req, res) => {
   // therefore starts as `pending` and becomes `sent` only on the server ack
   // (messages.update status 2). The id is generated HERE so the row exists before
   // the receipt can arrive (the ack used to race the write and hit a missing doc).
-  const resolvedTeamId = teamId || agent.config.teamId;
+  // The row belongs to the AGENT's team, unconditionally — the body cannot relabel it
+  // (resolveSendAgent already rejected a teamId that disagrees with the agent).
+  const resolvedTeamId = agent.config.teamId;
   const waMessageId = generateMessageIDV2((agent.sock as any)?.user?.id);
   const ref = db.collection('whatsappMessages').doc(waMessageId);
   const now = () => admin.firestore.Timestamp.fromDate(new Date());
@@ -964,20 +1285,20 @@ app.post('/send', requireApiKey, async (req, res) => {
     if (code === 0 || code === -1) {
       const error = code === 0 ? 'WhatsApp e refuzoi mesazhin' : 'Lidhja u ndërpre para konfirmimit';
       await ref.update({ status: 'failed', error, updatedAt: now() }).catch(() => {});
-      console.warn(`[${agent.config.id}] ✗ ${cleanPhone}: ${error}`);
+      console.warn(`[${agent.config.id}] ✗ ${maskPhone(cleanPhone)}: ${error}`);
       res.status(502).json({ error, id: waMessageId, agentId: agent.config.id, teamId: resolvedTeamId });
       return;
     }
     const status = code >= 2 ? 'sent' : 'pending';
-    if (status === 'pending') console.warn(`[${agent.config.id}] ? ${cleanPhone}: pa ack pas ${SEND_ACK_TIMEOUT_MS}ms — mbetet pending`);
-    else console.log(`[${agent.config.id}] → ${cleanPhone}: ${message.slice(0, 80)}${isAutoReply ? ' (auto-reply)' : ''}`);
+    if (status === 'pending') console.warn(`[${agent.config.id}] ? ${maskPhone(cleanPhone)}: pa ack pas ${SEND_ACK_TIMEOUT_MS}ms — mbetet pending`);
+    else console.log(`[${agent.config.id}] → ${maskPhone(cleanPhone)}: ${maskBody(message)}${isAutoReply ? ' (auto-reply)' : ''}`);
     // teamId is returned so the caller (api/whatsapp.ts) can key the conversation
     // even when it did not know the agent's team.
     res.json({ success: true, id: waMessageId, status, agentId: agent.config.id, teamId: resolvedTeamId });
   } catch (err: unknown) {
     const error = err instanceof Error ? err.message : 'Dërgimi dështoi';
     await ref.update({ status: 'failed', error, updatedAt: now() }).catch(() => {});
-    console.error(`[${agent.config.id}] ✗ ${cleanPhone}: ${error}`);
+    console.error(`[${agent.config.id}] ✗ ${maskPhone(cleanPhone)}: ${error}`);
     res.status(500).json({ error, id: waMessageId });
   } finally {
     if (timer) clearTimeout(timer);
@@ -992,17 +1313,37 @@ app.post('/upload', requireFirebaseAuth, uploadMw.single('file'), async (req: an
   try {
     const file = req.file;
     if (!file) { res.status(400).json({ error: 'Mungon skedari' }); return; }
-    if (!ALLOWED_UPLOAD.test(file.mimetype)) { res.status(400).json({ error: `Tip skedari i palejuar: ${file.mimetype}` }); return; }
     const teamId = String(req.body.teamId || 'shared').replace(/[^a-zA-Z0-9_-]/g, '_') || 'shared';
     const folder = String(req.body.folder || 'uploads').replace(/[^a-zA-Z0-9_-]/g, '_') || 'uploads';
+
+    // 1. The token must be allowed to write under this team (claims, never the body).
+    const allowed = await uploadTeamAllowed(req.claims as TenantClaims, teamId, folder);
+    if (!allowed.ok) { res.status(403).json({ error: allowed.error || 'Nuk lejohet' }); return; }
+
+    // 2. Extension allow-list + mimetype consistency + magic bytes (see UPLOAD_EXT_MIME).
+    const mimetype = String(file.mimetype || '').toLowerCase().split(';')[0].trim();
+    const ext = uploadExtension(file.originalname, mimetype);
+    if (!ext || FORBIDDEN_UPLOAD_EXT.has(ext) || !UPLOAD_EXT_MIME[ext]) {
+      res.status(400).json({ error: `Prapashtesë skedari e palejuar: .${ext || '?'}` }); return;
+    }
+    if (!UPLOAD_EXT_MIME[ext].includes(mimetype)) {
+      res.status(400).json({ error: `Tipi "${mimetype}" nuk përputhet me prapashtesën .${ext}` }); return;
+    }
+    const expectedSniff = EXT_SNIFF[ext];
+    if (expectedSniff) {
+      const sniffed = sniffType(file.buffer);
+      if (!expectedSniff.includes(sniffed)) { res.status(400).json({ error: `Përmbajtja e skedarit nuk është .${ext}` }); return; }
+    }
+
+    // 3. Per-user quota (200 files / 500 MB per rolling 24h).
+    const quota = checkUploadQuota(String(req.uid), file.size);
+    if (quota) { res.status(429).json({ error: quota }); return; }
+
     // Unguessable filename (capability URL) — files are served publicly under
     // /files, so a predictable timestamp+originalname could be enumerated. A random
     // UUID makes the URL itself the secret, like Slack/WhatsApp attachment CDNs.
     // The original name is still returned as `name` for display/download.
-    const orig = String(file.originalname || 'file');
-    const extMatch = orig.match(/\.[a-zA-Z0-9]{1,8}$/);
-    const ext = extMatch ? extMatch[0].toLowerCase() : '';
-    const safeName = `${randomUUID()}${ext}`;
+    const safeName = `${randomUUID()}.${ext}`;
     const relPath = `${teamId}/${folder}/${safeName}`;
     const absDir = join(UPLOAD_DIR, teamId, folder);
     mkdirSync(absDir, { recursive: true });
@@ -1013,7 +1354,7 @@ app.post('/upload', requireFirebaseAuth, uploadMw.single('file'), async (req: an
       path: relPath,
       name: file.originalname,
       size: file.size,
-      type: file.mimetype,
+      type: UPLOAD_EXT_MIME[ext][0],
     });
   } catch (err: unknown) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Ngarkimi dështoi' });
@@ -1039,18 +1380,61 @@ async function isRegisteredWhmHost(hostname: string): Promise<boolean> {
   whmHostCache.set(key, { ok, at: Date.now() });
   return ok;
 }
-function isPrivateIp(ip: string): boolean {
-  if (/^(127\.|10\.|0\.|169\.254\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
-  const v6 = ip.toLowerCase();
-  return v6 === '::1' || v6.startsWith('fc') || v6.startsWith('fd') || v6.startsWith('fe80') || v6.startsWith('::ffff:127.') || v6.startsWith('::ffff:10.') || v6.startsWith('::ffff:192.168.');
+/**
+ * Private / loopback / link-local / unspecified / CGNAT / multicast, v4 and v6 —
+ * including the `::ffff:a.b.c.d` (and hex `::ffff:xxxx:xxxx`) IPv4-mapped forms
+ * that a dual-stack resolver hands back. Kept in sync with `isPrivateAddress`
+ * in api/_hostingProviders.ts (direct mode applies the same predicate).
+ */
+function isPrivateIp(raw: string): boolean {
+  let ip = String(raw || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!ip) return true;
+  const zone = ip.indexOf('%'); if (zone !== -1) ip = ip.slice(0, zone); // fe80::1%eth0
+  // IPv4-mapped IPv6 → the embedded IPv4.
+  const mappedDotted = /^(?:0*:)*:?ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(ip);
+  if (mappedDotted) ip = mappedDotted[1];
+  const mappedHex = /^(?:0*:)*:?ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ip);
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16); const lo = parseInt(mappedHex[2], 16);
+    ip = `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+  }
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+    const o = ip.split('.').map(Number);
+    if (o.some((n) => n > 255)) return true;
+    if (o[0] === 0 || o[0] === 10 || o[0] === 127) return true;             // 0/8, 10/8, 127/8
+    if (o[0] === 169 && o[1] === 254) return true;                          // 169.254/16
+    if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true;              // 172.16/12
+    if (o[0] === 192 && o[1] === 168) return true;                          // 192.168/16
+    if (o[0] === 100 && o[1] >= 64 && o[1] <= 127) return true;             // 100.64/10 (CGNAT)
+    if (o[0] === 192 && o[1] === 0 && (o[2] === 0 || o[2] === 2)) return true; // 192.0.0/24, 192.0.2/24
+    if (o[0] === 198 && (o[1] === 18 || o[1] === 19)) return true;          // 198.18/15
+    if (o[0] >= 224) return true;                                           // multicast + reserved + broadcast
+    return false;
+  }
+  if (!ip.includes(':')) return true; // not an IP literal at all — refuse
+  // IPv6: strip leading zeros per group so "0000:…:0001" and "::1" compare equal.
+  const groups = ip.split(':').map((g) => g.replace(/^0+(?=[0-9a-f])/, ''));
+  const norm = groups.join(':');
+  if (norm === '::' || norm === '::1' || norm === '0:0:0:0:0:0:0:0' || norm === '0:0:0:0:0:0:0:1') return true;
+  if (groups.every((g) => g === '' || g === '0')) return true; // any spelling of ::
+  if (/(^|:)ffff:\d{1,3}\./.test(norm) || /(^|:)ffff:[0-9a-f]{1,4}:[0-9a-f]{1,4}$/.test(norm)) return true; // mapped form we did not parse → refuse
+  const first = parseInt(groups[0] || '0', 16);
+  if ((first & 0xfe00) === 0xfc00) return true; // fc00::/7 (ULA)
+  if ((first & 0xffc0) === 0xfe80) return true; // fe80::/10 (link-local)
+  if ((first & 0xff00) === 0xff00) return true; // ff00::/8 (multicast)
+  if (first === 0x2001 && /^2001:db8:/.test(ip)) return true; // documentation
+  if (/^64:ff9b:/.test(ip)) return true; // NAT64 well-known prefix (embeds IPv4; refuse rather than parse)
+  return false;
 }
+/** true = refuse. Resolves ONCE and refuses if ANY returned address is private. */
 async function resolvesToPrivate(hostname: string): Promise<boolean> {
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(':')) return isPrivateIp(hostname.replace(/^\[|\]$/g, ''));
-  if (hostname === 'localhost') return true;
+  const h = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!h || h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return true;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(':')) return isPrivateIp(h);
   try {
-    const addrs = await dnsLookup(hostname, { all: true });
-    return addrs.length === 0 || addrs.some((a) => isPrivateIp(a.address));
+    const addrs = await dnsLookup(h, { all: true, verbatim: true });
+    if (!addrs.length) return true;
+    return addrs.some((a) => isPrivateIp(a.address));
   } catch { return true; }
 }
 // Same idea as /whmcs-proxy: Vercel has no static egress IP, WHM firewalls and
@@ -1064,12 +1448,15 @@ app.post('/provider-proxy', requireApiKey, async (req, res) => {
   if (typeof url !== 'string' || !/^https:\/\//i.test(url)) { res.status(400).json({ error: 'URL e pavlefshme (duhet https)' }); return; }
   let target: URL;
   try { target = new URL(url); } catch { res.status(400).json({ error: 'URL e pavlefshme' }); return; }
-  const isDynadot = target.hostname === 'api.dynadot.com';
-  const isWhm = target.port === '2087' || target.port === '2083';
-  if (!isDynadot && !isWhm) { res.status(400).json({ error: 'Host i palejuar për relay' }); return; }
+  if (target.username || target.password) { res.status(400).json({ error: 'URL me kredenciale e refuzuar' }); return; }
+  // Dynadot: exactly api.dynadot.com on 443 (an explicit ":443" is fine, anything else is not).
+  const isDynadot = target.hostname === 'api.dynadot.com' && (target.port === '' || target.port === '443');
+  const isWhm = target.hostname !== 'api.dynadot.com' && (target.port === '2087' || target.port === '2083');
+  if (!isDynadot && !isWhm) { res.status(400).json({ error: 'Host/port i palejuar për relay' }); return; }
   // A WHM target must be a server some tenant REGISTERED (hostingServers.hostname) —
   // otherwise the relay is an SSRF primitive towards anything listening on :2087.
-  // And never a private / loopback address, whatever the hostname resolves to.
+  // And never a private / loopback address, whatever the hostname resolves to
+  // (ANY private address among the results refuses the whole call).
   if (isWhm) {
     if (!(await isRegisteredWhmHost(target.hostname))) { res.status(403).json({ error: 'Serveri WHM nuk është i regjistruar në FivoCRM' }); return; }
     if (await resolvesToPrivate(target.hostname)) { res.status(403).json({ error: 'Adresë private/loopback e refuzuar' }); return; }
@@ -1079,12 +1466,20 @@ app.post('/provider-proxy', requireApiKey, async (req, res) => {
     if (/^(authorization|content-type|accept)$/i.test(k) && typeof v === 'string') fwdHeaders[k] = v;
   }
   try {
-    const r = await fetch(url, {
+    // redirect: 'manual' — a 3xx from the provider is an error here, never followed:
+    // following it would let the target host bounce the relay (and the Authorization
+    // header) to any other address, past every check above.
+    const r = await fetch(target.toString(), {
       method: method === 'GET' ? 'GET' : 'POST',
       headers: fwdHeaders,
       body: method === 'GET' ? undefined : (typeof body === 'string' ? body : undefined),
+      redirect: 'manual',
       signal: AbortSignal.timeout(40_000),
     });
+    if (r.status >= 300 && r.status < 400) {
+      res.status(502).json({ error: `Ofruesi ktheu ridrejtim (${r.status}) — nuk ndiqet` });
+      return;
+    }
     const text = await r.text();
     res.status(200).json({ status: r.status, body: text });
   } catch (err: unknown) {
@@ -1093,22 +1488,25 @@ app.post('/provider-proxy', requireApiKey, async (req, res) => {
 });
 
 app.post('/whmcs-proxy', requireApiKey, async (req, res) => {
-  const { url, form } = (req.body as any) || {};
+  const { form } = (req.body as any) || {};
   if (typeof form !== 'string' || !form) { res.status(400).json({ error: 'Mungon fusha "form"' }); return; }
-  // Target: prefer the URL sent by FivoCRM (Vercel has WHMCS_API_URL); fall back
-  // to the VPS env only if present. Must be https to avoid open-relay abuse.
-  const target = (typeof url === 'string' && url)
-    ? url
-    : (WHMCS_API_URL ? `${WHMCS_API_URL.replace(/\/$/, '')}/includes/api.php` : '');
-  if (!target) { res.status(503).json({ error: 'Mungon URL-ja e WHMCS (as nga kërkesa, as nga env)' }); return; }
-  if (!/^https:\/\//i.test(target)) { res.status(400).json({ error: 'URL e WHMCS e pavlefshme' }); return; }
+  // Target: ALWAYS the VPS's own WHMCS_API_URL. The body's `url` used to win, which
+  // made this an authenticated open relay (any https host, from our static IP,
+  // with the WHMCS identifier+secret inside `form`). It is now ignored.
+  const target = WHMCS_API_URL
+    ? (/\/includes\/api\.php$/i.test(WHMCS_API_URL) ? WHMCS_API_URL : `${WHMCS_API_URL.replace(/\/$/, '')}/includes/api.php`)
+    : '';
+  if (!target) { res.status(503).json({ error: 'WHMCS_API_URL nuk është vendosur në VPS' }); return; }
+  if (!/^https:\/\//i.test(target)) { res.status(500).json({ error: 'WHMCS_API_URL duhet të jetë https' }); return; }
   try {
     const r = await fetch(target, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: form,
+      redirect: 'manual',
       signal: AbortSignal.timeout(20_000),
     });
+    if (r.status >= 300 && r.status < 400) { res.status(502).json({ error: `WHMCS ktheu ridrejtim (${r.status}) — nuk ndiqet` }); return; }
     const text = await r.text();
     res.status(r.status).type('application/json').send(text);
   } catch (err: unknown) {
@@ -1124,6 +1522,17 @@ app.post('/whmcs-proxy', requireApiKey, async (req, res) => {
 // (same value set in Vercel). If either is missing, scheduling is disabled.
 const CRM_BASE_URL = (process.env.CRM_BASE_URL || '').replace(/\/$/, '');
 const CRON_SECRET = process.env.CRON_SECRET || '';
+// CRON_SECRET travels as a Bearer header to this URL on every tick, and every
+// inbound WhatsApp event is POSTed there — plain http would put both on the wire.
+// Boot-time check, same stance as the missing-API_SECRET exit.
+if (CRM_BASE_URL) {
+  const httpsOk = /^https:\/\/[^/]+/i.test(CRM_BASE_URL);
+  const devOk = !IS_PRODUCTION && /^http:\/\/localhost(:\d+)?$/i.test(CRM_BASE_URL);
+  if (!httpsOk && !devOk) {
+    console.error(`[VPS] ERROR: CRM_BASE_URL duhet të fillojë me https:// (http://localhost lejohet vetëm kur NODE_ENV != production). Vlera: ${CRM_BASE_URL}`);
+    process.exit(1);
+  }
+}
 const CRON_DAILY_HOUR = parseInt(process.env.CRON_DAILY_HOUR || '8'); // UTC, matches old "0 8 * * *"
 // The office's wall clock, for deadlines that are promises to people rather than
 // machine schedules (the daily report). IANA name, e.g. 'Europe/Tirane'.
@@ -1199,7 +1608,7 @@ function isPlausiblePhone(digits: string): boolean {
 
 async function postWaEvent(event: WaEventPayload): Promise<void> {
   if (!CRM_BASE_URL || !CRON_SECRET) return;
-  const label = `${event.direction} ${event.phone} ${event.waMessageId}`;
+  const label = `${event.direction} ${maskPhone(event.phone)} ${event.waMessageId}`;
   let lastErr = '';
   for (let attempt = 0; attempt < WA_EVENT_RETRY_DELAYS_MS.length; attempt++) {
     try {
@@ -1421,6 +1830,18 @@ function startCronSchedulers(): void {
   setTimeout(() => { void triggerCronJob('whatsapp-broadcasts'); }, MIN);
   console.log(`[CRON] ✅ Schedulerët aktiv → ${CRM_BASE_URL} (daily run-all @ ${CRON_DAILY_HOUR}:00 UTC, raporti ditor 17:35/18:35 ${CRON_LOCAL_TZ}, automatizimet WhatsApp 10:00 ${CRON_LOCAL_TZ}, kujtesat e ndjekjes 08:30 ${CRON_LOCAL_TZ})`);
 }
+
+// ── Final error handler ───────────────────────────────────────────────────────
+// Express's default handler answers with an HTML page that includes the stack in
+// non-production. Every error (multer limits, bad JSON, thrown route code) now
+// answers `{ error }` JSON with no stack; the stack goes to the log only.
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const status = Number(err?.status || err?.statusCode) || (err?.code === 'LIMIT_FILE_SIZE' ? 413 : err?.type === 'entity.parse.failed' ? 400 : 500);
+  const known = status < 500 && typeof err?.message === 'string';
+  if (status >= 500) console.error('[VPS] Unhandled route error:', err);
+  if (res.headersSent) { try { res.end(); } catch {} return; }
+  res.status(status).json({ error: known ? err.message : 'Gabim i brendshëm' });
+});
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {

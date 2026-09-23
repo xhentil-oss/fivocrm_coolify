@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { getGlobalTeamId } from './useFirestore';
+import { trustedFileHost } from '../lib/safeUrl';
 
 // Deployment-wide file host (shared across all of the owner's teams). Used as the
 // final fallback so image/file uploads work in EVERY channel/DM for EVERY member,
@@ -31,16 +32,22 @@ export function useFileUpload() {
   const upload = useCallback(async (file: File, folder = 'uploads'): Promise<UploadResult> => {
     if (!user) throw new Error('Not authenticated');
     // VPS URL resolution, in priority order:
-    //  1. active team's synced URL (localStorage, from teamSettings)
+    //  1. active team's synced URL (localStorage, from teamSettings) — honoured ONLY
+    //     when it is one of OUR hosts (`trustedFileHost`: https + *.fivocrm.com). The
+    //     request below carries the user's Firebase ID token, and `teamSettings` is
+    //     tenant-editable: without the allow-list any team admin could point every
+    //     member's token at a server they control.
     //  2. deployment-wide VITE_VPS_URL env (baked at build time)
     //  3. hardcoded shared file host — guarantees uploads work for every member
     //     in every channel/DM, even with no team-specific config.
-    const teamVps = (localStorage.getItem('whatsapp_vps_url') || '').replace(/\/$/, '');
-    const envVps = ((import.meta.env.VITE_VPS_URL as string | undefined) || '').replace(/\/$/, '');
-    // Ignore an http:// team URL on an https page — it would be blocked as mixed
-    // content; fall through to the https env/default instead.
+    let teamVpsRaw = '';
+    try { teamVpsRaw = localStorage.getItem('whatsapp_vps_url') || ''; } catch { /* private mode */ }
+    const teamVps = trustedFileHost(teamVpsRaw);
+    const envVps = ((import.meta.env.VITE_VPS_URL as string | undefined) || '').trim().replace(/\/$/, '');
+    // Ignore an http:// env URL on an https page — it would be blocked as mixed
+    // content; fall through to the https default instead.
     const isSecure = (u: string) => /^https:\/\//i.test(u) || /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(u);
-    const vpsUrl = (isSecure(teamVps) && teamVps) || (isSecure(envVps) && envVps) || DEFAULT_VPS_FILE_URL;
+    const vpsUrl = teamVps || (isSecure(envVps) && envVps) || DEFAULT_VPS_FILE_URL;
     const teamId = getGlobalTeamId() || 'shared';
 
     setUploading(true);

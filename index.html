@@ -2,6 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <!--
+      Mirror of the Content-Security-Policy header in vercel.json, so the Capacitor
+      WebView (which never sees Vercel's response headers) runs under the same policy.
+      Keep the two in sync. Differences on purpose: `frame-ancestors` is ignored in a
+      <meta> CSP and is omitted; connect-src adds the native origins
+      (capacitor://localhost, https://localhost), the API host the native shell
+      calls (lib/nativeApi.ts) and localhost ports for the Vite dev server.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' capacitor://localhost https://localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval' capacitor://localhost https://localhost https://apis.google.com https://www.gstatic.com https://js.stripe.com https://accounts.google.com https://*.daily.co; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' capacitor://localhost https://localhost https://fonts.googleapis.com; font-src 'self' capacitor://localhost https://localhost https://fonts.gstatic.com; img-src 'self' data: blob: https: capacitor://localhost; media-src 'self' blob: https://vps.fivocrm.com https://*.daily.co; connect-src 'self' capacitor://localhost https://localhost http://localhost:* https://localhost:* ws://localhost:* wss://localhost:* https://fivocrm.vercel.app https://wa.fivocrm.com https://vps.fivocrm.com https://*.googleapis.com https://*.firebaseio.com https://*.firebase.com https://firestore.googleapis.com wss://*.firebaseio.com https://api.stripe.com https://*.sentry.io https://accounts.google.com https://*.daily.co wss://*.daily.co https://api.daily.co; frame-src https://js.stripe.com https://accounts.google.com https://*.firebaseapp.com https://*.daily.co; object-src 'none'; base-uri 'self'" />
     <title>FivoCRM - Business Management Platform</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#08183A" />

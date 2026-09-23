@@ -9,6 +9,7 @@ import { Button } from '../../components/ui/button';
 import { Loader2 } from 'lucide-react';
 import PortalPushPrompt from './PortalPushPrompt';
 import PortalNotificationsBell from './PortalNotificationsBell';
+import VerifyEmailScreen, { needsEmailVerification } from '../../components/VerifyEmailScreen';
 
 // Full menu — shown in the desktop sidebar and the mobile drawer.
 // `shopOnly` entries appear only when this tenant actually publishes products, so a
@@ -129,6 +130,13 @@ const PortalLayout: React.FC = () => {
     permissions.setPreviewCustomer(null);
     navigate(id ? `/app/customers/${id}` : '/app/customers');
   };
+
+  // A password account that has not verified its address gets the verification
+  // screen — the rules deny every portal bootstrap write until then, so rendering
+  // the portal would only show a client that never finishes loading.
+  if (user && needsEmailVerification(user)) {
+    return <VerifyEmailScreen user={user} />;
+  }
 
   if (isLoading || permissions.isLoading) {
     return (

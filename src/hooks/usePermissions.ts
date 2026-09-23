@@ -142,10 +142,18 @@ export function usePermissions(): UserPermissions {
     skipBusinessFilter: true, // identity resolution must read unscoped to find the business
   });
 
-  // Fallback query: by email field — catches members added manually where userId wasn't set to the Firebase UID
+  // Fallback query: by email field — catches members added manually where userId wasn't set to the Firebase UID.
+  //
+  // ONLY for a VERIFIED address. Anyone can create a password account with any email
+  // they like; matching (and then auto-linking) a membership row on that unverified
+  // string handed the tenant to whoever typed a colleague's address first. Google
+  // sign-in users are verified by the provider; password users after clicking the
+  // link. A row already keyed by the uid is never affected by this gate.
+  const emailLookupAllowed = !!user?.email && user.emailVerified === true;
   const { data: rawTeamMembersByEmail, loading: membersByEmailLoading, error: membersByEmailError } = useCollection<any>('teamMembers', {
-    where: user?.email
-      ? [{ field: 'email', operator: '==', value: user.email.toLowerCase() }]
+    skip: !emailLookupAllowed,
+    where: emailLookupAllowed
+      ? [{ field: 'email', operator: '==', value: user!.email!.toLowerCase() }]
       : [{ field: 'email', operator: '==', value: '__never__' }],
     skipTeamFilter: true,
     skipBusinessFilter: true, // identity resolution must read unscoped to find the business
@@ -162,7 +170,7 @@ export function usePermissions(): UserPermissions {
   // Auto-link: when found by email but userId doesn't match current UID, update Firestore so future queries work
   const linkedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!user) return;
+    if (!user || user.emailVerified !== true) return;
     for (const m of rawTeamMembersByEmail || []) {
       if (m.userId !== user.uid && !linkedRef.current.has(m.id)) {
         linkedRef.current.add(m.id);
@@ -568,7 +576,7 @@ export function usePermissions(): UserPermissions {
   // update it and reassign any tasks/records that reference the old email-based userId.
   const normalizedRef = useRef(false);
   useEffect(() => {
-    if (normalizedRef.current || !user || !user.email || !teamMembers || teamMembers.length === 0) return;
+    if (normalizedRef.current || !user || !user.email || user.emailVerified !== true || !teamMembers || teamMembers.length === 0) return;
 
     const emailMember = teamMembers.find(
       (m: any) => m.userId === user.email && m.userId !== user.uid
