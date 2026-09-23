@@ -52,6 +52,9 @@ remaining are moderate and need a major bump of `react-router-dom` or `firebase-
   test-pinned to `SECRET_FIELDS`; inactive members fail `isBusinessMember`/`isTeamMember`.
 - **Storage**: bucket is unused by the client (uploads go to the VPS) → `read, write: if false`
   with the tenant-scoped template left as a comment. `npm run test:rules:storage`.
+  Deploy note: Firebase Storage is NOT set up on project `fivocrm` (no bucket exists), so
+  `firebase deploy --only storage` fails with "has not been set up" — nothing to protect
+  today; the deny-all file is what lands the day someone clicks "Get Started".
 
 ### API handlers (`api/`)
 - New `api/_callerIdentity.ts`: verified-email identity, portal-only token detection,
@@ -135,7 +138,7 @@ remaining are moderate and need a major bump of `react-router-dom` or `firebase-
 
 1. `npm run test:rules` + `npm run test:rules:storage` (JDK 21).
 2. Commit + push (Vercel builds the app and the API together).
-3. `firebase deploy --only firestore:rules,storage` AFTER the app build is live (the rules
+3. `firebase deploy --only firestore:rules` AFTER the app build is live (add `,storage` once a bucket exists) (the rules
    refuse unverified portal writes and the old bundle still attempted them).
 4. VPS: pull, set env (§1.5), `pm2 restart`.
 5. `npm run android:sync`.
