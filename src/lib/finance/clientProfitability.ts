@@ -14,9 +14,12 @@
  * be profitable and still not pay. Unbilled earned revenue (WIP) and deferred
  * revenue come from revenueRecognition.ts.
  *
- * The totals FOOT with Financat: Σ client net profit + unallocated == earned −
- * (payroll + other expenses of the period), because labour comes from ONE
- * allocation (laborAllocation.ts) whose absorbed + unabsorbed equals payroll.
+ * The totals FOOT with Financat: Σ client net profit + unallocated overhead ==
+ * earned − (payroll + other expenses of the period) − direct expenses of
+ * projects with no client row, because labour comes from ONE allocation
+ * (laborAllocation.ts) and EVERY lek of it is either on a client row or in the
+ * overhead pool: unabsorbed payroll, hours with no project, hours on internal
+ * or out-of-period projects (`laborOutsideRows`). Nothing is dropped.
  * With no logged hours in the period the result says `basis: 'none'` and the
  * table shows the estimate label — never a silent fallback.
  */
@@ -29,9 +32,9 @@ import {
   getInvoiceBilledBetween,
   getInvoiceCollectedBetween,
   getInvoiceOutstandingAll,
-  parseDate,
+  isProjectDirectExpense,
 } from './financialAnalytics';
-import { allocateLabor, type LaborAllocation, type MemberLaborLine } from './laborAllocation';
+import { allocateLabor, laborByProjectForEntries, laborOutsideRows, type LaborAllocation, type MemberLaborLine, type ProjectLabor } from './laborAllocation';
 import type { RateCardRole } from './costRates';
 import { projectEarnedInPeriod, projectWip, recognitionMethodOf, plannedHoursOf, type RecognitionMethod } from './revenueRecognition';
 import { billingTypeOf } from './projectPeriod';
@@ -140,9 +143,22 @@ export interface ClientProfitabilityResult {
     absorbedLabor: number;
     unabsorbedLabor: number;
     overAbsorbedLabor: number;
-    /** Labour on projects that have no client (internal work). */
+    /** Labour on projects that have no client (internal work). Part of `laborOutsideRows`. */
     internalProjectLabor: number;
-    /** otherFixed + unabsorbed labour — what gets shared. */
+    /**
+     * Labour NO client row carries: hours with no project + hours on projects
+     * without a row (internal, out of period, unknown id). Pooled, never dropped.
+     */
+    laborOutsideRows: number;
+    /** unabsorbed + laborOutsideRows — the labour share of `overheadPool`. */
+    poolLabor: number;
+    /**
+     * Direct + pass-through expenses tagged to projects that have no client row
+     * (internal projects). They are in the operating result but in no row and in
+     * no pool — the one term the reconciliation sentence has to name.
+     */
+    directOutsideRows: number;
+    /** otherFixed + poolLabor — what gets shared. */
     overheadPool: number;
     /** Pool that no client carried (no client hours at all, or revenue basis with no revenue). */
     unallocatedOverhead: number;
@@ -217,24 +233,42 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
 
   // ── Expenses of the period: project-direct (split pass-through), or shared ──
   const directByProject = new Map<string, { direct: number; passThrough: number }>();
+  // All-time direct expenses per project up to the period end, for the EAC
+  // (the plan is for the whole engagement, not for a month). Pass-through
+  // categories are out, as in the period figure.
+  const directAllTimeByProject = new Map<string, number>();
   let otherFixed = 0;
   const expensesWithoutProject = { count: 0, amount: 0 };
   const projectIds = new Set(projects.map(p => p.id));
+  const isPassThrough = (e: Expense) => passCats.has((e.category || '').toLowerCase());
   for (const e of input.expenses || []) {
     if (!expenseIsCountable(e)) continue;
     if (e.category === EXPENSE_CATEGORY_SALARY) continue;
     const d = getExpenseDate(e);
-    if (!d || d < start || d > end) continue;
+    if (!d || d > end) continue;
     const amt = toAll(e.amount || 0, e.currency);
+    if (isProjectDirectExpense(e) && e.projectId && projectIds.has(e.projectId) && !isPassThrough(e)) {
+      directAllTimeByProject.set(e.projectId, (directAllTimeByProject.get(e.projectId) || 0) + amt);
+    }
+    if (d < start) continue;
     if (e.projectId && projectIds.has(e.projectId)) {
       const cur = directByProject.get(e.projectId) || { direct: 0, passThrough: 0 };
-      if (passCats.has((e.category || '').toLowerCase())) cur.passThrough += amt; else cur.direct += amt;
+      if (isPassThrough(e)) cur.passThrough += amt; else cur.direct += amt;
       directByProject.set(e.projectId, cur);
     } else {
       otherFixed += amt;
       expensesWithoutProject.count += 1; expensesWithoutProject.amount += amt;
     }
   }
+
+  // ── All-time labour per project, as of the period end: the same rates as the
+  // period allocation, over EVERY entry (`entryHours` semantics: open timers
+  // skipped, duration or start/end). Plan vs actual, the budget alert and the
+  // EAC compare against a plan made for the whole engagement, so feeding them
+  // the period slice made a 90 %-consumed project read as 10 % in a quiet month
+  // and a month with no hours but one invoice read as a 99 % EAC margin.
+  const allTimeLabor = laborByProjectForEntries(entries, input.members, settings, input.rateCard, end);
+  const emptyLabor = (id: string): ProjectLabor => ({ projectId: id, hours: 0, cost: 0, byMember: [], byRole: {} });
 
   // ── Invoices: per project (billed / collected in period) + unlinked per customer ──
   const invByProject = new Map<string, { invoiced: number; collected: number }>();
@@ -266,6 +300,7 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
   // ── Project lines ──
   const projectsWithoutPlan: string[] = [];
   const lines = new Map<string, ClientProjectLine[]>();
+  const rowProjectIds = new Set<string>();
   let internalProjectLabor = 0;
   for (const p of projects) {
     const pl = labor.byProject.get(p.id);
@@ -276,24 +311,17 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
     const laborCost = pl?.cost || 0;
     if (!p.customerId) { internalProjectLabor += laborCost; continue; }
     if (earned === 0 && hours === 0 && dx.direct === 0 && dx.passThrough === 0 && iv.invoiced === 0 && iv.collected === 0) continue;
+    rowProjectIds.add(p.id);
     const bt = billingTypeOf(p);
     const plannedHours = plannedHoursOf(p);
     if (bt === 'one-time' && hours > 0 && plannedHours === 0) projectsWithoutPlan.push(p.name);
-    // All-time labour for EAC (the plan is for the whole engagement, not the month).
-    let allHours = 0, allCost = 0;
-    if (bt === 'one-time') {
-      const rateGuess = hours > 0 ? laborCost / hours : 0;
-      for (const e of entries) {
-        if (e.projectId !== p.id) continue;
-        const at = parseDate(e.startTime)?.getTime() ?? 0;
-        if (at > end.getTime()) continue;
-        const h = e.duration && e.duration > 0 ? e.duration / 60 : 0;
-        allHours += h; allCost += h * rateGuess;
-      }
-    }
-    const pva = planVsActual(p, pl, settings);
+    // Cumulative view for the plan: all-time hours × the real rates (never a
+    // rate guessed from the period slice) and all-time direct expenses — the
+    // same figures the `project-spend-rollup` cron alerts on.
+    const allLabor = allTimeLabor.get(p.id) || emptyLabor(p.id);
+    const pva = planVsActual(p, allLabor, settings);
     const eac = bt === 'one-time' && plannedHours > 0
-      ? projectEac(p, { hours: allHours, cost: allCost }, dx.direct, settings)
+      ? projectEac(p, { hours: allLabor.hours, cost: allLabor.cost }, directAllTimeByProject.get(p.id) || 0, settings)
       : null;
     const wip = projectWip(p, entries, invoices, end);
     const grossProfit = earned - dx.passThrough - laborCost - dx.direct;
@@ -353,8 +381,14 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
     });
   }
 
-  // ── Overhead: other fixed + unabsorbed payroll, shared by labour hours (or revenue) ──
-  const overheadPool = otherFixed + labor.unabsorbed;
+  // ── Overhead: other fixed + every lek of payroll no client row carries, shared by labour hours (or revenue) ──
+  // `unabsorbed` is the payroll nobody logged; `laborOutsideRows` is the labour
+  // that WAS logged but on no client row — no project, an internal project, a
+  // project outside the period. Both are real cost of the period; pooling only
+  // the first left the second in no row and no pool.
+  const outside = laborOutsideRows(labor, rowProjectIds);
+  const poolLabor = Math.max(0, labor.unabsorbed) + outside.total;
+  const overheadPool = otherFixed + poolLabor;
   const totalHours = rows.reduce((s, r) => s + r.hours, 0);
   const totalNetRevenue = rows.reduce((s, r) => s + Math.max(0, r.netRevenue), 0);
   const useHours = settings.overheadBasis === 'labor-hours' && totalHours > 0;
@@ -388,6 +422,10 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
   // cost of the period (payroll + other expenses + project-direct expenses).
   const allDirect = Array.from(directByProject.values()).reduce((s, v) => s + v.direct, 0);
   const allPass = Array.from(directByProject.values()).reduce((s, v) => s + v.passThrough, 0);
+  // Direct/pass-through money on projects with no client row (internal work):
+  // in the operating result, in no row, in no pool — named so the
+  // reconciliation can state it instead of silently not adding up.
+  const directOutsideRows = allDirect + allPass - totals.directExpenses - totals.passThrough;
   // Company revenue: on the collected basis every lek that arrived (the hero's
   // "Para që hyri"); on the earned basis the clients' earned revenue — an
   // internal project's `budget` is never money a client will pay, so it is out.
@@ -407,6 +445,9 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
       unabsorbedLabor: labor.unabsorbed,
       overAbsorbedLabor: labor.overAbsorbed,
       internalProjectLabor,
+      laborOutsideRows: outside.total,
+      poolLabor,
+      directOutsideRows: Math.max(0, directOutsideRows),
       overheadPool,
       unallocatedOverhead: Math.max(0, overheadPool - allocated),
       operatingProfit,
@@ -442,7 +483,8 @@ export function snapshotForClose(result: ClientProfitabilityResult) {
     totals: Object.fromEntries(Object.entries(result.totals).map(([k, v]) => [k, v == null ? null : round(v)])),
     company: {
       otherFixed: round(result.company.otherFixed), payroll: round(result.company.payroll), payrollBasis: result.company.payrollBasis,
-      unabsorbedLabor: round(result.company.unabsorbedLabor), overheadPool: round(result.company.overheadPool),
+      unabsorbedLabor: round(result.company.unabsorbedLabor), laborOutsideRows: round(result.company.laborOutsideRows),
+      poolLabor: round(result.company.poolLabor), overheadPool: round(result.company.overheadPool),
       operatingProfit: round(result.company.operatingProfit),
     },
     clients: result.rows.map(r => ({
@@ -462,7 +504,7 @@ export function monthCloseChecks(result: ClientProfitabilityResult): string[] {
   if (result.basis === 'none') out.push('Asnjë orë e regjistruar në këtë muaj — tabela është vlerësim.');
   if (w.membersWithoutRate.length) out.push(`Pa kosto/orë: ${w.membersWithoutRate.join(', ')} (vendos pagën ose tarifën).`);
   if (w.projectsWithoutPlan.length) out.push(`Projekte pa buxhet orësh: ${w.projectsWithoutPlan.slice(0, 5).join(', ')}${w.projectsWithoutPlan.length > 5 ? '…' : ''}.`);
-  if (w.hoursWithoutProject > 0) out.push(`${Math.round(w.hoursWithoutProject)} orë pa projekt (kosto e brendshme).`);
+  if (w.hoursWithoutProject > 0) out.push(`${Math.round(w.hoursWithoutProject)} orë pa projekt (kosto e brendshme, në overhead).`);
   if (w.unlinkedInvoices.count) out.push(`${w.unlinkedInvoices.count} fatura pa projekt (${Math.round(w.unlinkedInvoices.amount).toLocaleString()} L).`);
   if (result.company.overAbsorbedLabor > 0) out.push(`Orët × tarifat e kalojnë pagën reale me ${Math.round(result.company.overAbsorbedLabor).toLocaleString()} L — kontrollo tarifat/kapacitetin.`);
   if (result.company.payrollBasis === 'profile') out.push('Pagat e këtij muaji janë nga plani, jo nga pagesa të regjistruara.');

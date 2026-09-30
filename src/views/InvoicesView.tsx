@@ -63,8 +63,9 @@ import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import { getRateToAll, getTimestampMs, canSeeFinancials, currencySymbol } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
 import { getStatusColor, getInvoiceStatusLabel } from '../lib/statusColors';
-import { projectPickerLabel, sortArchivedLast } from '../lib/projectArchive';
-import { nextInvoiceOccurrence, projectAlsoBills, invoiceBillingPeriodKey } from '../lib/finance/recurringInvoices';
+import { projectPickerLabel, sortArchivedLast, resumedBillingClaimPatch } from '../lib/projectArchive';
+import { projectAlsoBills, invoiceBillingPeriodKey, resolveRecurringSchedule, resumedInvoiceClaimPatch } from '../lib/finance/recurringInvoices';
+import { invoiceStatusTransition } from '../lib/finance/invoiceStatus';
 import { zonedParts, zonedDate } from '../lib/recurringUtils';
 import { computeInvoiceTotals, storedInvoiceTotals } from '../lib/finance/invoiceTotals';
 import { pauseProjectBillingPatch, resumeProjectBillingPatch, stopProjectBillingPatch } from '../lib/finance/recurringBilling';
@@ -150,8 +151,20 @@ const initialsOf = (name?: string | null): string => {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 };
 
+/**
+ * Statuses that SETTLE money. Firestore rules (`invoiceSettlementAllowed`) let only
+ * Admin / Manager / owner write them — plus `paidAt`, `paidAmount`, `partialPayments`
+ * and the `payments` ledger — so the UI hides those choices from a Member instead of
+ * letting the write fail with a permission error after the form was filled in.
+ */
+const SETTLEMENT_STATUSES: ReadonlyArray<Invoice['status']> = ['Paid', 'Partial', 'Cancelled'];
+function canSettleInvoices(p: ReturnType<typeof usePermissions>): boolean {
+  return !!(p.isAdmin || p.isManager || p.isOwner || p.isSuperAdmin);
+}
+
 const InvoicesView: React.FC = () => {
   const permissions = usePermissions();
+  const canSettle = canSettleInvoices(permissions);
   const logActivity = useActivityLogger();
   const { user } = useAuth();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -286,7 +299,12 @@ const InvoicesView: React.FC = () => {
 
   const handleToggleSeriesPause = async (project: Project) => {
     const paused = (project as any).isRecurringPaused;
-    await seriesProjectMutation.update(project.id, (paused ? resumeProjectBillingPatch() : pauseProjectBillingPatch()) as any);
+    // Resuming re-points a stale period claim (same law as restoring from the
+    // archive), so the first run bills the current period once and counts
+    // nothing that was deliberately paused as "skipped".
+    await seriesProjectMutation.update(project.id, (paused
+      ? { ...resumeProjectBillingPatch(), ...resumedBillingClaimPatch(project as any, new Date()) }
+      : pauseProjectBillingPatch()) as any);
     toast({
       title: paused ? '▶ Faturimi u rifillua' : '⏸ Faturimi u pauzua',
       description: paused
@@ -331,8 +349,16 @@ const InvoicesView: React.FC = () => {
 
   // Pause/resume generation without ending the series.
   const handleToggleInvoicePause = async (invoice: Invoice) => {
-    await invoiceMutation.update(invoice.id, { isRecurringPaused: !(invoice as any).isRecurringPaused } as any);
-    toast({ title: (invoice as any).isRecurringPaused ? 'Përsëritja u rifillua' : 'Përsëritja u pauzua' });
+    const resuming = !!(invoice as any).isRecurringPaused;
+    // Resuming re-points the claim and moves the next date into the current
+    // period (`resumedInvoiceClaimPatch`): a series paused in March and resumed
+    // in September otherwise reports "5 periudha pa faturë" on its first run —
+    // months that were deliberately NOT billed.
+    await invoiceMutation.update(invoice.id, {
+      isRecurringPaused: !resuming,
+      ...(resuming ? resumedInvoiceClaimPatch(invoice as any, new Date()) : {}),
+    } as any);
+    toast({ title: resuming ? 'Përsëritja u rifillua' : 'Përsëritja u pauzua' });
   };
 
   // Link (or unlink) an invoice to a project without touching any other field.
@@ -764,14 +790,30 @@ const InvoicesView: React.FC = () => {
       const whmcsQueue = paidAt && isWhmcsInvoice(drawerInvoice)
         ? whmcsPendingPatch(drawerInvoice, { key: 'full', method: drawerInvoice.paymentMethod || 'Manual', paidAt })
         : {};
+      // Reverting Paid/Partial clears the settlement fields (+ the ledger below)
+      // and cancelling a WHMCS mirror stamps `locallyCancelled` — otherwise the
+      // sync resurrects it. One helper for every status-writing path.
+      const transition = invoiceStatusTransition(drawerInvoice, drawerStatus as Invoice['status']);
       await invoiceMutation.update(drawerInvoice.id, {
         customerId: drawerCustomer,
         projectId: drawerProject,
         dueDate: fromDateInput(drawerDue),
-        status: drawerStatus,
+        ...transition.patch,
         ...(paidAt ? { paidAt } : {}),
         ...whmcsQueue,
       } as any);
+      if (transition.clearPaymentLedger) {
+        try {
+          await deleteInvoicePaymentRows(drawerInvoice.id, (drawerInvoice as any).businessId || activeBusinessId);
+        } catch (err) {
+          console.error('[InvoicesView] fshirja e arkëtimeve pas kthimit të statusit dështoi:', err);
+          toast({
+            title: 'Statusi u ndryshua, por arkëtimet mbetën',
+            description: 'Rreshtat e pagesave nuk u fshinë — fshiji nga Arkëtimet.',
+            variant: 'destructive',
+          });
+        }
+      }
       if (paidAt) await notifyInvoicePaid(drawerInvoice, 'Faturë e Paguar ✓');
       if (paidAt) void syncWhmcsPayment(drawerInvoice);
       toast({ title: 'Ndryshimet u ruajtën' });
@@ -1350,7 +1392,7 @@ const InvoicesView: React.FC = () => {
                         <CreditCard className="w-4 h-4 mr-2" /> Paguaj me Stripe
                       </DropdownMenuItem>
                     )}
-                    {permissions.canEdit && invoice.status !== 'Paid' && invoice.status !== 'Draft' && (
+                    {permissions.canEdit && canSettle && invoice.status !== 'Paid' && invoice.status !== 'Draft' && (
                       <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setPartialPaymentInvoice(invoice); setPartialAmount(''); setPartialNote(''); setPartialMethod('Cash'); }}>
                         <DollarSign className="w-4 h-4 mr-2" /> Pagesë Pjesore
                       </DropdownMenuItem>
@@ -1648,7 +1690,7 @@ const InvoicesView: React.FC = () => {
                                 <Send className="w-4 h-4 mr-2" /> Dërgo kujtesë pagese
                               </DropdownMenuItem>
                             )}
-                            {permissions.canEdit && invoice.status !== 'Paid' && invoice.status !== 'Draft' && (
+                            {permissions.canEdit && canSettle && invoice.status !== 'Paid' && invoice.status !== 'Draft' && (
                               <DropdownMenuItem onClick={() => { setPartialPaymentInvoice(invoice); setPartialAmount(''); setPartialNote(''); setPartialMethod('Cash'); }}>
                                 <DollarSign className="w-4 h-4 mr-2" /> Pagesë e pjesshme
                               </DropdownMenuItem>
@@ -1758,8 +1800,15 @@ const InvoicesView: React.FC = () => {
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Statusi</label>
                 <select value={drawerStatus} onChange={(e) => setDrawerStatus(e.target.value)} disabled={!permissions.canEdit} className="mt-1 w-full h-9 px-2 border border-border rounded-md bg-background text-sm">
-                  {['Draft', 'Pending', 'Partial', 'Paid', 'Overdue', 'Cancelled'].map((s) => <option key={s} value={s}>{getInvoiceStatusLabel(s)}</option>)}
+                  {['Draft', 'Pending', 'Partial', 'Paid', 'Overdue', 'Cancelled'].map((s) => (
+                    <option key={s} value={s} disabled={!canSettle && SETTLEMENT_STATUSES.includes(s as Invoice['status']) && s !== drawerInvoice.status}>
+                      {getInvoiceStatusLabel(s)}
+                    </option>
+                  ))}
                 </select>
+                {!canSettle && (
+                  <p className="mt-1 text-[11px] text-muted-foreground">Shënimin si paguar / pjesërisht / anuluar e bën një Admin ose Manager.</p>
+                )}
                 {/* The payment DATE is what makes cash-basis reporting land in the
                     right month — asked for here rather than defaulted silently. */}
                 {drawerStatus === 'Paid' && drawerInvoice.status !== 'Paid' && (
@@ -2247,6 +2296,11 @@ const WhmcsSyncBadge: React.FC<{ invoice: Invoice; detailed?: boolean }> = ({ in
 const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null; onDirtyChange?: (dirty: boolean) => void }> = ({ onClose, editInvoice, onDirtyChange }) => {
   const isEditing = !!editInvoice;
   const logActivity = useActivityLogger();
+  const formPermissions = usePermissions();
+  const canSettle = canSettleInvoices(formPermissions);
+  // A settlement status the caller may not write is disabled unless it is the
+  // invoice's CURRENT status (an unchanged spread still passes the rules).
+  const settlementLocked = (s: Invoice['status']) => !canSettle && SETTLEMENT_STATUSES.includes(s) && s !== editInvoice?.status;
   const [invoiceDate, setInvoiceDate] = useState<Date | undefined>(editInvoice?.invoiceDate ? new Date(editInvoice.invoiceDate) : new Date());
   const [dueDate, setDueDate] = useState<Date | undefined>(editInvoice?.dueDate ? new Date(editInvoice.dueDate) : undefined);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>(editInvoice?.customerId || '');
@@ -2290,6 +2344,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     if (!raw) return undefined;
     return raw?.toDate ? raw.toDate() : new Date(raw);
   });
+  // Only the date PICKER sets this. A value the form filled in itself is not a
+  // pick: the submit used to read the auto-filled due date as an explicit
+  // choice and anchored the series on it (net-30 from 31 Jan → 2 Mar, February
+  // never billed). See `resolveRecurringSchedule`.
+  const [recurringDateTouched, setRecurringDateTouched] = useState(false);
   const [recurringEndDate, setRecurringEndDate] = useState<Date | undefined>(() => {
     const raw = (editInvoice as any)?.recurringEndDate;
     if (!raw) return undefined;
@@ -2353,9 +2412,18 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       }
       getNextInvoiceNumber(scopeId, maxNum)
         .then(setInvoiceNumber)
-        .catch(() => {
-          // Fallback to client-side if transaction fails
-          setInvoiceNumber(`FAT-${String(maxNum + 1).padStart(3, '0')}`);
+        .catch((err: any) => {
+          // Fallback to client-side if the counter transaction fails. The
+          // fallback is NOT atomic — two people opening the form at once get the
+          // same number — so it is said out loud, never swallowed.
+          const fallback = `FAT-${String(maxNum + 1).padStart(3, '0')}`;
+          console.error('[InvoicesView] numëratori atomik i faturave dështoi:', err?.code || err);
+          setInvoiceNumber(fallback);
+          toast({
+            title: 'Numri u caktua pa numërator atomik — kontrollo dublikatët',
+            description: `U caktua ${fallback} nga lista lokale (${err?.code || err?.message || 'gabim'}).`,
+            variant: 'destructive',
+          });
         });
     }
   }, [allInvoices, invoicesLoading, teamId, activeBusinessId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2516,47 +2584,31 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       const ownPeriodDate = seriesAnchorDate;
 
       // The series' billing day, fixed for its whole life, read in the business
-      // zone (`zonedParts`) so the browser's own timezone cannot shift it.
-      // Precedence:
-      //  1. the stored anchor, while the user has not touched the next date —
-      //     re-deriving it on every unrelated edit IS the drift it prevents;
-      //  2. the day of a next date the user EXPLICITLY picked: that is intent,
-      //     and it is how a series the cron clamped to the 28th gets back to 31;
-      //  3. otherwise the ANCHOR DATE's own day.
-      //
-      // Rung 3 used to be `resolvedNextRecurring.getDate()` — the output of
-      // `nextInvoiceOccurrence`, i.e. a date that has ALREADY been clamped by a
-      // short month. A monthly invoice dated 31 January was therefore born with
-      // anchor 28 and could never return to the 31st: the exact drift
-      // `recurringAnchorDay` exists to prevent, baked in at creation.
-      const storedAnchorRaw = Number((editInvoice as any)?.recurringAnchorDay);
-      const storedAnchor = Number.isFinite(storedAnchorRaw) && storedAnchorRaw >= 1 && storedAnchorRaw <= 31
-        ? Math.round(storedAnchorRaw)
-        : null;
+      // zone so the browser's own timezone cannot shift it.
+      // Resolved by `resolveRecurringSchedule` (unit-tested): a date the user
+      // PICKED wins; otherwise the stored anchor/next date on edit; otherwise the
+      // invoice date's own day and one cycle after it (clamped through the shared
+      // helper — never `setMonth(+1)`). `recurringDateTouched` is what separates
+      // a pick from a value the form showed back.
       const storedNextRaw = (editInvoice as any)?.nextRecurringDate;
-      const storedNextMs = storedNextRaw
-        ? (storedNextRaw?.toDate ? storedNextRaw.toDate() : new Date(storedNextRaw)).getTime()
+      const storedNext: Date | null = storedNextRaw
+        ? (storedNextRaw?.toDate ? storedNextRaw.toDate() : new Date(storedNextRaw))
         : null;
-      const pickedNext = nextRecurringDate ?? null;
-      const nextDateUntouched = isEditing
-        && storedNextMs != null
-        && pickedNext?.getTime() === storedNextMs;
-      const anchorDay = !isRecurring
-        ? undefined
-        : (nextDateUntouched && storedAnchor != null)
-          ? storedAnchor
-          : pickedNext
-            ? zonedParts(pickedNext).day
-            : (storedAnchor ?? zonedParts(seriesAnchorDate).day);
+      const schedule = isRecurring
+        ? resolveRecurringSchedule({
+            frequency: recurringFrequency,
+            invoiceDate: seriesAnchorDate,
+            pickedNext: recurringDateTouched ? (nextRecurringDate ?? null) : null,
+            storedAnchorDay: isEditing ? (editInvoice as any)?.recurringAnchorDay : null,
+            storedNext: isEditing && (editInvoice as any)?.isRecurring ? storedNext : null,
+          })
+        : null;
+      const anchorDay = schedule?.anchorDay;
 
       // The invoice being saved IS the first occurrence of its own series, and it
       // covers its own period. Claiming that period is what stops the cron from
-      // billing it a second time. The default next date is one full cycle after
-      // the same anchor, clamped through the SHARED helper with the anchor day
-      // (never `setMonth(+1)`, which overflows a 31st into the month after next).
-      const resolvedNextRecurring = isRecurring
-        ? (pickedNext || nextInvoiceOccurrence(seriesAnchorDate, recurringFrequency, anchorDay))
-        : null;
+      // billing it a second time.
+      const resolvedNextRecurring = schedule?.nextRecurringDate ?? null;
       // On edit the claim is kept as-is, EXCEPT when the frequency changed: a
       // monthly key ('2026-09') can never equal a weekly one, so the stale claim
       // would silently stop blocking and the new cycle could re-bill a period
@@ -2610,6 +2662,29 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         lastGeneratedPeriodKey: resolvedPeriodClaim,
       };
 
+      // Switching a STOPPED or PAUSED series back on without touching the date:
+      // the stop nulled `nextRecurringDate`, so the default above re-seeds it
+      // from the invoice date — possibly a year back — and the first cron run
+      // reports every period since as "pa faturë". Re-point the claim to the
+      // previous period and the next date into the current one instead (same
+      // law as `resumedBillingClaimPatch` for projects).
+      const wasRecurringLive = !!(editInvoice as any)?.isRecurring && !(editInvoice as any)?.isRecurringPaused;
+      const nowRecurringLive = isRecurring && !isRecurringPaused;
+      if (isEditing && nowRecurringLive && !wasRecurringLive && !recurringDateTouched) {
+        Object.assign(invoiceData, resumedInvoiceClaimPatch({
+          recurringFrequency,
+          nextRecurringDate: invoiceData.nextRecurringDate,
+          lastGeneratedPeriodKey: invoiceData.lastGeneratedPeriodKey,
+          recurringAnchorDay: invoiceData.recurringAnchorDay,
+        }, new Date()));
+      }
+
+      // Status bookkeeping shared with the drawer: leaving Paid/Partial clears
+      // the settlement (+ the ledger after the write), Cancelled on a WHMCS
+      // mirror stamps `locallyCancelled`.
+      const statusTransition = isEditing ? invoiceStatusTransition(editInvoice, status as Invoice['status']) : null;
+      if (statusTransition) Object.assign(invoiceData, statusTransition.patch);
+
       // ── `paidAt` belongs to BOTH paths ─────────────────────────────────────
       // This block used to live inside `if (isEditing)`, yet the CREATE form
       // offers status "Paguar" and its own "Data e Pagesës" picker: a receipt
@@ -2637,6 +2712,18 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
 
         // Update existing invoice
         await invoiceMutation.update(editInvoice!.id, invoiceData);
+        if (statusTransition?.clearPaymentLedger) {
+          try {
+            await deleteInvoicePaymentRows(editInvoice!.id, (editInvoice as any)?.businessId || activeBusinessId);
+          } catch (err) {
+            console.error('[InvoicesView] fshirja e arkëtimeve pas kthimit të statusit dështoi:', err);
+            toast({
+              title: 'Statusi u ndryshua, por arkëtimet mbetën',
+              description: 'Rreshtat e pagesave nuk u fshinë — fshiji nga Arkëtimet.',
+              variant: 'destructive',
+            });
+          }
+        }
         if (whmcsNewlyPaid && currentUser) {
           void pushWhmcsPayment(() => currentUser.getIdToken(), editInvoice!.id).then((r) => {
             if (!r.ok) toast({ title: 'Pagesa u ruajt, por WHMCS nuk u përditësua', description: `${r.error || 'Gabim'} — sinkronizimi do ta riprovojë vetë.`, variant: 'destructive' });
@@ -3025,12 +3112,15 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
             <SelectContent>
               <SelectItem value="Draft">{getInvoiceStatusLabel('Draft')}</SelectItem>
               <SelectItem value="Pending">{getInvoiceStatusLabel('Pending')}</SelectItem>
-              <SelectItem value="Partial">{getInvoiceStatusLabel('Partial')}</SelectItem>
-              <SelectItem value="Paid">{getInvoiceStatusLabel('Paid')}</SelectItem>
+              <SelectItem value="Partial" disabled={settlementLocked('Partial')}>{getInvoiceStatusLabel('Partial')}</SelectItem>
+              <SelectItem value="Paid" disabled={settlementLocked('Paid')}>{getInvoiceStatusLabel('Paid')}</SelectItem>
               <SelectItem value="Overdue">{getInvoiceStatusLabel('Overdue')}</SelectItem>
-              <SelectItem value="Cancelled">{getInvoiceStatusLabel('Cancelled')}</SelectItem>
+              <SelectItem value="Cancelled" disabled={settlementLocked('Cancelled')}>{getInvoiceStatusLabel('Cancelled')}</SelectItem>
             </SelectContent>
           </Select>
+          {!canSettle && (
+            <p className="mt-1 text-[11px] text-muted-foreground">Shënimin si paguar / pjesërisht / anuluar e bën një Admin ose Manager.</p>
+          )}
           {status === 'Paid' && (
             <div className="mt-2">
               <Label className="text-xs text-muted-foreground">Data e Pagesës</Label>
@@ -3158,9 +3248,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
               deadlock: the checkbox is frozen on, and saving with it on is blocked
               by the double-billing guard. The only exits were the row menu or
               waiting for the cron. */}
+          {/* Ticking this no longer copies the DUE date into the picker: the due
+              date is a payment term, not the cycle. The picker shows the computed
+              default (invoice date + one cycle) until the user picks a date. */}
           <input type="checkbox" checked={isRecurring} disabled={!!billingProjectConflict && !isRecurring} onChange={e => {
             setIsRecurring(e.target.checked);
-            if (e.target.checked && !nextRecurringDate) setNextRecurringDate(dueDate || undefined);
             onDirtyChange?.(true);
           }} className="h-4 w-4 accent-primary disabled:opacity-40" />
         </div>
@@ -3187,14 +3279,29 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
               <PopoverTrigger asChild>
                 <Button variant="outline" size="sm" className="w-full justify-start text-sm">
                   <CalendarIcon className="mr-2 h-3.5 w-3.5" />
-                  {nextRecurringDate ? nextRecurringDate.toLocaleDateString() : 'Zgjidh datën'}
+                  {(() => {
+                    // Preview of what the submit will save while the picker is
+                    // untouched — the same helper, so the two cannot disagree.
+                    const shown = recurringDateTouched
+                      ? nextRecurringDate
+                      : resolveRecurringSchedule({
+                          frequency: recurringFrequency,
+                          invoiceDate: new Date(invoiceDate || dueDate || new Date()),
+                          pickedNext: null,
+                          storedAnchorDay: isEditing ? (editInvoice as any)?.recurringAnchorDay : null,
+                          storedNext: isEditing && (editInvoice as any)?.isRecurring ? (nextRecurringDate ?? null) : null,
+                        }).nextRecurringDate;
+                    return shown ? shown.toLocaleDateString() : 'Zgjidh datën';
+                  })()}
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0">
-                <Calendar mode="single" selected={nextRecurringDate} onSelect={d => { setNextRecurringDate(d); onDirtyChange?.(true); }} />
+                <Calendar mode="single" selected={nextRecurringDate} onSelect={d => { setNextRecurringDate(d); setRecurringDateTouched(true); onDirtyChange?.(true); }} />
               </PopoverContent>
             </Popover>
-            <p className="text-[10px] text-muted-foreground mt-1">Kroni do gjenerojë faturën e re në këtë datë</p>
+            <p className="text-[10px] text-muted-foreground mt-1">
+              {recurringDateTouched ? 'Kroni do gjenerojë faturën e re në këtë datë' : 'Një cikël pas datës së faturës — zgjidh një datë tjetër vetëm nëse do ta ndryshosh'}
+            </p>
           </div>
           <div>
             <Label className="text-xs text-muted-foreground mb-1 block">Përsërit deri më (opsionale)</Label>

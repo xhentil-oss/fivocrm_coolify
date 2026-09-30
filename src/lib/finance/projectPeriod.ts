@@ -152,9 +152,19 @@ export function memberOnPayrollBetween(member: TeamMember, start: Date, end: Dat
 
 /**
  * Months a monthly retainer was active inside a period, and the fee it earned
- * (the exact rule projectPnl/departmentPnl apply: span = createdAt..retainerEarningEnd,
- * clipped to the period, whole months, capped at the period's month count; a span
- * that ended BEFORE the period opened earns nothing).
+ * — the ONE rule projectPnl, departmentPnl, revenueRecognition and the client
+ * table apply: span = createdAt..retainerEarningEnd, clipped to the period,
+ * whole months, capped at the period's month count; a span that ended BEFORE
+ * the period opened earns nothing.
+ *
+ * A month the PERIOD END cuts short ("Ky muaj" ends now, a year view ends
+ * today) earns its elapsed share (`monthCoverage`), exactly as
+ * `proratePlanPayroll` charges the plan payroll of a month still in progress —
+ * a whole month of fee against ten days of cost read as a margin nobody had.
+ * Two things stay whole on purpose: every month the period covers entirely,
+ * and a month the RETAINER's own end cuts (cancelled on the 10th — the fee was
+ * billed whole). A period that ends on a month end is byte-for-byte the
+ * legacy result.
  */
 export function retainerRevenueInPeriod(
   p: Project,
@@ -167,6 +177,13 @@ export function retainerRevenueInPeriod(
   const projEnd = retainerEarningEnd(p, periodEnd);
   const s = projStart > periodStart ? projStart : periodStart;
   const e = projEnd < periodEnd ? projEnd : periodEnd;
-  const active = e >= s ? Math.min(monthsBetween(s, e), periodMonths) : 0;
+  if (e < s) return { revenue: 0, activeMonths: 0 };
+  let active = Math.min(monthsBetween(s, e), periodMonths);
+  // Only the period end can cut the last month: `e === periodEnd` means the
+  // retainer was still earning when the period closed.
+  if (active >= 1 && projEnd.getTime() >= periodEnd.getTime()) {
+    const share = monthCoverage(periodEnd.getFullYear(), periodEnd.getMonth(), periodStart, periodEnd);
+    if (share > 0 && share < 1) active = active - 1 + share;
+  }
   return { revenue: feeAll * active, activeMonths: active };
 }

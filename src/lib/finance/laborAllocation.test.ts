@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Expense, TeamMember, TimeEntry } from '../../types';
-import { allocateLabor } from './laborAllocation';
+import { allocateLabor, laborOutsideRows, poolLabor, laborByProjectForEntries, laborForEntries } from './laborAllocation';
 import { payrollBetween } from './payroll';
 
 const d = (iso: string) => new Date(iso);
@@ -121,5 +121,63 @@ describe('allocateLabor', () => {
     const a = allocateLabor({ timeEntries: [entry('ana', 'pX', 30)], members: [ana], expenses: rows, period, settings });
     expect(a.payroll.total).toBe(100_000);
     expect(a.unabsorbed).toBe(70_000);
+  });
+});
+
+// ── Sep 2026 audit: labour no row carries goes to the pool, never nowhere ──
+describe('laborOutsideRows / poolLabor', () => {
+  const ana = member('ana', 120_000);   // 1 000 L/h
+  const besi = member('besi', 96_000);  //   800 L/h
+  const members = [ana, besi];
+
+  it('hours with no project and hours on a project outside the rows are both pooled', () => {
+    const a = allocateLabor({
+      timeEntries: [
+        entry('ana', 'pX', 30),          // a row the consumer has
+        entry('ana', undefined, 5),      // no project at all
+        entry('besi', 'archived', 10),   // a project the consumer has no row for
+      ],
+      members, expenses: [], period, settings,
+    });
+    const rows = new Set(['pX']);
+    const outside = laborOutsideRows(a, rows);
+    expect(outside.internal).toBe(5_000);
+    expect(outside.absentProjects).toBe(8_000);
+    expect(outside.absentHours).toBe(10);
+    expect(outside.absentProjectIds).toEqual(['archived']);
+    expect(outside.total).toBe(13_000);
+    // Σ rows' labour + pool labour == payroll (no over-absorption here).
+    const payroll = payrollBetween(members, [], period.start, period.end).total;
+    const rowLabor = a.byProject.get('pX')!.cost;
+    expect(rowLabor + poolLabor(a, rows)).toBeCloseTo(payroll, 6);
+    // Pooling `unabsorbed` alone would have dropped 13 000 of real cost.
+    expect(rowLabor + a.unabsorbed).toBeLessThan(payroll);
+  });
+
+  it('with every project on a row, only the internal hours are outside', () => {
+    const a = allocateLabor({ timeEntries: [entry('ana', 'pX', 30), entry('besi', undefined, 2)], members, expenses: [], period, settings });
+    const outside = laborOutsideRows(a, new Set(['pX']));
+    expect(outside).toMatchObject({ internal: 1_600, absentProjects: 0, absentHours: 0, absentProjectIds: [], total: 1_600 });
+  });
+});
+
+describe('laborByProjectForEntries / laborForEntries (all-time, as of a date)', () => {
+  const ana = member('ana', 120_000);
+  it('costs every entry up to `asOf` with the real rates, grouped by project, `entryHours` semantics', () => {
+    const entries = [
+      entry('ana', 'web', 40, '2026-08-10'),
+      entry('ana', 'web', 10, '2026-09-10'),
+      entry('ana', 'web', 99, '2026-10-10'),                              // after asOf → out
+      { ...entry('ana', 'web', 5, '2026-09-11'), endTime: undefined, duration: undefined } as any, // open timer → out
+      { ...entry('ana', 'web', 0, '2026-09-12'), duration: undefined, startTime: d('2026-09-12T09:00:00'), endTime: d('2026-09-12T12:00:00') } as any, // start/end only → 3 h
+      entry('ana', 'other', 7, '2026-09-13'),
+      entry('ana', undefined, 2, '2026-09-14'),
+    ];
+    const byProject = laborByProjectForEntries(entries, [ana], settings, null, period.end);
+    expect(byProject.get('web')).toMatchObject({ hours: 53, cost: 53_000 });
+    expect(byProject.get('other')).toMatchObject({ hours: 7, cost: 7_000 });
+    expect(byProject.get('')).toMatchObject({ hours: 2, cost: 2_000 });
+    expect(laborForEntries(entries, [ana], settings, null, 'web', period.end)).toMatchObject({ hours: 53, cost: 53_000 });
+    expect(laborForEntries(entries, [ana], settings, null, undefined, period.end).hours).toBe(62);
   });
 });

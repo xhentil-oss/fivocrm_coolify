@@ -1760,6 +1760,16 @@ function startCronSchedulers(): void {
   // reminder, so a full-collection scan every 15 min was needless read pressure.
   // Everything else: once a day at ~08:00 UTC (same as the old Vercel daily cron).
   scheduleDailyUtc(CRON_DAILY_HOUR, 0, () => { void triggerCronJob('run-all'); });
+  // The money jobs get a tick of their OWN, before run-all. run-all is 27 jobs
+  // inside ONE 60s Vercel invocation: when it is killed, nothing is recorded and
+  // the retainers due that day (billingDayOfMonth) simply do not bill — that is
+  // how the 25 September 2026 invoices went missing. A dedicated call has the
+  // whole 60s to itself. Re-running inside run-all is free: the period key + the
+  // deterministic occurrence id (`create()`) make a second pass a no-op, never a
+  // second invoice or email. 07:00 local: after midnight's day change in Tirane,
+  // before the office opens.
+  scheduleDailyInZone(CRON_LOCAL_TZ, 7, 0, () => { void triggerCronJob('recurring-invoices'); });
+  scheduleDailyInZone(CRON_LOCAL_TZ, 7, 10, () => { void triggerCronJob('recurring-expenses'); });
   // Housekeeping at 03:00 UTC.
   scheduleDailyUtc(3, 0, () => { void triggerCronJob('cleanup-old-notifications'); });
   // Social-media analytics — pulled ONCE per month (last day, 22:00 UTC) to keep

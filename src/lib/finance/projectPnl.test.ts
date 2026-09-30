@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { Project, TeamMember, Expense } from '../../types';
+import type { Project, TeamMember, Expense, TimeEntry } from '../../types';
 import { computeProjectPnl } from './projectPnl';
+import { monthCoverage } from './projectPeriod';
+import { allocateLabor } from './laborAllocation';
+import { payrollBetween } from './payroll';
 
 // Default fixture is a COMPLETED one-time project: that is the state in which a
 // one-time deal's revenue is recognised (point in time), so cost-allocation tests
@@ -130,18 +133,33 @@ describe('computeProjectPnl', () => {
     const projects = [
       mkProject({ id: 'seo', name: 'SEO', budget: 30_000, billingType: 'monthly', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-07-01') }),
     ];
-    const res = computeProjectPnl(projects, [], [], { year: 2026, now: new Date('2026-07-23') });
-    // Jan..Jul = 7 months elapsed → 30k × 7.
+    // A period that ends on a month end is whole months: Jan..Jul = 7 → 30k × 7.
+    const res = computeProjectPnl(projects, [], [], { year: 2026, now: new Date(2026, 6, 31, 23, 59, 59, 999) });
     expect(res.rows[0].billingType).toBe('monthly');
     expect(res.rows[0].activeMonths).toBe(7);
     expect(res.rows[0].revenue).toBe(210_000);
+  });
+
+  it('a month the period END cuts short earns its elapsed share, never the whole fee', () => {
+    // "Ky vit" viewed on 23 July: six whole months plus 22 days of July. A whole
+    // July fee against 22 days of July cost read as a margin nobody had.
+    const now = new Date('2026-07-23');
+    const projects = [
+      mkProject({ id: 'seo', name: 'SEO', budget: 30_000, billingType: 'monthly', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-07-01') }),
+    ];
+    const res = computeProjectPnl(projects, [], [], { year: 2026, now });
+    const july = monthCoverage(2026, 6, new Date(2026, 0, 1), now);
+    expect(july).toBeGreaterThan(0.7);
+    expect(july).toBeLessThan(0.75);
+    expect(res.rows[0].activeMonths).toBeCloseTo(6 + july, 9);
+    expect(res.rows[0].revenue).toBeCloseTo(30_000 * (6 + july), 6);
   });
 
   it('infers monthly billing from isRecurring when billingType is unset', () => {
     const projects = [
       mkProject({ id: 'r', name: 'R', budget: 10_000, isRecurring: true, createdAt: new Date('2026-05-01'), updatedAt: new Date('2026-05-01') }),
     ];
-    const res = computeProjectPnl(projects, [], [], { year: 2026, now: new Date('2026-07-23') });
+    const res = computeProjectPnl(projects, [], [], { year: 2026, now: new Date(2026, 6, 31, 23, 59, 59, 999) });
     // Active May..Jul = 3 months → 30k.
     expect(res.rows[0].billingType).toBe('monthly');
     expect(res.rows[0].activeMonths).toBe(3);
@@ -156,9 +174,26 @@ describe('computeProjectPnl', () => {
       mkProject({ id: 'b', name: 'B', budget: 70_000, billingType: 'monthly', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-07-01') }),
     ];
     const members = [mkMember({ monthlySalary: 100_000 })];
-    const res = computeProjectPnl(projects, members, [], { year: 2026, now: new Date('2026-07-23') });
+    const res = computeProjectPnl(projects, members, [], { year: 2026, now: new Date(2026, 6, 31, 23, 59, 59, 999) });
     expect(res.totals.revenue).toBe(700_000);
     expect(res.fixedPool.total).toBe(700_000);
+    expect(res.totals.profit).toBeCloseTo(0, 3);
+  });
+
+  it('stays break-even on a month-to-date view: the cut month is prorated on BOTH sides', () => {
+    // Revenue of July is its elapsed share — and so is the PLAN payroll of July
+    // (a recorded payment would never be scaled). Prorating only one side would
+    // have turned a break-even year into a loss for three weeks of every month.
+    const now = new Date('2026-07-23');
+    const projects = [
+      mkProject({ id: 'a', name: 'A', budget: 30_000, billingType: 'monthly', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-07-01') }),
+      mkProject({ id: 'b', name: 'B', budget: 70_000, billingType: 'monthly', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-07-01') }),
+    ];
+    const members = [mkMember({ monthlySalary: 100_000 })];
+    const res = computeProjectPnl(projects, members, [], { year: 2026, now });
+    const july = monthCoverage(2026, 6, new Date(2026, 0, 1), now);
+    expect(res.totals.revenue).toBeCloseTo(100_000 * (6 + july), 6);
+    expect(res.fixedPool.total).toBeCloseTo(100_000 * (6 + july), 6);
     expect(res.totals.profit).toBeCloseTo(0, 3);
   });
 
@@ -445,7 +480,7 @@ describe('monthly retainer active span', () => {
     // engagement ended" — reading it as the end stopped a running retainer from
     // earning for the rest of the year.
     const live = retainer({ lastCompletedAt: new Date('2026-03-20') } as any);
-    const res = computeProjectPnl([live], [], [], { year: 2026, now: new Date('2026-07-23') });
+    const res = computeProjectPnl([live], [], [], { year: 2026, now: new Date(2026, 6, 31, 23, 59, 59, 999) });
     expect(res.rows[0].activeMonths).toBe(7);   // Jan..Jul, not Jan..Mar
     expect(res.rows[0].revenue).toBe(350_000);
   });
@@ -455,5 +490,31 @@ describe('monthly retainer active span', () => {
     // the only evidence there is.
     const legacy = retainer({ isRecurring: false, lastCompletedAt: new Date('2026-03-20') } as any);
     expect(computeProjectPnl([legacy], [], [], { year: 2026, now: new Date('2026-07-23') }).rows[0].activeMonths).toBe(3);
+  });
+});
+
+// ── Sep 2026 audit: labour no row carries is pooled, never dropped ──────────
+describe('hours model: labour outside the period rows', () => {
+  const period = { start: new Date(2026, 8, 1), end: new Date(2026, 8, 30, 23, 59, 59, 999) };
+  const settings = { employerCostPct: 0, defaultClientCapacityHours: 120 }; // 120 000 / 120 h = 1 000 L/h
+  const ana = mkMember({ id: 'ana', userId: 'ana', displayName: 'ana', monthlySalary: 120_000 });
+  const entry = (projectId: string | undefined, hours: number): TimeEntry => ({
+    id: `${projectId}-${hours}`, userId: 'ana', projectId, startTime: new Date('2026-09-10T09:00:00'), endTime: new Date('2026-09-10T17:00:00'),
+    duration: hours * 60, createdAt: new Date('2026-09-10'), updatedAt: new Date('2026-09-10'),
+  } as TimeEntry);
+
+  it('hours with no project and hours on a project with no row both land in the fixed pool', () => {
+    const inRow = mkProject({ id: 'pX', name: 'X', status: 'Active', budget: 200_000, billingType: 'monthly', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01') });
+    const labor = allocateLabor({ timeEntries: [entry('pX', 30), entry(undefined, 5), entry('gone', 10)], members: [ana], expenses: [], period, settings });
+    const res = computeProjectPnl([inRow], [ana], [], { range: period, labor, timeEntries: [] });
+    // payroll 120 000; on the row 30 000; no project 5 000; 'gone' 10 000; bench 75 000
+    expect(res.laborBasis).toBe('hours');
+    expect(res.rows[0].laborCost).toBe(30_000);
+    expect(res.fixedPool.laborOutsideRows).toBe(15_000);
+    expect(res.fixedPool.salaries).toBe(75_000 + 15_000);
+    const payroll = payrollBetween([ana], [], period.start, period.end).total;
+    expect(res.rows[0].laborCost + res.fixedPool.salaries).toBeCloseTo(payroll, 6);
+    // and the whole pool reaches the one row
+    expect(res.rows[0].overhead).toBeCloseTo(90_000, 6);
   });
 });

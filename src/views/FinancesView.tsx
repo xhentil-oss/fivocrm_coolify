@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useCollection } from '../hooks/useFirestore';
@@ -45,6 +45,8 @@ import { allocateLabor } from '../lib/finance/laborAllocation';
 import { computeClientProfitability, monthCloseChecks, snapshotForClose } from '../lib/finance/clientProfitability';
 import { computeCapacity } from '../lib/finance/capacity';
 import { monthCloseId } from '../lib/finance/timeEntries';
+import { closeMonthPatch, monthCloseBlockReason, reopenMonthPatch, resultFromSnapshot, snapshotNetDrift } from '../lib/finance/monthClose';
+import { useToast } from '../hooks/use-toast';
 import ClientProfitabilityPanel from '../components/finance/ClientProfitabilityPanel';
 import CapacityCard from '../components/finance/CapacityCard';
 import MonthCloseDialog from '../components/finance/MonthCloseDialog';
@@ -210,8 +212,16 @@ const FinancesView: React.FC = () => {
   const tenantSettings = useTeamSettingsData();
   const { user } = useAuth();
   const closeMutation = useMutation<FinanceMonthClose>('financeMonthCloses');
+  const { toast } = useToast();
 
-  const now = useMemo(() => new Date(), []);
+  // "Now" ticks once a minute. Frozen at mount, a tab left open across midnight
+  // (or month-end) kept reading yesterday's month: the hero, the trend, "Ky
+  // muaj", the closable-month predicate and every overdue count went stale.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(t);
+  }, []);
   // `?tab=clients&period=2026-8` — the day-2 report notification lands here.
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab') === 'clients' ? 'profit' : searchParams.get('tab');
@@ -328,7 +338,12 @@ const FinancesView: React.FC = () => {
         payrollForMonth(teamMembers, exp, w.start, w.end),
         i === 0 ? elapsedFraction : 1,
       );
-      const p = monthProfit(inv, exp, pay, w.start, w.end);
+      // …and cut its window at NOW like the hero does (`curEnd` in `snapshots`):
+      // read to month-end, a prepaid expense dated the 30th sat in the trend's
+      // last point but not in the headline, and the forecast segment — which is
+      // anchored on that point — started from a number the page never showed.
+      const end = i === 0 && w.end > now ? now : w.end;
+      const p = monthProfit(inv, exp, pay, w.start, end);
       out.push({ label: MONTH_LABELS_SQ[w.monthIndex], profit: Math.round(p.profit) });
     }
     return out;
@@ -512,18 +527,56 @@ const FinancesView: React.FC = () => {
   const [closeOpen, setCloseOpen] = useState(false);
   const closeChecks = useMemo(() => monthCloseChecks(clientProfit), [clientProfit]);
   const businessIdForClose = ((teamMembers || []).find(m => (m as any).businessId) as any)?.businessId as string | undefined;
+  const canCloseMonth = !!(permissions.isAdmin || permissions.isOwner) && !!businessIdForClose;
+  // Only a month that has ENDED may be closed (src/lib/finance/monthClose.ts):
+  // the running month's lock would freeze every timesheet for the rest of it
+  // and sign off a partial table. The reason is shown on the button instead.
+  const closeBlock = useMemo(() => monthCloseBlockReason(periodMonthKey, now), [periodMonthKey, now]);
   const confirmClose = useCallback(async (acknowledged: string[]) => {
     if (!periodMonthKey || !businessIdForClose) return;
-    await closeMutation.create({
-      businessId: businessIdForClose,
-      periodKey: periodMonthKey,
-      locked: true,
-      closedAt: new Date(),
-      closedByUserId: user?.uid ?? null,
-      snapshot: snapshotForClose(clientProfit),
-      warnings: acknowledged,
-    } as any, monthCloseId(businessIdForClose, periodMonthKey));
-  }, [periodMonthKey, businessIdForClose, closeMutation, user?.uid, clientProfit]);
+    if (monthCloseBlockReason(periodMonthKey, new Date())) throw new Error('Muaji nuk ka mbaruar ende — mund të mbyllet pas fundit të muajit.');
+    const patch = closeMonthPatch({
+      businessId: businessIdForClose, periodKey: periodMonthKey, userId: user?.uid,
+      snapshot: snapshotForClose(clientProfit), warnings: acknowledged,
+    });
+    const id = monthCloseId(businessIdForClose, periodMonthKey);
+    // A month that was closed, reopened and is being closed AGAIN must keep its
+    // `reopenedAt` / `reopenedByUserId`: `create` is a `setDoc` without merge and
+    // wiped them (and the original `createdAt`), erasing the only evidence the
+    // month had ever been reopened. The rules allow the update (periodKey pinned).
+    if (currentClose) await closeMutation.update(currentClose.id || id, patch as any);
+    else await closeMutation.create(patch as any, id);
+  }, [periodMonthKey, businessIdForClose, closeMutation, user?.uid, clientProfit, currentClose]);
+  // Admin/owner-only: unlock the month (timesheets become editable again). The
+  // close record is UPDATED, never replaced — closedAt and the snapshot survive
+  // as the audit trail, and a later re-close updates the same document.
+  const [reopening, setReopening] = useState(false);
+  const reopenMonth = useCallback(async () => {
+    if (!currentClose || !canCloseMonth) return;
+    if (!window.confirm(`Rihap ${periodLabel}? Orët e këtij muaji do të mund të ndryshohen përsëri; snapshot-i i mbylljes ruhet.`)) return;
+    setReopening(true);
+    try {
+      await closeMutation.update(currentClose.id, reopenMonthPatch(user?.uid) as any);
+      toast({ title: 'Muaji u rihap', description: 'Orët mund të ndryshohen përsëri. Mbylle sërish kur të jetë gati.' });
+    } catch (err: any) {
+      console.error('[Finances] reopen month failed:', err);
+      toast({ title: 'Muaji nuk u rihap', description: `${err?.code ? `${err.code}: ` : ''}${err?.message || 'Nuk ke leje për këtë veprim ose ndodhi një gabim.'}`, variant: 'destructive' });
+    } finally {
+      setReopening(false);
+    }
+  }, [currentClose, canCloseMonth, periodLabel, closeMutation, user?.uid, toast]);
+  // A LOCKED month shows the figures that were signed off, not the live ones —
+  // the snapshot used to be write-only. The drift (live net − closed net) is
+  // reported beside the pill: a non-zero drift means something dated inside the
+  // closed month was written after the close, which the timesheet lock cannot stop.
+  const frozenClientProfit = useMemo(
+    () => (currentClose?.locked ? resultFromSnapshot(currentClose.snapshot, clientProfit) : null),
+    [currentClose, clientProfit],
+  );
+  const closeDrift = useMemo(
+    () => (currentClose?.locked ? snapshotNetDrift(currentClose.snapshot, clientProfit) : null),
+    [currentClose, clientProfit],
+  );
 
   // ── Collected cash, attributed to a department and a person ──
   // The accrual columns (budget/invoiced) say what was EARNED; this says what
@@ -1169,12 +1222,21 @@ const FinancesView: React.FC = () => {
 
             {/* ── Clients first: the owner's question is "sa fitoj nga çdo klient" ── */}
             <ClientProfitabilityPanel
-              result={clientProfit}
+              result={frozenClientProfit ?? clientProfit}
               periodLabel={periodLabel}
               monthKey={periodMonthKey}
-              closeState={currentClose ? { locked: !!currentClose.locked, closedAt: parseDate(currentClose.closedAt) } : null}
-              canClose={!!(permissions.isAdmin || permissions.isOwner) && !!businessIdForClose}
+              closeState={currentClose ? {
+                locked: !!currentClose.locked,
+                closedAt: parseDate(currentClose.closedAt),
+                reopenedAt: parseDate(currentClose.reopenedAt),
+                fromSnapshot: !!frozenClientProfit,
+                liveNetDrift: closeDrift,
+              } : null}
+              canClose={canCloseMonth}
+              closeBlock={closeBlock}
               onCloseMonth={() => setCloseOpen(true)}
+              onReopenMonth={reopenMonth}
+              reopening={reopening}
               onOpenCustomer={(id) => navigate(`/app/customers/${id}`)}
             />
             <MonthCloseDialog

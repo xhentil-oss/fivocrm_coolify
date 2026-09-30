@@ -6,6 +6,7 @@ import { computeDepartmentPnl } from './departmentPnl';
 import { allocateLabor } from './laborAllocation';
 import { calculateExpensesBetween } from './financialAnalytics';
 import { payrollBetween } from './payroll';
+import { monthCoverage } from './projectPeriod';
 
 const d = (iso: string) => new Date(iso);
 const period = { start: new Date(2026, 8, 1), end: new Date(2026, 8, 30, 23, 59, 59, 999) };
@@ -168,5 +169,88 @@ describe('one allocation, every engine', () => {
     expect(pnl.rows[0].laborCost).toBe(0);
     const dept = computeDepartmentPnl(projects, [smm, gd], expenses, { range: period });
     expect(dept.laborBasis).toBe('legacy');
+  });
+});
+
+// ── Sep 2026 audit ─────────────────────────────────────────────────────────
+describe('labour no client row carries is pooled, never dropped', () => {
+  it('hours with no project, on an internal project and on an unknown project all reach the pool', () => {
+    const internal = { ...retainer('int', 'X', 0), customerId: undefined } as Project;
+    const projects = [retainer('pX', 'X', 150_000), internal];
+    const entries = [
+      entry('smm', 'pX', 30),                                                        // the client row: 30 000
+      { ...entry('smm', 'pX', 5, '2026-09-11'), projectId: undefined } as TimeEntry,  // no project: 5 000
+      entry('gd', 'int', 10),                                                        // internal project: 9 000
+      entry('gd', 'gone', 4),                                                        // unknown project: 3 600
+    ];
+    const expenses = [expense('rent', 50_000, 'Rent')];
+    const r = computeClientProfitability({ customers, projects, timeEntries: entries, members: [smm, gd], expenses, invoices: [], period, settings });
+    // plan payroll 120 000 + 108 000 = 228 000; absorbed 42 600 + internal 5 000 → unabsorbed 180 400
+    expect(r.company.payroll).toBe(228_000);
+    expect(r.company.unabsorbedLabor).toBeCloseTo(180_400, 6);
+    expect(r.company.laborOutsideRows).toBeCloseTo(17_600, 6);
+    expect(r.company.internalProjectLabor).toBeCloseTo(9_000, 6);
+    expect(r.company.poolLabor).toBeCloseTo(198_000, 6);
+    expect(r.company.overheadPool).toBeCloseTo(248_000, 6);
+    // every lek of payroll is on a row or in the pool
+    expect(r.totals.directLabor + r.company.poolLabor).toBeCloseTo(r.company.payroll, 6);
+    // …so the client table foots with the company result
+    const sumNet = r.rows.reduce((s, x) => s + x.netProfit, 0);
+    expect(sumNet + r.company.unallocatedOverhead).toBeCloseTo(r.company.operatingProfit, 5);
+    expect(r.company.directOutsideRows).toBe(0);
+    expect(snapshotForClose(r).company.poolLabor).toBe(198_000);
+  });
+
+  it('direct expenses of a project with no client row are named in the reconciliation', () => {
+    const internal = { ...retainer('int', 'X', 0), customerId: undefined } as Project;
+    const r = computeClientProfitability({
+      customers, projects: [retainer('pX', 'X', 150_000), internal], timeEntries: [entry('smm', 'pX', 10)], members: [smm],
+      expenses: [expense('tools', 7_000, 'Software', { projectId: 'int' })], invoices: [], period, settings,
+    });
+    expect(r.company.directOutsideRows).toBe(7_000);
+    const sumNet = r.rows.reduce((s, x) => s + x.netProfit, 0);
+    expect(sumNet + r.company.unallocatedOverhead - r.company.directOutsideRows).toBeCloseTo(r.company.operatingProfit, 5);
+  });
+});
+
+describe('plan vs actual and EAC use ALL-TIME hours, not the period slice', () => {
+  const web = (): Project => ({
+    ...retainer('web', 'X', 200_000), billingType: 'one-time', isRecurring: false,
+    plannedRoles: [{ role: 'SMM', plannedHours: 100, costRate: 1000 }],
+    createdAt: d('2026-08-01'), updatedAt: d('2026-08-01'),
+  } as Project);
+  const entries = [entry('smm', 'web', 90, '2026-08-10')];                        // all the work was in August
+  const expenses = [expense('print', 5_000, 'Production', { projectId: 'web' })]; // September: one direct expense, 0 hours
+  const r = computeClientProfitability({ customers, projects: [web()], timeEntries: entries, members: [smm], expenses, invoices: [], period, settings });
+  const line = r.rows.find(x => x.customerId === 'X')!.projects.find(l => l.id === 'web')!;
+
+  it('a month with 0 hours and one direct expense does not read as a ~99 % EAC margin', () => {
+    expect(line.hours).toBe(0);
+    // cost to date = 90 h × 1 000 + 5 000 = 95 000; 10 h remain at 1 000 → EAC 105 000 → 47.5 % on 200 000.
+    // The period-rate guess costed the 90 hours at 0 and answered 92.5 %.
+    expect(line.eacMarginPct).toBeCloseTo(47.5, 5);
+  });
+
+  it('consumedPct and the alert level are cumulative (90 % → review), as the cron sees them', () => {
+    expect(line.plannedHours).toBe(100);
+    expect(line.consumedPct).toBeCloseTo(90, 5);
+    expect(line.alertLevel).toBe('review');
+    expect(r.rows.find(x => x.customerId === 'X')!.projectsOverBudget).toBe(1);
+  });
+});
+
+describe('a period the END cuts short ("Ky muaj" ends now)', () => {
+  it('earns the retainer its elapsed share, prorates the plan payroll the same way, and still foots', () => {
+    const mtd = { start: new Date(2026, 8, 1), end: new Date(2026, 8, 15, 12, 0, 0) };
+    const r = computeClientProfitability({
+      customers, projects: [retainer('pX', 'X', 150_000)], timeEntries: [entry('smm', 'pX', 10)], members: [smm],
+      expenses: [], invoices: [], period: mtd, settings,
+    });
+    const share = monthCoverage(2026, 8, mtd.start, mtd.end);
+    expect(share).toBeCloseTo(14.5 / 30, 9);
+    expect(r.rows[0].earned).toBeCloseTo(150_000 * share, 6);
+    expect(r.company.payroll).toBeCloseTo(120_000 * share, 6);
+    const sumNet = r.rows.reduce((s, x) => s + x.netProfit, 0);
+    expect(sumNet + r.company.unallocatedOverhead).toBeCloseTo(r.company.operatingProfit, 5);
   });
 });

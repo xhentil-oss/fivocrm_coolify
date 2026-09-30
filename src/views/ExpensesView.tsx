@@ -39,6 +39,30 @@ import { createValue, createDateValue, updateValue, updateDateValue } from '../l
 import { zonedParts } from '../lib/recurringUtils';
 import type { Expense, Team, Project, TeamMember } from '../types';
 
+/**
+ * The next due date for a series that RESUMES (pause → run, Inactive → Active):
+ * the first occurrence in or after the CURRENT period, and past the period the
+ * series already claimed.
+ *
+ * Resuming with the stored `nextRecurringDate` untouched left it pointing into
+ * the first paused month, and the cron — which advances the date one cycle per
+ * generated row — then backfilled every month the series had been paused,
+ * rewriting closed books. Same law as `seedNextRecurringDate`: never backwards.
+ * The anchor day is the SERIES' anchor (`recurringAnchorDay`), never re-read
+ * from a clamped cursor, so a 31st series is still a 31st series afterwards.
+ */
+function advanceToCurrentPeriod(from: Date, frequency: string, anchorDay: number | undefined, now: Date, claim: string | null | undefined): Date {
+  const currentKey = expensePeriodKey(frequency, now);
+  const anchor = anchorDay || zonedParts(from).day;
+  let cursor = from;
+  for (let guard = 0; guard < 600; guard++) {
+    const key = expensePeriodKey(frequency, cursor);
+    if (key >= currentKey && (!claim || key > claim)) return cursor;
+    cursor = nextExpenseOccurrence(cursor, frequency, anchor);
+  }
+  return cursor;
+}
+
 const ExpensesView: React.FC = () => {
   const { user } = useAuth();
   const permissions = usePermissions();
@@ -322,15 +346,34 @@ const ExpensesView: React.FC = () => {
       }
       nextDate = cursor;
     }
-    const nextDateMoved = !!picked && !!nextDate && nextDate.getTime() !== picked.getTime();
-
-    // Keep the ORIGINAL anchor day. Overwriting it with `nextDate.getDate()`
-    // degraded a month-end series for good: a 31st series pointing at 28 Feb
-    // became a 28th series the moment any field was edited — exactly the drift
-    // `addMonthsClamped(anchorDay)` exists to prevent. Read in the business zone,
-    // since that is the zone the engine clamps in.
+    // Keep the ORIGINAL anchor day unless the user MOVED the next date.
+    // Overwriting it with `nextDate.getDate()` on every edit degraded a
+    // month-end series for good: a 31st series pointing at 28 Feb became a 28th
+    // series the moment any field was edited — exactly the drift
+    // `addMonthsClamped(anchorDay)` exists to prevent. But a date the user
+    // deliberately changed IS a new anchor (a 5th series moved to the 20th must
+    // not keep firing on the 5th). Compared as business-zone calendar days: the
+    // form round-trips the stored instant, the picker yields local midnight.
+    const storedNext = toExpenseDate(selectedExpense.nextRecurringDate);
+    const sameZonedDay = (a: Date, b: Date) => {
+      const x = zonedParts(a), y = zonedParts(b);
+      return x.year === y.year && x.month === y.month && x.day === y.day;
+    };
+    const nextDateChangedByUser = !!picked && (!storedNext || !sameZonedDay(picked, storedNext));
     const existingAnchor = selectedExpense.recurringAnchorDay;
-    const anchorDay = !isRecurring ? null : (existingAnchor || (nextDate ? zonedParts(nextDate).day : null));
+    const anchorDay = !isRecurring ? null
+      : nextDateChangedByUser && picked ? zonedParts(picked).day
+      : (existingAnchor || (nextDate ? zonedParts(nextDate).day : null));
+
+    // Inactive → Active is a RESUME (the engine treats `Inactive` as a pause):
+    // the next date is re-seeded forward to the current period so the cron
+    // never backfills the months the series was switched off. Same as the
+    // pause/resume button (`handleTogglePause`).
+    const resumes = isRecurring && wasRecurring && (selectedExpense.status === 'Inactive') && (status || 'Active') === 'Active';
+    if (resumes && nextDate) {
+      nextDate = advanceToCurrentPeriod(nextDate, freq, anchorDay || undefined, new Date(), prevFreq === freq ? prevClaim : null);
+    }
+    const nextDateMoved = !!picked && !!nextDate && nextDate.getTime() !== picked.getTime();
 
     // A frequency change must RE-EXPRESS the claim, never keep it: a weekly key
     // ('W2026-09-14') can never equal a monthly one ('2026-09'), so a kept claim
@@ -401,7 +444,9 @@ const ExpensesView: React.FC = () => {
     // The clamp above is silent otherwise: the user typed one date and the
     // series was saved with another, which reads as a bug unless we say why.
     const clampNote = nextDateMoved && nextDate
-      ? `Data e ardhshme u zhvendos te ${nextDate.toLocaleDateString('sq-AL')} — periudha e zgjedhur është tashmë e gjeneruar (librat e mbyllur nuk rishkruhen).`
+      ? resumes
+        ? `Seria u riaktivizua: data e ardhshme u zhvendos te ${nextDate.toLocaleDateString('sq-AL')} — muajt joaktivë nuk gjenerohen.`
+        : `Data e ardhshme u zhvendos te ${nextDate.toLocaleDateString('sq-AL')} — periudha e zgjedhur është tashmë e gjeneruar (librat e mbyllur nuk rishkruhen).`
       : undefined;
     toast({
       title: 'Shpenzimi u përditësua ✓',
@@ -430,13 +475,31 @@ const ExpensesView: React.FC = () => {
   // Pause/resume generation without ending the series.
   const handleTogglePause = async (expense: Expense) => {
     const paused = !(expense as any).isRecurringPaused;
+    // Resume = re-seed FORWARD (see `advanceToCurrentPeriod`): the months the
+    // series sat paused are never generated. The anchor day is kept as is.
+    let resumedNext: Date | null = null;
+    if (!paused && expense.isRecurring) {
+      const freq = (expense.recurringFrequency as string) || 'monthly';
+      const stored = toExpenseDate(expense.nextRecurringDate);
+      const own = getExpenseDate(expense) || new Date();
+      const anchor = expense.recurringAnchorDay || zonedParts(stored || own).day;
+      const from = stored || nextExpenseOccurrence(own, freq, anchor);
+      resumedNext = advanceToCurrentPeriod(from, freq, anchor, new Date(), expense.lastGeneratedPeriodKey);
+    }
+    const moved = !!resumedNext && resumedNext.getTime() !== (toExpenseDate(expense.nextRecurringDate)?.getTime() ?? -1);
     try {
-      await expenseMutation.update(expense.id, { isRecurringPaused: paused } as any);
+      await expenseMutation.update(expense.id, {
+        isRecurringPaused: paused,
+        ...(moved ? { nextRecurringDate: resumedNext, recurringAnchorDay: expense.recurringAnchorDay || zonedParts(resumedNext!).day } : {}),
+      } as any);
     } catch (err: any) {
       reportWriteFailure(err, paused ? 'Seria nuk u pauzua' : 'Seria nuk u rinis');
       return;
     }
-    toast({ title: paused ? 'Seria u pauzua' : 'Seria u rinis ✓' });
+    toast({
+      title: paused ? 'Seria u pauzua' : 'Seria u rinis ✓',
+      description: moved && resumedNext ? `Data e ardhshme: ${resumedNext.toLocaleDateString('sq-AL')} — muajt e pauzës nuk gjenerohen.` : undefined,
+    });
   };
 
   // Stop recurrence for good: keep this record and all past occurrences, just

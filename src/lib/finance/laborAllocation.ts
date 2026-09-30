@@ -14,6 +14,17 @@
  * freelancer logging hours without a salary row) the excess is reported as
  * `overAbsorbed` so the owner sees the rates are off, instead of a phantom loss.
  *
+ * A consumer's ROWS never cover every hour: entries with no project sit in
+ * `internal`, and `absorbed` includes projects the consumer has no row for
+ * (archived, outside its period, an unknown projectId). Pooling only
+ * `unabsorbed` silently dropped both — labour that was real cost landed in no
+ * row and no pool. `laborOutsideRows()` is the one answer to "what labour must
+ * my overhead pool carry besides `unabsorbed`", so in every engine
+ *
+ *     Σ rows' labour + pool labour  ==  absorbed + internal + unabsorbed  ==  payroll
+ *
+ * (equality with payroll holds exactly when `overAbsorbed` is 0).
+ *
  * With NO entries in the period the result says `basis: 'none'` and every caller
  * falls back to its legacy rule and labels it — the same law as payroll's `basis`.
  */
@@ -238,30 +249,61 @@ export function projectLaborOf(alloc: LaborAllocation | null | undefined, projec
   return alloc?.byProject.get(projectId) || { projectId, hours: 0, cost: 0, byMember: [], byRole: {} };
 }
 
+export interface LaborOutsideRows {
+  /** Cost of entries with no project at all (`alloc.internal.cost`). */
+  internal: number;
+  /** Cost of hours on projects the caller has NO row for (archived, out of period, unknown id). */
+  absentProjects: number;
+  absentHours: number;
+  absentProjectIds: string[];
+  /** internal + absentProjects — what the caller adds to its overhead pool next to `unabsorbed`. */
+  total: number;
+}
+
 /**
- * Labour of ONE project over its whole life (for plan vs actual and EAC, which
- * compare against a plan made for the entire engagement, not for a month).
- * Same rates as `allocateLabor`, no payroll reconciliation.
+ * Labour cost no row in `rowProjectIds` can carry. It is real cost of the
+ * period and belongs in the shared overhead pool — a consumer that pools only
+ * `unabsorbed` drops it (it used to: hours logged with no project, or on a
+ * project outside the period, were in nobody's cost and nobody's overhead).
  */
-export function laborForEntries(
+export function laborOutsideRows(alloc: LaborAllocation, rowProjectIds: ReadonlySet<string>): LaborOutsideRows {
+  let absentProjects = 0, absentHours = 0;
+  const absentProjectIds: string[] = [];
+  for (const pl of alloc.byProject.values()) {
+    if (rowProjectIds.has(pl.projectId)) continue;
+    absentProjects += pl.cost; absentHours += pl.hours; absentProjectIds.push(pl.projectId);
+  }
+  const internal = alloc.internal.cost;
+  return { internal, absentProjects, absentHours, absentProjectIds, total: internal + absentProjects };
+}
+
+/** The labour share of a consumer's overhead pool: unabsorbed payroll + every hour no row carries. */
+export function poolLabor(alloc: LaborAllocation, rowProjectIds: ReadonlySet<string>): number {
+  return Math.max(0, alloc.unabsorbed) + laborOutsideRows(alloc, rowProjectIds).total;
+}
+
+/** projectId → labour, over ALL entries (no period, no payroll reconciliation). Entries with no project key on `''`. */
+export function laborByProjectForEntries(
   entries: TimeEntry[] | null | undefined,
   members: TeamMember[] | null | undefined,
   rawSettings?: Partial<FinanceSettings> | null,
   rateCard?: RateCardRole[] | null,
-  projectId?: string,
-): ProjectLabor {
+  /** Only entries booked at or before this instant (a period end) count. */
+  asOf?: Date | null,
+): Map<string, ProjectLabor> {
   const settings = resolveFinanceSettings(rawSettings);
   const memberByUid = new Map<string, TeamMember>();
   for (const m of members || []) if (m.userId) memberByUid.set(m.userId, m);
-  const out: ProjectLabor = { projectId: projectId || '', hours: 0, cost: 0, byMember: [], byRole: {} };
+  const out = new Map<string, ProjectLabor>();
   const rateCache = new Map<string, number>();
+  const asOfMs = asOf ? asOf.getTime() : null;
   for (const e of entries || []) {
-    if (projectId && e.projectId !== projectId) continue;
     if (entryIsOpen(e)) continue;
     const h = entryHours(e);
     if (h <= 0) continue;
-    const member = memberByUid.get(e.userId);
     const at = entryInstantMs(e) ?? Date.now();
+    if (asOfMs != null && at > asOfMs) continue;
+    const member = memberByUid.get(e.userId);
     const key = `${e.userId}|${new Date(at).getFullYear()}-${new Date(at).getMonth()}`;
     let rate = rateCache.get(key);
     if (rate == null) {
@@ -270,12 +312,48 @@ export function laborForEntries(
     }
     const cost = h * rate;
     const role = e.costRole || memberCostRole(member);
-    out.hours += h; out.cost += cost;
-    const br = out.byRole[role] || { hours: 0, cost: 0 };
-    br.hours += h; br.cost += cost; out.byRole[role] = br;
-    let line = out.byMember.find(l => l.userId === e.userId);
-    if (!line) { line = { userId: e.userId, name: member ? (member.displayName || member.email || 'Pa emër') : 'I panjohur', role, hours: 0, cost: 0 }; out.byMember.push(line); }
+    const pid = e.projectId || '';
+    let pl = out.get(pid);
+    if (!pl) { pl = { projectId: pid, hours: 0, cost: 0, byMember: [], byRole: {} }; out.set(pid, pl); }
+    pl.hours += h; pl.cost += cost;
+    const br = pl.byRole[role] || { hours: 0, cost: 0 };
+    br.hours += h; br.cost += cost; pl.byRole[role] = br;
+    let line = pl.byMember.find(l => l.userId === e.userId);
+    if (!line) { line = { userId: e.userId, name: member ? (member.displayName || member.email || 'Pa emër') : 'I panjohur', role, hours: 0, cost: 0 }; pl.byMember.push(line); }
     line.hours += h; line.cost += cost;
+  }
+  for (const pl of out.values()) pl.byMember.sort((a, b) => b.cost - a.cost);
+  return out;
+}
+
+/**
+ * Labour of ONE project over its whole life (for plan vs actual and EAC, which
+ * compare against a plan made for the entire engagement, not for a month).
+ * Same rates as `allocateLabor`, no payroll reconciliation. Without a
+ * `projectId` every entry is summed into one line.
+ */
+export function laborForEntries(
+  entries: TimeEntry[] | null | undefined,
+  members: TeamMember[] | null | undefined,
+  rawSettings?: Partial<FinanceSettings> | null,
+  rateCard?: RateCardRole[] | null,
+  projectId?: string,
+  asOf?: Date | null,
+): ProjectLabor {
+  const scoped = projectId ? (entries || []).filter(e => e.projectId === projectId) : entries;
+  const byProject = laborByProjectForEntries(scoped, members, rawSettings, rateCard, asOf);
+  const out: ProjectLabor = { projectId: projectId || '', hours: 0, cost: 0, byMember: [], byRole: {} };
+  for (const pl of byProject.values()) {
+    out.hours += pl.hours; out.cost += pl.cost;
+    for (const [role, v] of Object.entries(pl.byRole)) {
+      const br = out.byRole[role] || { hours: 0, cost: 0 };
+      br.hours += v.hours; br.cost += v.cost; out.byRole[role] = br;
+    }
+    for (const l of pl.byMember) {
+      let line = out.byMember.find(x => x.userId === l.userId);
+      if (!line) { line = { ...l, hours: 0, cost: 0 }; out.byMember.push(line); }
+      line.hours += l.hours; line.cost += l.cost;
+    }
   }
   out.byMember.sort((a, b) => b.cost - a.cost);
   return out;

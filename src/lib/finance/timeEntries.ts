@@ -33,25 +33,40 @@ export function monthKeyOfDay(dayKey: string): string {
   return (dayKey || '').slice(0, 7);
 }
 
+const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+type EntryDateFields = Pick<TimeEntry, 'date' | 'startTime'> & { createdAt?: unknown };
+
 /** The day an entry belongs to: its stored `date`, else the start instant's local day. */
-export function entryDayKey(e: Pick<TimeEntry, 'date' | 'startTime'>): string | null {
-  if (typeof e.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(e.date)) return e.date;
-  const ms = getTimestampMs(e.startTime);
+export function entryDayKey(e: EntryDateFields): string | null {
+  if (typeof e.date === 'string' && DAY_KEY_RE.test(e.date)) return e.date;
+  const ms = entryInstantMs(e);
   return ms ? dayKeyOf(new Date(ms)) : null;
 }
 
-/** The instant an entry is booked at (start time, else local noon of its day). */
-export function entryInstantMs(e: Pick<TimeEntry, 'date' | 'startTime'>): number | null {
+/**
+ * The instant an entry is booked at.
+ *
+ * `date` IS the booking day: the rules' month lock is keyed on it, the timesheet
+ * grid is keyed on it, the daily report writes it. So a well-formed `date` wins
+ * and is read as local noon of that day. `startTime` used to win instead — and
+ * the daily report writes `startTime = noon − minutes`, so a row of more than
+ * 12 hours dated 1 Sep started on 31 Aug 23:00: every engine booked it in
+ * AUGUST while the rules locked it with SEPTEMBER. Without a `date` the start
+ * instant is used, then `createdAt`; a row with none of them has no instant.
+ */
+export function entryInstantMs(e: EntryDateFields): number | null {
+  if (typeof e.date === 'string' && DAY_KEY_RE.test(e.date)) {
+    const d = dayKeyToNoon(e.date);
+    if (d) return d.getTime();
+  }
   const ms = getTimestampMs(e.startTime);
   if (ms) return ms;
-  if (typeof e.date === 'string') {
-    const d = dayKeyToNoon(e.date);
-    return d ? d.getTime() : null;
-  }
-  return null;
+  const created = getTimestampMs(e.createdAt);
+  return created ? created : null;
 }
 
-export function entryInPeriod(e: Pick<TimeEntry, 'date' | 'startTime'>, start: Date, end: Date): boolean {
+export function entryInPeriod(e: EntryDateFields, start: Date, end: Date): boolean {
   const at = entryInstantMs(e);
   return at != null && at >= start.getTime() && at <= end.getTime();
 }

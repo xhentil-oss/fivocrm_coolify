@@ -29,7 +29,7 @@
 import { startOfBillingWeek } from './recurringBilling';
 import { addMonthsClamped } from './recurringExpenses';
 // Calendar questions are answered in ONE declared zone — see recurringUtils.
-import { zonedParts, addZonedDays } from '../recurringUtils';
+import { zonedParts, addZonedDays, zonedDate, daysInZonedMonth } from '../recurringUtils';
 
 export type InvoiceFrequency = 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
@@ -300,4 +300,155 @@ export function periodAlreadyCovered(
     const d = toDateOrNull(child.invoiceDate) || toDateOrNull(child.createdAt);
     return !!d && invoiceBillingPeriodKey(frequency, d) === periodKey;
   });
+}
+
+// ── Series schedule: anchor + next date, as the FORM resolves them ──────────
+
+export interface RecurringScheduleInput {
+  frequency: string;
+  /** The invoice's own date — the series anchor. */
+  invoiceDate: Date;
+  /**
+   * The next date the USER picked in the form, ONLY when they touched the
+   * picker. A date the form pre-filled (the due date, a stored value shown
+   * back) is not a pick and must be passed as `null`.
+   */
+  pickedNext?: Date | null;
+  /** The series' stored anchor day (edit only). */
+  storedAnchorDay?: number | string | null;
+  /** The series' stored next date (edit only). */
+  storedNext?: Date | null;
+}
+
+/**
+ * The anchor day and the next occurrence a recurring invoice is saved with.
+ *
+ * Precedence (see InvoicesView):
+ *   1. a date the user explicitly picked wins for both — that is intent, and
+ *      it is how a series the cron clamped to the 28th gets back to the 31st;
+ *   2. otherwise the stored anchor (never re-derived on an unrelated edit) and
+ *      the stored next date;
+ *   3. otherwise the INVOICE DATE's own day and one full cycle after it.
+ *
+ * Rung 2 used to fire for a date the form itself had filled in: ticking
+ * "Faturë periodike" copied the DUE date into the picker, the submit then read
+ * it as a pick, and a net-30 invoice dated 31 January was born anchored on the
+ * 2nd with its next occurrence on 2 March — February never billed. The due
+ * date is a payment TERM, not the billing cycle.
+ */
+export function resolveRecurringSchedule(input: RecurringScheduleInput): {
+  anchorDay: number;
+  nextRecurringDate: Date;
+} {
+  const { frequency, invoiceDate, pickedNext, storedNext } = input;
+  if (pickedNext) {
+    return { anchorDay: zonedParts(pickedNext).day, nextRecurringDate: pickedNext };
+  }
+  const anchorDay = resolveInvoiceAnchorDay({ recurringAnchorDay: input.storedAnchorDay as any }, invoiceDate);
+  return {
+    anchorDay,
+    nextRecurringDate: storedNext ?? nextInvoiceOccurrence(invoiceDate, frequency, anchorDay),
+  };
+}
+
+// ── Resuming a paused / stopped series ──────────────────────────────────────
+
+/** First instant (business zone) of the period `at` falls in. */
+export function invoicePeriodStart(frequency: string, at: Date): Date {
+  if (frequency === 'weekly') return startOfBillingWeek(at);
+  const p = zonedParts(at);
+  if (frequency === 'quarterly') return zonedDate(p.year, Math.floor(p.month / 3) * 3, 1);
+  if (frequency === 'yearly') return zonedDate(p.year, 0, 1);
+  return zonedDate(p.year, p.month, 1);
+}
+
+/** Start of the period immediately before the one `at` falls in. */
+export function previousInvoicePeriodStart(frequency: string, at: Date): Date {
+  if (frequency === 'weekly') return addZonedDays(startOfBillingWeek(at), -7);
+  const p = zonedParts(at);
+  // The 1st, so stepping back from the 31st cannot skip a short month.
+  if (frequency === 'quarterly') return zonedDate(p.year, Math.floor(p.month / 3) * 3 - 3, 1);
+  if (frequency === 'yearly') return zonedDate(p.year - 1, 0, 1);
+  return zonedDate(p.year, p.month - 1, 1);
+}
+
+/**
+ * The first occurrence of the series that falls in the period containing `at`
+ * or later, keeping the anchor.
+ *
+ * `from` is the series' current next date: when it is already in the current
+ * period (or ahead of it) it is returned unchanged; when it lags whole periods
+ * it is walked forward with `nextInvoiceOccurrence` (anchor preserved, so a 31st
+ * series lands on the 31st again). Without a `from` the occurrence is seeded on
+ * the anchor day of the current month (noon, business zone).
+ */
+export function nextOccurrenceInOrAfterPeriod(
+  frequency: string,
+  at: Date,
+  from: Date | null | undefined,
+  anchorDay?: number,
+): Date {
+  const periodStart = invoicePeriodStart(frequency, at);
+  if (from) {
+    if (from >= periodStart) return from;
+    let cursor = from;
+    let guard = 0;
+    while (cursor < periodStart && guard < 600) {
+      cursor = nextInvoiceOccurrence(cursor, frequency, anchorDay);
+      guard++;
+    }
+    return cursor;
+  }
+  if (frequency === 'weekly') return at;
+  const p = zonedParts(at);
+  const day = anchorDay ?? p.day;
+  return zonedDate(p.year, p.month, Math.min(day, daysInZonedMonth(p.year, p.month)), 12);
+}
+
+/**
+ * Re-point a stale claim and next date so RESUMING a series raises no false
+ * "N periudha pa faturë" alarm and bills the current period exactly once.
+ *
+ * Mirrors `resumedBillingClaimPatch` in projectArchive.ts. A series paused in
+ * March and resumed in September still carries `nextRecurringDate` = April and
+ * a March claim; the first run after the resume would then report five skipped
+ * periods and notify the owner about months that were deliberately NOT billed.
+ * (Re-enabling a STOPPED series is worse: the stop nulls the next date and the
+ * form re-seeds it from the invoice date — possibly a year back.)
+ *
+ *   · the claim moves to the PREVIOUS period, unless it already is the previous
+ *     or the current one (then there is no gap to hide, and moving it back could
+ *     re-open a period that was invoiced); a series with no claim gets none
+ *     invented — the cron's `periodAlreadyCovered` back-compat handles it;
+ *   · the next date moves to the first occurrence in the current period (or the
+ *     NEXT one, when the current period is already claimed), keeping the anchor.
+ *
+ * Returns only the fields that actually change.
+ */
+export function resumedInvoiceClaimPatch(
+  invoice: RecurringInvoiceLike,
+  at: Date = new Date(),
+): Record<string, unknown> {
+  const frequency = invoice.recurringFrequency || 'monthly';
+  if (!SUPPORTED_INVOICE_FREQUENCIES.includes(frequency as InvoiceFrequency)) return {};
+
+  const scheduled = toDateOrNull(invoice.nextRecurringDate);
+  const anchorDay = resolveInvoiceAnchorDay(invoice, scheduled ?? at);
+  const currentKey = invoiceBillingPeriodKey(frequency, at);
+  const previousKey = invoiceBillingPeriodKey(frequency, previousInvoicePeriodStart(frequency, at));
+  const claim = invoice.lastGeneratedPeriodKey || null;
+
+  const patch: Record<string, unknown> = {};
+  let effectiveClaim = claim;
+  if (claim && claim !== currentKey && claim !== previousKey) {
+    patch.lastGeneratedPeriodKey = previousKey;
+    effectiveClaim = previousKey;
+  }
+
+  let next = nextOccurrenceInOrAfterPeriod(frequency, at, scheduled, anchorDay);
+  if (effectiveClaim === currentKey && invoiceBillingPeriodKey(frequency, next) === currentKey) {
+    next = nextInvoiceOccurrence(next, frequency, anchorDay);
+  }
+  if (!scheduled || next.getTime() !== scheduled.getTime()) patch.nextRecurringDate = next;
+  return patch;
 }

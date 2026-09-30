@@ -38,9 +38,10 @@ import {
   monthsBetween,
   billingTypeOf,
   retainerEarningEnd,
+  retainerRevenueInPeriod,
   memberOnPayrollBetween,
 } from './projectPeriod';
-import type { LaborAllocation } from './laborAllocation';
+import { laborOutsideRows, proratePlanPayroll, type LaborAllocation } from './laborAllocation';
 import { projectEarnedInPeriod } from './revenueRecognition';
 
 // Re-exported for the modules that import them from here (departmentPnl, views).
@@ -114,6 +115,12 @@ export interface ProjectPnlResult {
      *  because no salary payment was recorded for them. > 0 is exactly when the
      *  pool and the Shpenzimet page disagree, so the UI can say why. */
     payrollFallbackMonths: number;
+    /**
+     * The slice of `salaries` (hours model only) that is labour NO ROW carries:
+     * hours logged with no project, or on a project outside this period's set.
+     * Real cost, pooled — it used to be dropped, so Σ rows + pool ≠ payroll.
+     */
+    laborOutsideRows: number;
   };
   allocationBasis: 'revenue' | 'equal' | 'labor-hours';
   /** 'hours' when `opts.labor` carried logged hours; 'legacy' otherwise. */
@@ -160,7 +167,7 @@ export function computeProjectPnl(
   const resolvedBasis: 'budget' | 'invoiced' = opts.revenueBasis === 'invoiced' ? 'invoiced' : 'budget';
   const empty: ProjectPnlResult = {
     rows: [],
-    fixedPool: { salaries: 0, otherFixed: 0, total: 0, payrollFallbackMonths: 0 },
+    fixedPool: { salaries: 0, otherFixed: 0, total: 0, payrollFallbackMonths: 0, laborOutsideRows: 0 },
     allocationBasis: 'revenue',
     laborBasis: 'legacy',
     totals: { revenue: 0, directCost: 0, overhead: 0, cost: 0, profit: 0 },
@@ -272,7 +279,13 @@ export function computeProjectPnl(
     // see lib/finance/payroll.ts. Charging the plan into every month regardless
     // billed 8 months of payroll to a team hired in March, and hid every
     // payment made to someone who is not on the member list.
-    const pay = payrollBetween(teamMembers, expenses, periodStart, periodEnd);
+    //
+    // A month the period cuts short ("Ky muaj" ends now) is charged at its
+    // elapsed share where its payroll is the PLAN — the same law as the hours
+    // model (`allocateLabor`) and as the retainer fee of that month
+    // (`retainerRevenueInPeriod`), so revenue and cost cover the same days. A
+    // recorded payment is what left the bank and is never scaled.
+    const pay = proratePlanPayroll(payrollBetween(teamMembers, expenses, periodStart, periodEnd), periodStart, periodEnd);
     salaries = pay.total;
     payrollFallbackMonths = pay.monthsProfile;
   }
@@ -311,7 +324,11 @@ export function computeProjectPnl(
   // is a DIRECT cost and only the unabsorbed remainder of payroll is shared.
   const labor = opts.labor && opts.labor.basis === 'hours' ? opts.labor : null;
   const laborBasis: 'hours' | 'legacy' = labor ? 'hours' : 'legacy';
-  if (labor) salaries = Math.max(0, labor.unabsorbed);
+  // The pool's labour = unabsorbed payroll + every hour no row here carries
+  // (no project, or a project outside `absorbable`). Pooling `unabsorbed` alone
+  // dropped that labour from every row AND from the pool.
+  const outside = labor ? laborOutsideRows(labor, absorbable) : null;
+  if (labor) salaries = Math.max(0, labor.unabsorbed) + (outside?.total || 0);
   const poolTotal = salaries + otherFixed;
 
   // ── Recognised revenue per project.
@@ -339,14 +356,11 @@ export function computeProjectPnl(
         || (!!done && done >= membershipWindow.start && done <= membershipWindow.end);
       return { revenue: inPeriodNow ? fee : 0, billingType: bt, activeMonths: 1 };
     }
-    const projStart = parseDate(p.createdAt) ?? periodStart;
-    const projEnd = retainerEarningEnd(p, periodEnd);
-    const s = projStart > periodStart ? projStart : periodStart;
-    const e = projEnd < periodEnd ? projEnd : periodEnd;
-    // A span that ended BEFORE the period opened earns nothing. It used to fall
-    // back to 1, i.e. a whole month of a dead retainer's fee.
-    const active = e >= s ? Math.min(monthsBetween(s, e), periodMonths) : 0;
-    return { revenue: fee * active, billingType: bt, activeMonths: active };
+    // Retainer: the shared rule (projectPeriod.ts) — span clipped to the period,
+    // a dead span earns nothing, and the month the period end cuts short earns
+    // its elapsed share. Inlining a copy here let the engines drift.
+    const ret = retainerRevenueInPeriod(p, fee, periodStart, periodEnd, periodMonths);
+    return { revenue: ret.revenue, billingType: bt, activeMonths: ret.activeMonths };
   };
   const revInfo = new Map(periodProjects.map(p => [p.id, revenueOf(p)] as const));
 
@@ -412,7 +426,7 @@ export function computeProjectPnl(
 
   return {
     rows,
-    fixedPool: { salaries, otherFixed, total: poolTotal, payrollFallbackMonths },
+    fixedPool: { salaries, otherFixed, total: poolTotal, payrollFallbackMonths, laborOutsideRows: outside?.total || 0 },
     allocationBasis,
     laborBasis,
     totals,

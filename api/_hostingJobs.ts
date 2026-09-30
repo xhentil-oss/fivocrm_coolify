@@ -1606,16 +1606,39 @@ export async function requestUpgrade(subscriptionId: string, productId: string, 
     return { applied: true, amount: 0, currency: q.currency };
   }
   const teamId = await teamIdForBusiness(s.businessId, s.teamId);
-  const invoiceId = `hst_upg_${subscriptionId}_${dayKey(new Date())}`;
-  const label = `HST-U-${dayKey(new Date()).replace(/-/g, '')}-${subscriptionId.slice(-4).toUpperCase()}`;
+  const day = dayKey(new Date());
+  const baseId = `hst_upg_${subscriptionId}_${day}`;
+  const baseLabel = `HST-U-${day.replace(/-/g, '')}-${subscriptionId.slice(-4).toUpperCase()}`;
   const subject = `Upgrade ${s.productName} → ${q.product.name}${s.domain ? ` (${s.domain})` : ''}`;
-  await createHostingInvoice({
-    id: invoiceId, label, businessId: s.businessId ?? null, teamId, customerId: String(s.customerId), currency: q.currency, amount: q.amount,
-    dueDate: utcNoon(new Date(Date.now() + 7 * 86_400_000)),
-    notes: `Diferenca e paketës për ${q.daysRemaining} ditët e mbetura të periudhës aktuale (${q.daysInPeriod} ditë). Paketa ndryshon sapo paguhet.`,
-    items: [{ description: `${subject} — proratë ${q.daysRemaining}/${q.daysInPeriod} ditë`, quantity: 1, unitPrice: q.amount }],
-    link: { subscriptionId }, createdByUserId: actorUid,
-  });
+  // The id is per (subscription, day). A second request the same day — after the
+  // first invoice was CANCELLED, say — used to collide: `createHostingInvoice`
+  // returned false unchecked, the cancelled invoice's `hostingUpgrade` was
+  // overwritten, and the customer was emailed for an invoice they could not pay.
+  // Now: the create result is checked, a collision with a still-open invoice for
+  // the same package is REUSED (no second email), anything else gets a suffixed
+  // id, and mail/notifications go out only for an invoice this call created.
+  let invoiceId: string | null = null;
+  let label = baseLabel;
+  for (let n = 1; n <= 9 && !invoiceId; n++) {
+    const candidate = n === 1 ? baseId : `${baseId}_${n}`;
+    label = n === 1 ? baseLabel : `${baseLabel}-${n}`;
+    const created = await createHostingInvoice({
+      id: candidate, label, businessId: s.businessId ?? null, teamId, customerId: String(s.customerId), currency: q.currency, amount: q.amount,
+      dueDate: utcNoon(new Date(Date.now() + 7 * 86_400_000)),
+      notes: `Diferenca e paketës për ${q.daysRemaining} ditët e mbetura të periudhës aktuale (${q.daysInPeriod} ditë). Paketa ndryshon sapo paguhet.`,
+      items: [{ description: `${subject} — proratë ${q.daysRemaining}/${q.daysInPeriod} ditë`, quantity: 1, unitPrice: q.amount }],
+      link: { subscriptionId }, createdByUserId: actorUid,
+    });
+    if (created) { invoiceId = candidate; break; }
+    const prev = (await db.collection('invoices').doc(candidate).get()).data() as any;
+    const open = !!prev && prev.status !== 'Paid' && prev.status !== 'Cancelled';
+    if (open && prev.hostingUpgrade?.productId === productId && String(prev.customerId) === String(s.customerId)) {
+      const amount = Number(prev.total) || q.amount;
+      await ref.update({ pendingUpgrade: { productId, cycle: q.cycle, invoiceId: candidate, amount, requestedAt: Timestamp.now() }, updatedAt: Timestamp.now() });
+      return { applied: false, invoiceId: candidate, amount, currency: q.currency };
+    }
+  }
+  if (!invoiceId) throw new Error('Fatura e upgrade-it nuk u krijua dot: shumë fatura për këtë abonim sot.');
   await db.collection('invoices').doc(invoiceId).update({ hostingUpgrade: { productId, cycle: q.cycle, requestedBy: opts.portal ? 'portal' : 'staff' } }).catch(() => {});
   await ref.update({ pendingUpgrade: { productId, cycle: q.cycle, invoiceId, amount: q.amount, requestedAt: Timestamp.now() }, updatedAt: Timestamp.now() });
   await logHostingEvent({ businessId: s.businessId, teamId, customerId: s.customerId, subscriptionId, type: 'sub.upgradeRequested', ok: true, message: `${subject}: ${q.amount} ${q.currency} (proratë)`, actorUserId: actorUid });

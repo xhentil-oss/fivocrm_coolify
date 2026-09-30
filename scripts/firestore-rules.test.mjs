@@ -1,9 +1,12 @@
 /**
  * Rules-unit tests for `firestore.rules` — the gate before every
- * `firebase deploy --only firestore:rules`. The whole file must pass (168 tests as
- * of the Sep 2026 hardening pass: 1–55 tenant isolation, modules, finance, chat,
- * hosting; 56–73 the C1–C5 / H1–H7 / M1–M8 / L findings). `storage.rules` has its
- * own suite in scripts/storage-rules.test.mjs.
+ * `firebase deploy --only firestore:rules`. The whole file must pass (178 tests as
+ * of the 30 Sep 2026 finance-integrity pass: 1–55 tenant isolation, modules,
+ * finance, chat, hosting; 56–74 the C1–C5 / H1–H7 / M1–M8 / L findings; 75–80
+ * business-keyed counters, Admin/Manager settlement, server-owned project
+ * rollups, timeEntries date shape, owner/admin month close, approved-expense
+ * placement + Salary rows). `storage.rules` has its own suite in
+ * scripts/storage-rules.test.mjs.
  *
  * Setup (one-time):
  *   npm i -D @firebase/rules-unit-testing firebase-tools
@@ -2623,10 +2626,17 @@ test('68c. a Viewer creates no CRM/finance rows and bumps no invoice counter', a
   await assertFails(setDoc(doc(vera, 'leads', 'leadByViewer'), { businessId: MY_BIZ, teamId: MY_TEAM, name: 'x', status: 'New', createdByUserId: 'vera' }));
   await assertFails(setDoc(doc(vera, 'projects', 'projByViewer'), { businessId: MY_BIZ, teamId: MY_TEAM, name: 'x', status: 'Active', createdByUserId: 'vera' }));
   await assertFails(updateDoc(doc(vera, 'customers', 'cust1'), { name: 'renamed by viewer' }));
-  await assertFails(setDoc(doc(vera, 'counters', `invoices_${MY_TEAM}`), { last: 1 }, { merge: true }));
+  // A legacy team-keyed sequence that already stands at 5.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'counters', `invoices_${MY_TEAM}`), { last: 5 });
+  });
+  await assertFails(setDoc(doc(vera, 'counters', `invoices_${MY_TEAM}`), { last: 6 }, { merge: true }));
   await assertSucceeds(getDoc(doc(vera, 'customers', 'cust1')));
   const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
-  await assertSucceeds(setDoc(doc(alice, 'counters', `invoices_${MY_TEAM}`), { last: 1 }, { merge: true }));
+  // A member bumps the sequence forward — but a RESET (5 → 1) is refused: it would
+  // re-issue numbers that already exist on invoices (test 75 has the full story).
+  await assertFails(setDoc(doc(alice, 'counters', `invoices_${MY_TEAM}`), { last: 1 }, { merge: true }));
+  await assertSucceeds(setDoc(doc(alice, 'counters', `invoices_${MY_TEAM}`), { last: 6 }, { merge: true }));
 });
 
 // ── M5. Report history rows name their real actor ─────────────────────────────
@@ -2720,4 +2730,241 @@ test('74. an unverified password sign-up with a colleague\'s address reads no in
   const greta = verifiedUser('gretaUid', 'greta@mine.com');
   await assertSucceeds(getDoc(doc(greta, 'teamMembers', `${MY_TEAM}_greta@mine.com`)));
   await assertSucceeds(updateDoc(doc(greta, 'teamMembers', `${MY_TEAM}_greta@mine.com`), { userId: 'gretaUid' }));
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Finance-integrity pass (Sep 30 2026): counters keyed by business, settlement is
+// Admin/Manager, server-owned project rollups, timeEntries date shape, month close
+// is owner/admin, approved-expense placement + Salary rows are approver-only.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── counters: `invoices_{businessId}` is what the client actually writes ────────
+test('75. invoice counters are keyed by BUSINESS, move forward only, and are never reset or deleted', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  const vera = staffOf('vera', MY_BIZ, MY_TEAM, ['viewer']);
+  // getNextInvoiceNumber's transaction: a fresh business-keyed sequence is CREATED
+  // by a plain member (no teams/{businessId} doc exists — this is the case that
+  // used to be denied for every non-super-admin).
+  await assertSucceeds(setDoc(doc(alice, 'counters', `invoices_${MY_BIZ}`), { last: 1, updatedAt: new Date() }));
+  await assertSucceeds(getDoc(doc(alice, 'counters', `invoices_${MY_BIZ}`)));
+  await assertSucceeds(getDoc(doc(vera, 'counters', `invoices_${MY_BIZ}`)));
+  // Forward bump (the transaction always writes max(stored, highest) + 1).
+  await assertSucceeds(setDoc(doc(alice, 'counters', `invoices_${MY_BIZ}`), { last: 8, updatedAt: new Date() }));
+  // Same value is a no-op, allowed; lower is a reset, refused; non-numeric refused.
+  await assertSucceeds(setDoc(doc(alice, 'counters', `invoices_${MY_BIZ}`), { last: 8, updatedAt: new Date() }));
+  await assertFails(setDoc(doc(alice, 'counters', `invoices_${MY_BIZ}`), { last: 3, updatedAt: new Date() }));
+  await assertFails(setDoc(doc(alice, 'counters', `invoices_${MY_BIZ}`), { last: 'x' }));
+  await assertFails(deleteDoc(doc(alice, 'counters', `invoices_${MY_BIZ}`)));
+  // A Viewer issues no invoices → bumps nothing.
+  await assertFails(setDoc(doc(vera, 'counters', `invoices_${MY_BIZ}`), { last: 9 }, { merge: true }));
+  // Another tenant's admin neither reads nor bumps my sequence, nor creates one for me.
+  await assertFails(getDoc(doc(outsider(), 'counters', `invoices_${MY_BIZ}`)));
+  await assertFails(setDoc(doc(outsider(), 'counters', `invoices_${MY_BIZ}`), { last: 100 }, { merge: true }));
+  await assertFails(setDoc(doc(outsider(), 'counters', `invoices_${MY_BIZ}-x`), { last: 1 }));
+  // The legacy team-keyed form still resolves through teams/{teamId}.businessId.
+  await assertSucceeds(getDoc(doc(alice, 'counters', `invoices_${MY_TEAM}`)));
+  // A super-admin may repair (reset) a sequence from the console.
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  await assertSucceeds(setDoc(doc(sa, 'counters', `invoices_${MY_BIZ}`), { last: 2 }));
+});
+
+// ── invoices / payments: "money was received" is an Admin/Manager fact ─────────
+test('76a. a Member drafts and edits an invoice but cannot settle it (status, paidAt, instalments, WHMCS queue, Stripe ids)', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'invoices', 'invSettle'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', invoiceNumber: 'INV-2026-0200',
+      total: 500, currency: 'EUR', status: 'Pending', createdByUserId: 'memb1',
+    });
+  });
+  // memb1 has claims only (no membership row) — a plain Member by every proof.
+  const memb = staffOf('memb1', MY_BIZ, MY_TEAM, ['member']);
+  // Content edits and the non-settlement status moves stay open to a Member.
+  await assertSucceeds(updateDoc(doc(memb, 'invoices', 'invSettle'), { notes: 'afati 30 ditë' }));
+  await assertSucceeds(updateDoc(doc(memb, 'invoices', 'invSettle'), { status: 'Sent' }));
+  await assertSucceeds(updateDoc(doc(memb, 'invoices', 'invSettle'), { status: 'Overdue' }));
+  await assertSucceeds(updateDoc(doc(memb, 'invoices', 'invSettle'), { status: 'Pending', total: 550 }));
+  // Settlement, in every shape the UI writes it: refused.
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { status: 'Paid', paidAt: new Date() }));
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { status: 'Paid' }));
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { status: 'Partial', paidAmount: 100 }));
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { status: 'Cancelled' }));
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { paidAt: new Date() }));
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { paidAmount: 550 }));
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { partialPayments: [{ amount: 100, paidAt: new Date() }] }));
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { payments: [{ amount: 100 }] }));
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { whmcsPendingPayments: [{ key: 'full', amount: 550 }] }));
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { stripePaymentIntentId: 'pi_forged' }));
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { stripeSessionId: 'cs_forged' }));
+  // Nor may a Member create one that is born settled.
+  await assertFails(setDoc(doc(memb, 'invoices', 'invBornPaid'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', total: 10, currency: 'EUR', status: 'Paid', paidAt: new Date(), createdByUserId: 'memb1',
+  }));
+  await assertFails(setDoc(doc(memb, 'invoices', 'invBornCancelled'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', total: 10, currency: 'EUR', status: 'Cancelled', createdByUserId: 'memb1',
+  }));
+  await assertSucceeds(setDoc(doc(memb, 'invoices', 'invBornDraft'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', total: 10, currency: 'EUR', status: 'Draft', createdByUserId: 'memb1',
+  }));
+});
+
+test('76b. a Manager/Admin settles; afterwards a Member may still edit content — spreading the settlement fields unchanged — but not un-settle', async () => {
+  const mgr = staffOf('mgr1', MY_BIZ, MY_TEAM, ['manager']);
+  const memb = staffOf('memb1', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(updateDoc(doc(mgr, 'invoices', 'invSettle'), { status: 'Partial', paidAmount: 100, partialPayments: [{ amount: 100, method: 'Bank' }] }));
+  await assertSucceeds(updateDoc(doc(mgr, 'invoices', 'invSettle'), { status: 'Paid', paidAmount: 550, whmcsPendingPayments: [{ key: 'full', amount: 550 }] }));
+  // Unchanged spread (what a full-form save does): the diff has no settlement key.
+  await assertSucceeds(updateDoc(doc(memb, 'invoices', 'invSettle'), { status: 'Paid', paidAmount: 550, notes: 'sqarim' }));
+  // Un-settling, or re-shaping the settlement, is not the Member's.
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { status: 'Pending' }));
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { paidAmount: 5 }));
+  await assertFails(updateDoc(doc(memb, 'invoices', 'invSettle'), { whmcsPendingPayments: [] }));
+  await assertSucceeds(updateDoc(doc(mgr, 'invoices', 'invSettle'), { status: 'Pending', paidAmount: 0 }));
+  // A Manager may also create one that is already Paid (a cash sale recorded after the fact).
+  await assertSucceeds(setDoc(doc(mgr, 'invoices', 'invCashSale'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', total: 10, currency: 'EUR', status: 'Paid', paidAt: new Date(), createdByUserId: 'mgr1',
+  }));
+  // The portal client is still fully out (37), the Viewer too.
+  const vera = staffOf('vera', MY_BIZ, MY_TEAM, ['viewer']);
+  await assertFails(updateDoc(doc(vera, 'invoices', 'invSettle'), { notes: 'x' }));
+});
+
+test('76c. the payments ledger (arkëtime) is written by Admin/Manager only; a Member and the portal client read', async () => {
+  const memb = staffOf('memb1', MY_BIZ, MY_TEAM, ['member']);
+  const mgr = staffOf('mgr1', MY_BIZ, MY_TEAM, ['manager']);
+  const row = { businessId: MY_BIZ, teamId: MY_TEAM, invoiceId: 'invSettle', customerId: 'cust1', amount: 100, currency: 'EUR', method: 'Bank', source: 'manual' };
+  await assertFails(setDoc(doc(memb, 'payments', 'payByMember'), row));
+  await assertSucceeds(setDoc(doc(mgr, 'payments', 'payByMgr'), row));
+  await assertSucceeds(getDoc(doc(memb, 'payments', 'payByMgr')));
+  await assertFails(updateDoc(doc(memb, 'payments', 'payByMgr'), { amount: 1 }));
+  await assertFails(updateDoc(doc(memb, 'payments', 'payMine'), { amount: 1 }));
+  await assertFails(deleteDoc(doc(memb, 'payments', 'payByMgr')));
+  await assertSucceeds(updateDoc(doc(mgr, 'payments', 'payByMgr'), { note: 'transfertë' }));
+  await assertFails(updateDoc(doc(mgr, 'payments', 'payByMgr'), { businessId: VICTIM_BIZ }));
+  await assertSucceeds(deleteDoc(doc(mgr, 'payments', 'payByMgr')));
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+  await assertSucceeds(getDoc(doc(carol, 'payments', 'payMine')));
+  await assertFails(setDoc(doc(carol, 'payments', 'payByClient'), { ...row, source: 'portal' }));
+});
+
+// ── projects: the rollup is the cron's, not the browser's ──────────────────────
+test('77. project rollup fields (spent/laborCost/hoursByRole/spendRolledUpAt/budgetAlertsSent) are server-owned', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'projects', 'projRolled'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, name: 'Rolled', status: 'Active', budget: 1000,
+      spent: 100, laborCost: 60, hoursByRole: { dev: 4 }, spendRolledUpAt: new Date(), budgetAlertsSent: [70],
+    });
+  });
+  const memb = staffOf('memb1', MY_BIZ, MY_TEAM, ['member']);
+  const admin = staffOf('adminA', MY_BIZ, MY_TEAM, ['admin']);
+  const base = { businessId: MY_BIZ, teamId: MY_TEAM, name: 'New', status: 'Active', budget: 500, createdByUserId: 'memb1' };
+  // ProjectsView's create shape (`spent: 0`) works; any real rollup value at birth does not.
+  await assertSucceeds(setDoc(doc(memb, 'projects', 'projNew0'), { ...base, spent: 0 }));
+  await assertSucceeds(setDoc(doc(memb, 'projects', 'projNewNoSpent'), base));
+  await assertFails(setDoc(doc(memb, 'projects', 'projNewSpent'), { ...base, spent: 400 }));
+  await assertFails(setDoc(doc(memb, 'projects', 'projNewLabor'), { ...base, laborCost: 1 }));
+  await assertFails(setDoc(doc(memb, 'projects', 'projNewAlerts'), { ...base, budgetAlertsSent: [70, 85, 100] }));
+  await assertFails(setDoc(doc(admin, 'projects', 'projNewHours'), { ...base, hoursByRole: { dev: 1 } }));
+  // Update: neither a Member nor an Admin moves the burn-down or the alarm ledger …
+  await assertFails(updateDoc(doc(memb, 'projects', 'projRolled'), { spent: 0 }));
+  await assertFails(updateDoc(doc(admin, 'projects', 'projRolled'), { spent: 999 }));
+  await assertFails(updateDoc(doc(admin, 'projects', 'projRolled'), { laborCost: 0 }));
+  await assertFails(updateDoc(doc(admin, 'projects', 'projRolled'), { hoursByRole: { dev: 400 } }));
+  await assertFails(updateDoc(doc(admin, 'projects', 'projRolled'), { budgetAlertsSent: [] }));
+  await assertFails(updateDoc(doc(admin, 'projects', 'projRolled'), { spendRolledUpAt: new Date() }));
+  // … but an ordinary edit, an unchanged spread and the dirty flag ExpensesView sets all pass.
+  await assertSucceeds(updateDoc(doc(admin, 'projects', 'projRolled'), { name: 'Rolled (edited)' }));
+  await assertSucceeds(updateDoc(doc(memb, 'projects', 'projRolled'), { spent: 100, laborCost: 60, budgetAlertsSent: [70], status: 'On Hold' }));
+  await assertSucceeds(updateDoc(doc(memb, 'projects', 'projRolled'), { spendRollupDirty: true }));
+  // The Admin SDK bypasses rules; a super-admin console repair is still allowed.
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  await assertSucceeds(updateDoc(doc(sa, 'projects', 'projRolled'), { spent: 120 }));
+});
+
+// ── timeEntries: `date` is the lock key, so it must be a YYYY-MM-DD string ──────
+test('78. a time entry needs a well-formed YYYY-MM-DD `date` on create and update — nothing sneaks past the month lock undated', async () => {
+  const bob = staffOf('bob', MY_BIZ, MY_TEAM, ['member']);
+  const row = { businessId: MY_BIZ, teamId: MY_TEAM, userId: 'bob', duration: 60, projectId: 'p1', source: 'manual' };
+  await assertFails(setDoc(doc(bob, 'timeEntries', 'teNoDate'), row));
+  await assertFails(setDoc(doc(bob, 'timeEntries', 'teSlashDate'), { ...row, date: '15/01/2026' }));
+  await assertFails(setDoc(doc(bob, 'timeEntries', 'teDateObj'), { ...row, date: new Date('2026-01-15') }));
+  await assertFails(setDoc(doc(bob, 'timeEntries', 'teIsoTs'), { ...row, date: '2026-01-15T10:00:00Z' }));
+  await assertFails(setDoc(doc(bob, 'timeEntries', 'teShort'), { ...row, date: '2026-3-5' }));
+  await assertSucceeds(setDoc(doc(bob, 'timeEntries', 'teGoodDate'), { ...row, date: '2026-03-05' }));
+  // Re-dating an open row to a malformed value is refused; to a valid open day is fine.
+  await assertFails(updateDoc(doc(bob, 'timeEntries', 'teGoodDate'), { date: '2026/03/06' }));
+  await assertFails(updateDoc(doc(bob, 'timeEntries', 'teGoodDate'), { date: null }));
+  await assertSucceeds(updateDoc(doc(bob, 'timeEntries', 'teGoodDate'), { date: '2026-03-06' }));
+  // An admin logging for a colleague is held to the same shape.
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(alice, 'timeEntries', 'teAdminNoDate'), row));
+  await assertSucceeds(setDoc(doc(alice, 'timeEntries', 'teAdminDated'), { ...row, date: '2026-03-07' }));
+});
+
+// ── financeMonthCloses: closing the books is owner/admin, never a Manager ───────
+test('79. a Manager cannot close or re-open a month; an owner/admin can; a suspended tenant does neither', async () => {
+  const mgr = staffOf('mgr1', MY_BIZ, MY_TEAM, ['manager']);
+  const owner = staffOf('aliceOwner', MY_BIZ, MY_TEAM, ['owner']);
+  const admin = staffOf('adminA', MY_BIZ, MY_TEAM, ['admin']);
+  const close = (by) => ({ businessId: MY_BIZ, periodKey: '2026-03', locked: true, closedAt: new Date(), closedByUserId: by });
+  await assertFails(setDoc(doc(mgr, 'financeMonthCloses', `${MY_BIZ}_2026-03`), close('mgr1')));
+  await assertSucceeds(setDoc(doc(owner, 'financeMonthCloses', `${MY_BIZ}_2026-03`), close('aliceOwner')));
+  await assertSucceeds(getDoc(doc(mgr, 'financeMonthCloses', `${MY_BIZ}_2026-03`)));
+  await assertFails(updateDoc(doc(mgr, 'financeMonthCloses', `${MY_BIZ}_2026-03`), { locked: false, reopenedAt: new Date(), reopenedByUserId: 'mgr1' }));
+  await assertFails(updateDoc(doc(mgr, 'financeMonthCloses', `${MY_BIZ}_2026-03`), { acknowledgedWarnings: ['x'] }));
+  await assertSucceeds(updateDoc(doc(admin, 'financeMonthCloses', `${MY_BIZ}_2026-03`), { locked: false, reopenedAt: new Date(), reopenedByUserId: 'adminA' }));
+  await assertSucceeds(updateDoc(doc(owner, 'financeMonthCloses', `${MY_BIZ}_2026-03`), { locked: true, closedAt: new Date() }));
+  // Suspended tenant: its admin can neither close a new month nor re-open a closed one.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'financeMonthCloses', 'bizSuspended_2026-01'), {
+      businessId: 'bizSuspended', periodKey: '2026-01', locked: true, closedAt: new Date(), closedByUserId: 'late',
+    });
+  });
+  const late = staffOf('late', 'bizSuspended', 'teamSuspended', ['admin']);
+  await assertFails(setDoc(doc(late, 'financeMonthCloses', 'bizSuspended_2026-02'), { businessId: 'bizSuspended', periodKey: '2026-02', locked: true, closedAt: new Date(), closedByUserId: 'late' }));
+  await assertFails(updateDoc(doc(late, 'financeMonthCloses', 'bizSuspended_2026-01'), { locked: false, reopenedAt: new Date() }));
+  await assertSucceeds(getDoc(doc(late, 'financeMonthCloses', 'bizSuspended_2026-01')));
+});
+
+// ── expenses: WHERE an approved cost lands is part of the approval; Salary is payroll ──
+test('80a. a non-approver cannot re-categorise or re-point an APPROVED expense without sending it back', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'expenses', 'expPlaced'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'Qira zyre', amount: 1000, currency: 'ALL', date: '2026-09-01',
+      category: 'Rent', projectId: 'p1', departmentId: MY_TEAM, approvalStatus: 'Approved', createdByUserId: 'memb1',
+    });
+  });
+  const memb = staffOf('memb1', MY_BIZ, MY_TEAM, ['member']);
+  await assertFails(updateDoc(doc(memb, 'expenses', 'expPlaced'), { category: 'Marketing' }));
+  await assertFails(updateDoc(doc(memb, 'expenses', 'expPlaced'), { projectId: 'p2' }));
+  await assertFails(updateDoc(doc(memb, 'expenses', 'expPlaced'), { projectId: null }));
+  await assertFails(updateDoc(doc(memb, 'expenses', 'expPlaced'), { departmentId: 'teamDept2' }));
+  // Non-material edits and the unchanged spread still pass …
+  await assertSucceeds(updateDoc(doc(memb, 'expenses', 'expPlaced'), { description: 'shtator', category: 'Rent', projectId: 'p1' }));
+  // … and re-placing WITH re-approval is the supported path.
+  await assertSucceeds(updateDoc(doc(memb, 'expenses', 'expPlaced'), { projectId: 'p2', approvalStatus: 'Submitted' }));
+  // An approver moves it freely.
+  const admin = staffOf('adminA', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(updateDoc(doc(admin, 'expenses', 'expPlaced'), { approvalStatus: 'Approved', category: 'Office', departmentId: null }));
+});
+
+test('80b. only an approver books or edits a Salary row — a Member cannot inject payroll', async () => {
+  const memb = staffOf('memb1', MY_BIZ, MY_TEAM, ['member']);
+  const mgr = staffOf('mgr1', MY_BIZ, MY_TEAM, ['manager']);
+  const admin = staffOf('adminA', MY_BIZ, MY_TEAM, ['admin']);
+  const salary = { businessId: MY_BIZ, teamId: MY_TEAM, title: 'Paga shtator', amount: 90000, currency: 'ALL', date: '2026-09-30', category: 'Salary', memberId: 'memb1', approvalStatus: 'Submitted' };
+  await assertFails(setDoc(doc(memb, 'expenses', 'expSalaryByMember'), { ...salary, createdByUserId: 'memb1' }));
+  // Sneaking in as Office and flipping the category afterwards is refused too.
+  await assertSucceeds(setDoc(doc(memb, 'expenses', 'expOfficeThenSalary'), { ...salary, category: 'Office', createdByUserId: 'memb1' }));
+  await assertFails(updateDoc(doc(memb, 'expenses', 'expOfficeThenSalary'), { category: 'Salary' }));
+  await assertFails(updateDoc(doc(memb, 'expenses', 'expOfficeThenSalary'), { category: 'Salary', approvalStatus: 'Submitted' }));
+  // Approvers (Admin/Manager) book payroll …
+  await assertSucceeds(setDoc(doc(mgr, 'expenses', 'expSalaryByMgr'), { ...salary, createdByUserId: 'mgr1' }));
+  await assertSucceeds(setDoc(doc(admin, 'expenses', 'expSalaryByAdmin'), { ...salary, createdByUserId: 'adminA', approvalStatus: 'Approved' }));
+  // … and a Member cannot touch a salary row at all, not even a note — nor delete it.
+  await assertFails(updateDoc(doc(memb, 'expenses', 'expSalaryByMgr'), { description: 'x' }));
+  await assertFails(updateDoc(doc(memb, 'expenses', 'expSalaryByMgr'), { amount: 1, approvalStatus: 'Submitted' }));
+  await assertFails(deleteDoc(doc(memb, 'expenses', 'expSalaryByMgr')));
+  await assertSucceeds(updateDoc(doc(admin, 'expenses', 'expSalaryByMgr'), { approvalStatus: 'Approved' }));
+  // Payroll is still tenant-bound for approvers.
+  await assertFails(setDoc(doc(admin, 'expenses', 'expSalaryHop'), { ...salary, businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, createdByUserId: 'adminA' }));
 });

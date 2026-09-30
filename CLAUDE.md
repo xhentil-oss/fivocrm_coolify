@@ -586,6 +586,68 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
 - Adding a cost figure anywhere? → read hours through `allocateLabor`/`laborForEntries`,
   never `project.spent`/`laborCost` (those are the cron's denormalised, current-salary copies).
 
+### Finance audit 30 Sep 2026 — laws added (`workspace/FINANCE_AUDIT_2026_09_30.md`)
+
+- **Labour that lands on no row is overhead, never dropped.** `allocateLabor` splits
+  payroll into absorbed / internal (no project) / unabsorbed; every consumer pools
+  `unabsorbed + laborOutsideRows()` (internal hours + hours on projects that got no
+  row in the period). Invariant: Σ rows + pool == payroll. `clientProfitability`
+  reports `company.poolLabor` / `directOutsideRows` so the reconciliation sentence
+  is an identity, not a hope.
+- **EAC, `consumedPct` and the budget alert are cumulative** (all-time hours via
+  `laborByProjectForEntries`, all-time direct expenses), never period-relative — the
+  plan is for the whole engagement. A month with no hours must not read as 99 %.
+- **A month the period END cuts short earns its elapsed share** (`retainerRevenueInPeriod`
+  prorates by `monthCoverage`, exactly like `proratePlanPayroll`); month-end periods are
+  byte-identical to before.
+- **`timeEntries.date` IS the booking day** in the engines too (`entryInstantMs` reads
+  the well-formed `YYYY-MM-DD` first, then `startTime`, then `createdAt`) and the rules
+  require it on create and update — so the month lock and the P&L agree on the day.
+- **A month can be closed only after it ended** (`monthCloseBlockReason` in
+  `src/lib/finance/monthClose.ts`), by an Admin/owner (not Manager), and can be
+  reopened (`reopenMonthPatch`: `locked: false` + `reopenedAt`, via `update` so the
+  snapshot survives). While locked the client table renders the SNAPSHOT and says by
+  how much live differs.
+- **Recurring expenses follow the invoice engines' law now**: deterministic occurrence
+  id `rec_exp_<parentId>_<periodKey>` + `create()`; only the period containing `now` is
+  generated; a lagging series is `'stale-period'` (skipped, reported on the parent as
+  `recurringPeriodsSkipped`, pointer advanced) and a `financeMonthCloses` lock blocks
+  the row (`'month-closed'`). Pause → resume re-seeds `nextRecurringDate` forward in the
+  UI too. Yearly steps are months-clamped (29 Feb stays in February).
+- **Settlement is Admin/Manager work.** Rules (`invoiceSettlementAllowed`) deny a
+  Member `status` Paid/Partial/Cancelled, `paidAt/paidAmount/partialPayments`, the
+  `payments` ledger and the WHMCS/Stripe sync fields; `projects.spent/laborCost/
+  hoursByRole/spendRolledUpAt/budgetAlertsSent` are cron-only; `counters` are keyed by
+  BUSINESS id and monotonic; a `Salary`-category expense is approver-only, and
+  re-tagging `category/projectId/departmentId` on an Approved row sends it back to
+  Submitted. The UI hides what the rules deny (`canSettleInvoices`).
+- **Reverting a settlement clears its ledger** (`invoiceStatusTransition` in
+  `src/lib/finance/invoiceStatus.ts`): Paid/Partial → Pending/Draft/Cancelled deletes
+  the invoice's `payments` rows and nulls `paidAt/paidAmount/partialPayments`; Cancelled
+  on a WHMCS mirror sets `locallyCancelled` so the sync does not resurrect it.
+- **The Stripe webhook queues the WHMCS write-back** in the same transaction that marks
+  Paid/Partial (`whmcsPendingPayments`, key `full`/`p<i>`), then drains; a failure
+  leaves the queue non-empty so `upsertInvoice` keeps the local status. An amount
+  mismatch books the money actually received (ledger row + Partial/Paid), never nothing.
+  Escalations for `createdByUserId: null` invoices go to the owner + managers.
+- **The recurring-invoice form never anchors on the auto-filled due date**
+  (`resolveRecurringSchedule`: an explicit pick wins, else stored, else invoiceDate + 1
+  cycle). Resume/re-enable paths re-point the claim to the PREVIOUS period
+  (`resumedInvoiceClaimPatch` / `resumedBillingClaimPatch`) so nothing older is reported
+  as "skipped" and the current period bills once.
+- **Every retainer says why it did not bill**: Part 2 stamps `billingLastBlock` +
+  `billingLastCheckedAt` (written only on change); ProjectDetailView's Faturimi panel
+  shows "Kontrolli i fundit … — Pret ditën e faturimit (25)". Part 1 and Part 2 run in
+  separate try/catch (`part1Error`/`part2Error`), `recordJobRun` flattens sub-job
+  results one level so `platformJobRuns` shows `recurringInvoices.legacyCreated`, and
+  the VPS calls `recurring-invoices` (07:00 local) and `recurring-expenses` (07:10) on
+  their OWN tick before run-all — run-all is 27 jobs in one 60 s invocation and a kill
+  there used to leave no trace. `scripts/audit-retainer-billing.mjs --at=<iso>` answers
+  "why did this retainer not bill on that day" from live data (read-only).
+- `invoice-reminders` keeps `Partial` as the stored status (notice once via
+  `overdueNoticeSentAt`); budget alarms record every crossed threshold at once
+  (`budgetAlertsDue`), so a jump 60 → 105 % fires one 🔴, not a descending cascade.
+
 ### WhatsApp via Baileys (VPS): agent lifecycle & honest send status
 
 - **Firestore `whatsappAccounts` IS the agent set.** `vps/server.ts` mirrors it live
@@ -1308,6 +1370,7 @@ META_ACCESS_TOKEN        — Meta WhatsApp API
 - `workspace/FINANCE_AUDIT_2026_09.md` — Finance/recurring-billing audit (anchor drift, period claims, tenant scoping)
 - `workspace/HOSTING_MODULE.md` — Hosting & domains module (cPanel/WHM + Dynadot): architecture, lifecycle table, endpoint actions, deploy steps
 - `workspace/SECURITY_AUDIT_2026_09.md` — Full-platform security audit (rules, api, cron, VPS, client, secrets): what shipped, operator actions (secret rotation), what was left
+- `workspace/FINANCE_AUDIT_2026_09_30.md` — Finance audit 30 Sep 2026 (~40 findings, all fixed) + why the 25 Sep retainer invoices did not bill (run-all kill / Part 1 error / prior claim) and the read-only diagnosis script
 - `workspace/CLIENT_PROFITABILITY.md` — Client & project profitability (hours × cost rate, earned revenue, gross→net, plan vs actual, month close): model, capture paths, cron, deploy
 
 ---

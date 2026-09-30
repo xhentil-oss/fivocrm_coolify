@@ -34,6 +34,7 @@ export type ArchivableProject = Pick<Project, 'status'> &
       | 'lastInvoicePeriodKey'
       | 'statusBeforeArchive'
       | 'wasRecurringBeforeArchive'
+      | 'recurringEndDate'
     >
   >;
 
@@ -139,6 +140,19 @@ export function resumeRecurringBillingPatch(
   opts: { at?: Date } = {},
 ): Record<string, unknown> {
   if (!project.wasRecurringBeforeArchive) return {};
+  // The cron writes `wasRecurringBeforeArchive` for EVERY permanent block —
+  // `series-ended` included. Honouring the token blindly gave back
+  // `isRecurring: true` with the old "repeat until" still in the past: the toast
+  // said billing was back on, the engine refused it on the next run
+  // (`series-ended`), and switched it off again. Nothing bills; only the
+  // message lied. Leave the series ended and clear the token so the next
+  // restore does not try again — the owner re-enables it with a new end date.
+  if (recurringSeriesEnded(project, opts.at ?? new Date())) {
+    return {
+      wasRecurringBeforeArchive: false,
+      recurringBillingStoppedReason: 'series-ended',
+    };
+  }
   return {
     isRecurring: true,
     wasRecurringBeforeArchive: false,
@@ -147,6 +161,40 @@ export function resumeRecurringBillingPatch(
     recurringBillingStoppedReason: '',
     ...resumedBillingClaimPatch(project, opts.at ?? new Date()),
   };
+}
+
+/**
+ * True when the project's "repeat until" lies in the past — the billing engine
+ * would refuse the series with `series-ended`, so nothing may switch it back on
+ * (see `resumeRecurringBillingPatch`). Callers use it to say WHY billing did not
+ * resume. Same date coercion as the engine (Date | Timestamp | ISO).
+ */
+export function recurringSeriesEnded(
+  project: Pick<ArchivableProject, 'recurringEndDate'>,
+  at: Date = new Date(),
+): boolean {
+  const raw: unknown = project.recurringEndDate;
+  if (!raw) return false;
+  const ts = raw as { toDate?: () => Date };
+  const end = raw instanceof Date ? raw
+    : typeof ts.toDate === 'function' ? ts.toDate()
+    : new Date(raw as string | number);
+  return end instanceof Date && !isNaN(end.getTime()) && at > end;
+}
+
+/**
+ * The line a restore/reopen toast should show for billing: what happened to
+ * the retainer, or `undefined` for a project that never recurred.
+ */
+export function resumeBillingToastLine(
+  project: ArchivableProject,
+  at: Date = new Date(),
+): string | undefined {
+  if (!project.wasRecurringBeforeArchive) return undefined;
+  if (recurringSeriesEnded(project, at)) {
+    return 'Faturimi i përsëritur NUK u rihap: data e fundit e përsëritjes ka kaluar. Cakto një datë të re te "Modifiko".';
+  }
+  return 'Faturimi i përsëritur u aktivizua përsëri.';
 }
 
 /** Fields to write when taking a project back out of the archive. */

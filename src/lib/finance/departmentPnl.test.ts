@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { Project, TeamMember, Expense } from '../../types';
+import type { Project, TeamMember, Expense, TimeEntry } from '../../types';
 import { computeProjectPnl } from './projectPnl';
+import { allocateLabor } from './laborAllocation';
+import { monthCoverage } from './projectPeriod';
 import { computeDepartmentPnl, buildDepartmentProfitTrend, PAYROLL_WITHOUT_MEMBER } from './departmentPnl';
 
 // Default fixture is a COMPLETED one-time project — the state in which a one-time
@@ -22,8 +24,10 @@ function mkE(p: Partial<Expense>): Expense {
     currency: 'ALL', date: p.date ?? new Date('2026-03-10'), projectId: p.projectId, ...p } as Expense;
 }
 
-// One-month window so salary = 1× monthlySalary.
-const OPTS = { range: { start: new Date('2026-03-01'), end: new Date('2026-03-31T23:59:59') }, mode: 'all' as const, now: new Date('2026-03-31T12:00:00') };
+// One-month window so salary = 1× monthlySalary. Local midnight, not `new Date('2026-03-01')`
+// (UTC midnight = 01:00 local): a range that starts an hour into the month is a
+// partial month, and the plan payroll of a partial month is charged at its share.
+const OPTS = { range: { start: new Date(2026, 2, 1), end: new Date('2026-03-31T23:59:59') }, mode: 'all' as const, now: new Date('2026-03-31T12:00:00') };
 
 describe('computeDepartmentPnl', () => {
   it('splits a member cost equally across the projects they work on', () => {
@@ -108,9 +112,12 @@ describe('buildDepartmentProfitTrend', () => {
     const t = buildDepartmentProfitTrend(projects, members, [], now, 3);
     expect(t.data).toHaveLength(3);                 // Jan, Feb, Mar
     expect(t.departments).toContain('Social');
-    // Each month: 100k revenue − 20k labor = 80k profit.
+    // Each whole month: 100k revenue − 20k labor = 80k profit. The current month
+    // runs to NOW, so both its fee and its plan payroll are the elapsed share.
     expect(t.data[0].Social).toBe(80_000);
-    expect(t.deltas.Social.last).toBe(80_000);
+    const share = monthCoverage(2026, 2, new Date(2026, 2, 1), now);
+    expect(t.deltas.Social.last).toBeCloseTo(80_000 * share, 6);
+    expect(t.deltas.Social.prev).toBe(80_000);
   });
 });
 
@@ -287,5 +294,52 @@ describe('a leaver still costs the months they worked', () => {
     const proj = computeProjectPnl(projects, members, paid, { range: june, now });
     expect(proj.fixedPool.salaries).toBe(85_000);    // what actually left the bank
     expect(dept.totals.labor + dept.unallocatedLabor.total).toBeCloseTo(85_000, 6);
+  });
+});
+
+// ── Sep 2026 audit ─────────────────────────────────────────────────────────
+describe('the shared pool is never dropped', () => {
+  it('splits the pool equally when nobody earned anything, instead of charging it to no one', () => {
+    // `totalRevenue > 0 ? … : 0` sent the whole pool nowhere in a month of pure
+    // delivery — every department read as pool-free.
+    const projects = [
+      mkP({ id: 'a', department: 'Social', budget: 0, responsibleUserId: 'u1' }),
+      mkP({ id: 'b', department: 'SEO', budget: 0, responsibleUserId: 'u2' }),
+    ];
+    const expenses = [mkE({ id: 'rent', amount: 90_000, category: 'Rent' })];
+    const res = computeDepartmentPnl(projects, [mkM('u1', 0), mkM('u2', 0)], expenses, OPTS);
+    expect(res.allocationBasis).toBe('equal');
+    expect(res.unallocatedOverhead).toBe(0);
+    expect(res.rows.find(r => r.department === 'Social')!.overhead).toBe(45_000);
+    expect(res.rows.find(r => r.department === 'SEO')!.overhead).toBe(45_000);
+    expect(res.totals.overhead).toBe(90_000);
+  });
+
+  it('reports the pool as unallocated only when there is no project at all', () => {
+    const res = computeDepartmentPnl([], [], [mkE({ id: 'rent', amount: 90_000, category: 'Rent' })], OPTS);
+    expect(res.rows).toHaveLength(0);
+    expect(res.unallocatedOverhead).toBe(90_000);
+  });
+
+  it('hours model: labour with no project or on a project outside the period is pooled and listed', () => {
+    const period = { start: new Date(2026, 8, 1), end: new Date(2026, 8, 30, 23, 59, 59, 999) };
+    const settings = { employerCostPct: 0, defaultClientCapacityHours: 120 }; // 1 000 L/h
+    const ana = { ...mkM('ana', 120_000), displayName: 'ana' } as TeamMember;
+    const entry = (projectId: string | undefined, hours: number): TimeEntry => ({
+      id: `${projectId}-${hours}`, userId: 'ana', projectId, startTime: new Date('2026-09-10T09:00:00'), endTime: new Date('2026-09-10T17:00:00'),
+      duration: hours * 60, createdAt: new Date('2026-09-10'), updatedAt: new Date('2026-09-10'),
+    } as TimeEntry);
+    const inRow = mkP({ id: 'pX', department: 'Social', status: 'Active', budget: 200_000, billingType: 'monthly', responsibleUserId: 'ana', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01') } as any);
+    const labor = allocateLabor({ timeEntries: [entry('pX', 30), entry(undefined, 5), entry('gone', 10)], members: [ana], expenses: [], period, settings });
+    const res = computeDepartmentPnl([inRow], [ana], [], { range: period, labor, timeEntries: [] });
+    expect(res.laborBasis).toBe('hours');
+    expect(res.laborOutsideRows).toBe(15_000);
+    expect(res.rows[0].labor).toBe(30_000);
+    expect(res.rows[0].overhead).toBeCloseTo(75_000 + 15_000, 6);            // bench + outside, all on the one row
+    expect(res.totals.labor + res.rows[0].overhead).toBeCloseTo(120_000, 6); // == payroll
+    expect(res.unallocatedLabor.total).toBeCloseTo(90_000, 6);
+    expect(res.unallocatedLabor.members.map(m => m.name)).toEqual([
+      'Punë e paabsorbuar (orë të paregjistruara / bench)', 'Orë pa projekt', 'Orë në projekte jashtë periudhës',
+    ]);
   });
 });

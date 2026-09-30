@@ -1,7 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import Stripe from 'stripe';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
-import { whmcsConfigured, pushInvoicePayment } from './_whmcs.js';
+import { whmcsConfigured } from './_whmcs.js';
+import { drainPendingWhmcsPayments } from './_whmcsSync.js';
+import { managerIdsForBusiness } from './_staffRecipients.js';
 import {
   planForPriceId, seatsForPlan, tenantStatusFromStripe, monthlyAmountCents,
   subscriptionPeriodEnd, invoiceSubscriptionId,
@@ -143,6 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
  */
 async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoiceId: string): Promise<void> {
   const invoiceRef = db.collection('invoices').doc(invoiceId);
+  const nowTs = admin.firestore.Timestamp.now();
   // Deterministic ledger id keyed on the session → redeliveries and retries
   // overwrite the same row instead of double-counting a receipt.
   const ledgerRef = db.collection('payments').doc(`${invoiceId}_stripe_${session.id}`);
@@ -156,16 +159,19 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
     | { kind: 'missing' }
     | { kind: 'redelivery' }
     | { kind: 'duplicate'; inv: Record<string, any> }
-    | { kind: 'mismatch'; inv: Record<string, any>; expectedCents: number }
-    | { kind: 'paid'; inv: Record<string, any>; invCurrency: string };
+    | { kind: 'mismatch'; inv: Record<string, any>; expectedCents: number; receivedNative: number; settles: boolean; whmcsQueued: boolean }
+    | { kind: 'paid'; inv: Record<string, any>; invCurrency: string; whmcsQueued: boolean };
 
   const outcome = await db.runTransaction<Outcome>(async (tx) => {
-    const snap = await tx.get(invoiceRef);
+    const [snap, ledgerSnap] = await Promise.all([tx.get(invoiceRef), tx.get(ledgerRef)]);
     if (!snap.exists) return { kind: 'missing' };
     const inv = snap.data()!;
 
-    // 1. Idempotency: Stripe redelivers events. If this exact session already marked
-    // the invoice Paid, do nothing — a second run would re-notify and re-push to WHMCS.
+    // 1. Idempotency: Stripe redelivers events. The ledger row is keyed by the
+    // SESSION, so its existence proves this delivery was already processed —
+    // whatever it did to the status (Paid, Partial on a mismatch). The legacy
+    // guard below covers invoices settled before the ledger existed.
+    if (ledgerSnap.exists) return { kind: 'redelivery' };
     if (inv.status === 'Paid' && inv.stripeSessionId === session.id) {
       return { kind: 'redelivery' };
     }
@@ -204,8 +210,49 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
     const currencyMismatch = snapCurrency
       ? currentCurrency !== snapCurrency
       : (currentCurrency !== 'all' && !!payCurrency && currentCurrency !== payCurrency);
+    const ledgerRow = (amountNative: number) => ({
+      invoiceId,
+      invoiceNumber: inv.invoiceNumber || null,
+      customerId: inv.customerId ?? null,
+      amount: amountNative,
+      currency: inv.currency || 'ALL',
+      method: 'Stripe',
+      paidAt: nowTs,
+      teamId: inv.teamId ?? null,
+      businessId: inv.businessId ?? null,
+      source: 'stripe',
+      sourceKey: `${invoiceId}#stripe:${session.id}`,
+      stripeSessionId: session.id,
+      stripePaymentIntentId: (session.payment_intent as string) || null,
+      chargedCents: paidCents,
+      chargedCurrency: payCurrency || null,
+    });
+    const instalmentIndex = Array.isArray(inv.partialPayments) ? inv.partialPayments.length : 0;
+
     if (paidCents !== expectedCents || currencyMismatch) {
+      // The money is REAL: Stripe took it. Book what was actually received (a
+      // ledger row, `paidAmount`, an instalment entry) and set the status the
+      // arithmetic supports — Partial below the total, Paid at or above it — and
+      // keep `stripePaymentMismatch` for the operator. Recording NOTHING used to
+      // leave a paid-for invoice Pending, dunned by every reminder job, with the
+      // receipt visible only in the Stripe dashboard.
+      const receivedNative = Math.round((paidCents / 100) * fxRate * 100) / 100;
+      const newPaid = Math.round((alreadyPaid + receivedNative) * 100) / 100;
+      const settles = invoiceTotal > 0 && newPaid >= invoiceTotal - 0.005;
+      const whmcsQ = whmcsPendingPatchFor(inv, settles
+        ? { key: 'full', method: 'Stripe', paidAt: nowTs }
+        : { key: `p${instalmentIndex}`, amount: receivedNative, method: 'Stripe', paidAt: nowTs });
       tx.update(invoiceRef, {
+        status: settles ? 'Paid' : 'Partial',
+        ...(settles ? { paidAt: admin.firestore.FieldValue.serverTimestamp() } : {}),
+        paymentMethod: 'Stripe',
+        paidAmount: newPaid,
+        partialPayments: admin.firestore.FieldValue.arrayUnion({
+          amount: receivedNative,
+          method: 'Stripe',
+          note: 'Stripe Checkout (shuma nuk përputhet me faturën)',
+          paidAt: nowTs,
+        }),
         stripeSessionId: session.id,
         stripePaymentIntentId: (session.payment_intent as string) || null,
         stripePaymentMismatch: {
@@ -214,18 +261,28 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
           fxRate,
           paidCurrency: payCurrency || null,
           invoiceCurrency: currentCurrency,
-          at: admin.firestore.Timestamp.now(),
+          receivedNative,
+          at: nowTs,
         },
+        ...(whmcsQ || {}),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-      return { kind: 'mismatch', inv, expectedCents };
+      tx.set(ledgerRef, ledgerRow(receivedNative), { merge: true });
+      return { kind: 'mismatch', inv, expectedCents, receivedNative, settles, whmcsQueued: !!whmcsQ };
     }
 
     // Mark Paid AND mirror into the payment ledger (arkëtime) atomically: staff
     // instalments write a `payments` row, so online payments must too or the ledger
     // under-reports — and a retry can never mark Paid without the row.
-    const nowTs = admin.firestore.Timestamp.now();
     const hasInstalments = alreadyPaid > 0 || Array.isArray(inv.partialPayments);
+    // WHMCS mirror: the write-back is QUEUED in this same update (mirror of
+    // `whmcsPendingPatch`, src/lib/whmcsPayment.ts). The webhook used to push to
+    // WHMCS directly and, on failure, write only `whmcsPaymentSyncError` — which
+    // `upsertInvoice` ignores, so the next sync rewrote the invoice to Pending
+    // with `paidAt: null`. A non-empty queue is what makes the sync preserve the
+    // local Paid until WHMCS confirms. `full` closes the balance in WHMCS's own
+    // currency, so a Lek invoice charged in EUR never posts a wrong sum.
+    const whmcsQ = whmcsPendingPatchFor(inv, { key: 'full', method: 'Stripe', paidAt: nowTs });
     tx.update(invoiceRef, {
       status: 'Paid',
       paidAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -243,26 +300,11 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
           paidAt: nowTs,
         }),
       } : {}),
+      ...(whmcsQ || {}),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
-    tx.set(ledgerRef, {
-      invoiceId,
-      invoiceNumber: inv.invoiceNumber || null,
-      customerId: inv.customerId ?? null,
-      amount: remainderNative,
-      currency: inv.currency || 'ALL',
-      method: 'Stripe',
-      paidAt: nowTs,
-      teamId: inv.teamId ?? null,
-      businessId: inv.businessId ?? null,
-      source: 'stripe',
-      sourceKey: `${invoiceId}#stripe:${session.id}`,
-      stripeSessionId: session.id,
-      stripePaymentIntentId: (session.payment_intent as string) || null,
-      chargedCents: paidCents,
-      chargedCurrency: payCurrency || null,
-    }, { merge: true });
-    return { kind: 'paid', inv, invCurrency };
+    tx.set(ledgerRef, ledgerRow(remainderNative), { merge: true });
+    return { kind: 'paid', inv, invCurrency, whmcsQueued: !!whmcsQ };
   });
 
   if (outcome.kind === 'missing') return;
@@ -275,20 +317,7 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
   const invoiceLabel = invoiceData.invoiceNumber || invoiceId.slice(0, 8);
   const paidPretty = formatAmount(paidCents, session.currency);
 
-  const notifyCreator = async (title: string, message: string) => {
-    if (!invoiceData.createdByUserId) return;
-    await notifyUser({
-      userId: invoiceData.createdByUserId,
-      type: 'invoice_paid',
-      title,
-      message,
-      actionUrl: '/app/invoices',
-      actionLabel: 'Shiko Faturat',
-      businessId: invoiceData.businessId ?? null,
-      teamId: invoiceData.teamId ?? null,
-      customerId: invoiceData.customerId ?? null,
-    }).catch(err => console.error('[Stripe Webhook] notification dërgim dështoi:', err));
-  };
+  const notifyCreator = (title: string, message: string) => notifyInvoiceStakeholders(invoiceData, title, message);
 
   if (outcome.kind === 'duplicate') {
     console.error(`[Stripe Webhook] DOUBLE PAYMENT: invoice ${invoiceId} already Paid (session ${invoiceData.stripeSessionId || '?'}) but session ${session.id} paid it again.`);
@@ -300,11 +329,12 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
   }
 
   if (outcome.kind === 'mismatch') {
-    console.error(`[Stripe Webhook] AMOUNT MISMATCH on invoice ${invoiceId}: paid ${paidCents} ${payCurrency || '?'}, expected ${outcome.expectedCents} (fxRate=${fxRate}); not marking Paid.`);
+    console.error(`[Stripe Webhook] AMOUNT MISMATCH on invoice ${invoiceId}: paid ${paidCents} ${payCurrency || '?'}, expected ${outcome.expectedCents} (fxRate=${fxRate}); booked ${outcome.receivedNative} as ${outcome.settles ? 'Paid' : 'Partial'}.`);
     await notifyCreator(
       'Pagesë me shumë të ndryshuar ⚠️',
-      `Fatura ${invoiceLabel} u pagua me Stripe (${paidPretty}), por totali aktual i faturës nuk përputhet me shumën e paguar (${formatAmount(outcome.expectedCents, payCurrency)} e pritur). Fatura NUK u shënua e paguar — kontrolloje manualisht.`,
+      `Fatura ${invoiceLabel} u pagua me Stripe (${paidPretty}), por totali i faturës nuk përputhet me shumën e paguar (${formatAmount(outcome.expectedCents, payCurrency)} e pritur). U regjistrua shuma e marrë dhe fatura u shënua "${outcome.settles ? 'Paguar' : 'Pjesërisht'}" — kontrolloje manualisht.`,
     );
+    if (outcome.whmcsQueued) await drainWhmcsQueue(invoiceRef, invoiceId);
     return;
   }
 
@@ -315,7 +345,7 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
     `Fatura ${invoiceLabel} u pagua me Stripe — ${paidPretty}`,
   );
 
-  console.log(`Invoice ${invoiceId} marked as paid via Stripe`);
+  console.log(`Invoice ${invoiceId} marked as paid via Stripe${invCurrency !== payCurrency ? ` (charged in ${payCurrency || '?'})` : ''}`);
 
   // Hosting & domains: a paid order → provision; a paid renewal → advance the due
   // date / renew at the registrar. Best-effort and idempotent (the hourly
@@ -330,43 +360,83 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
   }
 
   // Write the payment back to WHMCS for WHMCS-sourced invoices (best-effort).
-  // Never fail the Stripe webhook on a WHMCS error — the FivoCRM invoice is
-  // already Paid; a 500 would make Stripe retry the whole event.
-  // Idempotency: skip if this invoice's payment was already pushed to WHMCS
-  // (Stripe can redeliver the same event). transId dedup is a second guard.
-  const alreadySynced = !!invoiceData?.whmcsPaymentSyncedAt;
-  if (invoiceData?.source === 'whmcs' && invoiceData?.whmcsInvoiceId && !alreadySynced && whmcsConfigured()) {
-    try {
-      // SECURITY: only send a numeric amount when the Stripe charge currency
-      // matches the invoice currency. On a mismatch (incl. Lek invoices charged in
-      // EUR), omit it so WHMCS closes the full balance in its own currency instead
-      // of recording a wrong sum.
-      const currencyMatches = !!invCurrency && invCurrency === payCurrency;
-      if (!currencyMatches) {
-        console.warn(`[Stripe Webhook] currency mismatch (invoice=${invCurrency || '?'} stripe=${payCurrency || '?'}) for WHMCS invoice ${invoiceData.whmcsInvoiceId}; letting WHMCS close full balance.`);
-      }
-      const result = await pushInvoicePayment({
-        whmcsInvoiceId: invoiceData.whmcsInvoiceId,
-        transId: (session.payment_intent as string) || session.id,
-        gateway: 'stripe',
-        amount: currencyMatches ? paidCents / 100 : undefined,
-        date: new Date(),
-      });
-      if (result.ok) {
-        console.log(`[Stripe Webhook] WHMCS invoice ${invoiceData.whmcsInvoiceId} payment recorded${result.alreadyRecorded ? ' (already existed)' : ''}`);
-        await invoiceRef.update({
-          whmcsPaymentSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
-          whmcsPaymentSyncError: admin.firestore.FieldValue.delete(),
-        }).catch(() => {});
-      } else {
-        console.error(`[Stripe Webhook] WHMCS write-back failed for invoice ${invoiceData.whmcsInvoiceId}: ${result.message}`);
-        await invoiceRef.update({ whmcsPaymentSyncError: result.message || 'unknown' }).catch(() => {});
-      }
-    } catch (err: any) {
-      console.error('[Stripe Webhook] WHMCS write-back threw:', err?.message || err);
-      await invoiceRef.update({ whmcsPaymentSyncError: String(err?.message || err).slice(0, 500) }).catch(() => {});
-    }
+  // The entry was queued inside the transaction; draining it now is the fast
+  // path, the sync is the backstop. Dedupe is per payment KEY (queued / synced
+  // keys), not "was anything ever synced": a Stripe remainder after a cash
+  // instalment that had set `whmcsPaymentSyncedAt` used to be skipped forever.
+  if (outcome.whmcsQueued) await drainWhmcsQueue(invoiceRef, invoiceId);
+}
+
+/**
+ * Mirror of `whmcsPendingPatch` (src/lib/whmcsPayment.ts) for server-side writes:
+ * the fields to spread into the SAME update that records a payment on a
+ * WHMCS-mirrored invoice, or null when the invoice is not WHMCS-sourced or the
+ * key is already queued / synced. transid is derived from the key by the drain
+ * (`manualPaymentTransId`), so a redelivery can never double-post.
+ */
+function whmcsPendingPatchFor(
+  inv: Record<string, any>,
+  entry: { key: string; amount?: number; method: string; paidAt: admin.firestore.Timestamp },
+): Record<string, any> | null {
+  if (inv.source !== 'whmcs' || !inv.whmcsInvoiceId) return null;
+  const existing: any[] = Array.isArray(inv.whmcsPendingPayments) ? inv.whmcsPendingPayments : [];
+  const synced: string[] = Array.isArray(inv.whmcsSyncedPaymentKeys) ? inv.whmcsSyncedPaymentKeys : [];
+  if (existing.some((p) => p?.key === entry.key) || synced.includes(entry.key)) return null;
+  const row: Record<string, any> = { key: entry.key, method: entry.method, paidAt: entry.paidAt };
+  if (typeof entry.amount === 'number' && entry.amount > 0) row.amount = entry.amount;
+  return { whmcsPendingPayments: [...existing, row], whmcsPaymentPendingAt: entry.paidAt };
+}
+
+/** Post the queued WHMCS payment(s) now. A failure leaves the queue non-empty, which is what keeps the sync from reverting the local status. */
+async function drainWhmcsQueue(invoiceRef: FirebaseFirestore.DocumentReference, invoiceId: string): Promise<void> {
+  if (!whmcsConfigured()) return;
+  try {
+    const fresh = (await invoiceRef.get()).data() || {};
+    const r = await drainPendingWhmcsPayments(invoiceId, fresh, { writeBack: true });
+    if (r.failed.length) console.error(`[Stripe Webhook] WHMCS write-back failed for invoice ${fresh.whmcsInvoiceId}: ${r.failed.map((f) => `${f.key}: ${f.error}`).join(' | ')}`);
+    else if (r.synced.length) console.log(`[Stripe Webhook] WHMCS invoice ${fresh.whmcsInvoiceId} payment recorded (${r.synced.join(', ')})`);
+  } catch (err: any) {
+    console.error('[Stripe Webhook] WHMCS write-back threw:', err?.message || err);
   }
+}
+
+/**
+ * Who hears about a payment event on this invoice. The creator when there is
+ * one; otherwise the tenant's owner + Admins/Managers. WHMCS, hosting and cron
+ * invoices carry `createdByUserId: null`, so double-payment, mismatch and refund
+ * escalations on them used to reach NOBODY.
+ */
+async function notifyInvoiceStakeholders(invoiceData: Record<string, any>, title: string, message: string): Promise<void> {
+  const recipients = new Set<string>();
+  if (invoiceData.createdByUserId) {
+    recipients.add(String(invoiceData.createdByUserId));
+  } else {
+    const businessId = invoiceData.businessId ? String(invoiceData.businessId) : null;
+    if (businessId) {
+      try {
+        const biz = (await db.collection('businesses').doc(businessId).get()).data() as any;
+        if (biz?.ownerId) recipients.add(String(biz.ownerId));
+      } catch { /* fall through to the managers */ }
+    }
+    try {
+      for (const uid of await managerIdsForBusiness(businessId, invoiceData.teamId ? String(invoiceData.teamId) : null, { cap: 5 })) recipients.add(uid);
+    } catch { /* recipients stay as-is */ }
+  }
+  if (!recipients.size) {
+    console.warn(`[Stripe Webhook] no recipient for invoice event "${title}" (business ${invoiceData.businessId || '?'})`);
+    return;
+  }
+  await Promise.allSettled([...recipients].map((userId) => notifyUser({
+    userId,
+    type: 'invoice_paid',
+    title,
+    message,
+    actionUrl: '/app/invoices',
+    actionLabel: 'Shiko Faturat',
+    businessId: invoiceData.businessId ?? null,
+    teamId: invoiceData.teamId ?? null,
+    customerId: invoiceData.customerId ?? null,
+  }).catch((err) => console.error('[Stripe Webhook] notification dërgim dështoi:', err))));
 }
 
 /**
@@ -408,19 +478,13 @@ async function handleChargeRefunded(charge: Stripe.Charge): Promise<void> {
     }).catch(() => {});
   }
 
-  if (invoiceData.createdByUserId) {
+  {
     const label = invoiceData.invoiceNumber || invoiceRef.id.slice(0, 8);
-    await notifyUser({
-      userId: invoiceData.createdByUserId,
-      type: 'invoice_paid',
-      title: fullyRefunded ? 'Pagesa u rimbursua ⚠️' : 'Rimbursim i pjesshëm ⚠️',
-      message: `Fatura ${label}: u rimbursuan ${formatAmount(refundedCents, charge.currency)} në Stripe. Statusi i faturës nuk u ndryshua — përditësoje manualisht nëse duhet.`,
-      actionUrl: '/app/invoices',
-      actionLabel: 'Shiko Faturat',
-      businessId: invoiceData.businessId ?? null,
-      teamId: invoiceData.teamId ?? null,
-      customerId: invoiceData.customerId ?? null,
-    }).catch(err => console.error('[Stripe Webhook] refund notification dështoi:', err));
+    await notifyInvoiceStakeholders(
+      invoiceData,
+      fullyRefunded ? 'Pagesa u rimbursua ⚠️' : 'Rimbursim i pjesshëm ⚠️',
+      `Fatura ${label}: u rimbursuan ${formatAmount(refundedCents, charge.currency)} në Stripe. Statusi i faturës nuk u ndryshua — përditësoje manualisht nëse duhet.`,
+    );
   }
 }
 
@@ -564,6 +628,11 @@ async function handleSubscriptionEvent(event: Stripe.Event): Promise<void> {
     if (status === 'past_due') {
       // Start the grace clock only once (the cron suspends when it runs out).
       if (!before.pastDueSince) patch.pastDueSince = now;
+      // A tenant the cron already SUSPENDED stays suspended: Stripe keeps sending
+      // `past_due` updates (each retry attempt), and writing past_due back
+      // re-enabled the tenant's writes until the next lifecycle tick. Only a
+      // genuinely healthy subscription (active / trialing) lifts a suspension.
+      if (before.status === 'suspended') patch.status = 'suspended';
     } else if (status === 'active') {
       patch.pastDueSince = admin.firestore.FieldValue.delete();
       patch.suspendedAt = admin.firestore.FieldValue.delete();
@@ -620,8 +689,10 @@ async function handleSubscriptionEvent(event: Stripe.Event): Promise<void> {
       await writeAudit({ businessId, actorUid: null, action: 'billing.invoice_paid', target: `invoice:${invoice.id}` });
     } else {
       const snap = await db.collection('businesses').doc(businessId).get();
-      const patch: Record<string, any> = { status: 'past_due', updatedAt: now };
-      if (!(snap.data() as any)?.pastDueSince) patch.pastDueSince = now;
+      const failedBefore = (snap.data() as any) || {};
+      // Same law as above: a failed retry on a suspended tenant does not un-suspend it.
+      const patch: Record<string, any> = { status: failedBefore.status === 'suspended' ? 'suspended' : 'past_due', updatedAt: now };
+      if (!failedBefore.pastDueSince) patch.pastDueSince = now;
       await db.collection('businesses').doc(businessId).set(patch, { merge: true });
       await writeAudit({ businessId, actorUid: null, action: 'billing.payment_failed', target: `invoice:${invoice.id}` });
     }

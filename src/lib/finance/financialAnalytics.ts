@@ -105,9 +105,17 @@ export function getInvoiceCollectedBetween(inv: Invoice, start: Date, end?: Date
   // MOVED cash out of an already-reported month: 50k banked in June + 50k in
   // August reported as 0 for June and 100k for August. Cash-basis figures for a
   // closed month must not change when a later payment lands.
+  // An instalment is dated by ITS `paidAt`. A legacy row that has none (written
+  // before the field existed) used to be dated null, so its amount fell in NO
+  // month at all — present in `getInvoiceCollectedAll`, absent from every
+  // period figure. It falls back to the invoice's own date (`paidAt`, then
+  // `createdAt`, the same immutable chain a Pending invoice's cached
+  // `paidAmount` is credited on — never `updatedAt`, which would re-bucket the
+  // cash on any unrelated edit).
+  const instalmentDate = (p: { paidAt?: unknown }) => parseDate(p.paidAt) || getInvoicePaidDate(inv);
   const instalments = inv.partialPayments?.length
     ? inv.partialPayments.reduce((s, p) => (
-        inRange(parseDate(p.paidAt)) ? s + toAll(p.amount ?? 0, inv.currency) : s
+        inRange(instalmentDate(p)) ? s + toAll(p.amount ?? 0, inv.currency) : s
       ), 0)
     : 0;
 
@@ -121,7 +129,10 @@ export function getInvoiceCollectedBetween(inv: Invoice, start: Date, end?: Date
     return instalments + (inRange(getInvoicePaidDate(inv)) ? remainder : 0);
   }
 
-  // Pending/Partial/Overdue.
+  // Pending/Partial/Overdue. A cached `paidAmount` with no instalment history
+  // (a webhook or an older form wrote the amount but no row) is credited on the
+  // invoice's `paidAt`; an invoice with neither falls to `createdAt`, which is
+  // the only stable date it has — documented, not accidental.
   if (inv.partialPayments?.length) return instalments;
   return inRange(getInvoicePaidDate(inv)) ? toAll(inv.paidAmount ?? 0, inv.currency) : 0;
 }

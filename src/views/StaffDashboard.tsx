@@ -6,6 +6,7 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import ActivationChecklist from '../components/ActivationChecklist';
 import { useToast } from '../hooks/use-toast';
 import { getPriorityColor, getStatusColor } from '../lib/statusColors';
+import { toAll } from '../lib/utils';
 import {
   CheckCircle2,
   Clock,
@@ -320,7 +321,8 @@ const StaffDashboard: React.FC = () => {
     const customerRevenue = new Map<string, number>();
     invoices?.forEach(inv => {
       if (inv.customerId && (inv.status === 'Paid' || inv.status === 'Pending')) {
-        customerRevenue.set(inv.customerId, (customerRevenue.get(inv.customerId) || 0) + (inv.total ?? inv.amount ?? 0));
+        // Normalised to ALL: a 1 000 EUR invoice ranked below a 5 000 L one otherwise.
+        customerRevenue.set(inv.customerId, (customerRevenue.get(inv.customerId) || 0) + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency));
       }
     });
 

@@ -573,3 +573,38 @@ describe('calculateRevenueBetween matches the canonical collected helper', () =>
     expect(cash[5].inflow).toBe(revenue[5].paid);
   });
 });
+
+// ── Sep 2026 audit: an instalment with no date is still money that arrived ──
+describe('getInvoiceCollectedBetween dates a legacy instalment by the invoice', () => {
+  const june = [new Date('2026-06-01'), new Date('2026-06-30T23:59:59')] as const;
+  const march = [new Date('2026-03-01'), new Date('2026-03-31T23:59:59')] as const;
+
+  it('an instalment without paidAt falls back to the invoice paidAt', () => {
+    // Dated null, its amount used to be in NO month: present in the all-time
+    // collected figure, absent from every period figure.
+    const inv = mkInvoice({
+      status: 'Partial', total: 1000, currency: 'ALL', paidAmount: 400,
+      paidAt: new Date('2026-06-15T10:00:00Z'),
+      partialPayments: [{ amount: 400 } as any],
+    });
+    expect(getInvoiceCollectedBetween(inv, june[0], june[1])).toBe(400);
+    expect(getInvoiceCollectedBetween(inv, march[0], march[1])).toBe(0);
+  });
+
+  it('…then to createdAt, and a dated instalment keeps its own date', () => {
+    const inv = mkInvoice({
+      status: 'Paid', total: 1000, currency: 'ALL',
+      createdAt: new Date('2026-03-05T10:00:00Z'),
+      partialPayments: [{ amount: 300 } as any, { amount: 700, paidAt: new Date('2026-06-10T10:00:00Z') }],
+    });
+    expect(getInvoiceCollectedBetween(inv, march[0], march[1])).toBe(300);
+    expect(getInvoiceCollectedBetween(inv, june[0], june[1])).toBe(700);
+    expect(getInvoiceCollectedBetween(inv, new Date('2026-01-01'), new Date('2026-12-31T23:59:59'))).toBe(1000);
+  });
+
+  it('a Pending invoice with a cached paidAmount and no paidAt is credited on createdAt (documented)', () => {
+    const inv = mkInvoice({ status: 'Pending', total: 1000, currency: 'ALL', paidAmount: 250, createdAt: new Date('2026-03-05T10:00:00Z') });
+    expect(getInvoiceCollectedBetween(inv, march[0], march[1])).toBe(250);
+    expect(getInvoiceCollectedBetween(inv, june[0], june[1])).toBe(0);
+  });
+});

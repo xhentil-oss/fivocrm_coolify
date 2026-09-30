@@ -19,6 +19,11 @@ Rules:
 <!-- Add tasks here only when there are real next steps. -->
 
 <todo>
+Deploy audit-in e financave 30 Shtator + konfirmo shkakun e 25 shtatorit
+workspace/FINANCE_AUDIT_2026_09_30.md — ~40 gjetje, të gjitha të rregulluara në kod (rregulla 178/178 në emulator, motorët 482 teste). Mbeten operatoriale: (1) `firebase deploy --only firestore:rules` — KUJDES: settlement-i i faturave (Paguar/Pjesërisht/Anuluar, këstet) bëhet Admin/Manager-only, `counters` sipas businessId; (2) push main (Vercel merr cron + webhook); (3) `pm2 restart` në VPS që `recurring-invoices` 07:00 / `recurring-expenses` 07:10 Tiranë të fillojnë; (4) `node scripts/audit-retainer-billing.mjs --at=2026-09-25T08:00:00Z` (vetëm-lexim) — tregon për çdo retainer arsyen e bllokimit atë ditë dhe nëse run-all u regjistrua fare; faturo me dorë periudhat e kapërcyera. Strukturore, e pabërë: run-all mbetet 27 punë në një thirrje 60s — ndaje edhe punët e tjera në thirrje më vete nga VPS-ja.
+</todo>
+
+<todo>
 Mbetjet e auditeve Android/UI/UX (te dy raundet, 18 Shtator 2026)
 workspace/ANDROID_UI_AUDIT_2026_09.md. Te 21 gjetjet e te dy raundeve jane rregulluar. Keto tri mbeten sepse jane pune me e gjere, jo rregullime pikesore: (a) tregues offline/online - Firestore i vendos shkrimet ne radhe heshtazi ne celular, keshtu qe perdoruesi merr toast "u ruajt" per dicka qe s'ka mbritur ne server; (b) zevendeso 8 window.confirm/alert/prompt me AlertDialog - ne WebView shfaqen si dialogje sistemi me titullin "localhost"; (c) aria-label per 71 nga 83 butonat vetem-ikone. Pas cdo ndryshimi web: npm run android:sync.
 </todo>

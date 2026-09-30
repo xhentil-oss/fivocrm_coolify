@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { DailyTaskOutcome, TimeEntry } from '../../types';
-import { dayKeyOf, dayKeyToNoon, entryDayKey, entryInPeriod, entryIsOpen, timeEntriesFromOutcomes, dailyReportEntryId, hoursByDay } from './timeEntries';
+import { dayKeyOf, dayKeyToNoon, entryDayKey, entryInPeriod, entryInstantMs, entryIsOpen, timeEntriesFromOutcomes, dailyReportEntryId, hoursByDay } from './timeEntries';
 
 describe('day keys (Europe/Tirane)', () => {
   it('an evening UTC instant is still the local day', () => {
@@ -52,5 +52,32 @@ describe('daily report → time entries', () => {
     const m = hoursByDay(entries);
     expect(m.get('2026-09-10')).toBe(2.5);
     expect(m.get('2026-09-11')).toBe(0.5);
+  });
+});
+
+// ── Sep 2026 audit: `date` IS the booking day ────────────────────────────────
+describe('entryInstantMs books an entry on its `date`, not on its start instant', () => {
+  it('a 13-hour daily-report row dated 1 Sep that STARTED 31 Aug 23:00 belongs to September', () => {
+    // The daily report writes startTime = noon − minutes, so a row longer than
+    // 12 h starts the day before. The rules' month lock is keyed on `date`;
+    // every engine read `startTime` and booked the same row in August.
+    const row = { date: '2026-09-01', startTime: new Date('2026-08-31T21:00:00Z'), endTime: new Date('2026-09-01T10:00:00Z'), duration: 13 * 60 } as TimeEntry;
+    const sep = { start: new Date(2026, 8, 1), end: new Date(2026, 8, 30, 23, 59, 59, 999) };
+    const aug = { start: new Date(2026, 7, 1), end: new Date(2026, 7, 31, 23, 59, 59, 999) };
+    expect(new Date(entryInstantMs(row)!).toISOString()).toBe('2026-09-01T10:00:00.000Z'); // local noon, Europe/Tirane
+    expect(entryInPeriod(row, sep.start, sep.end)).toBe(true);
+    expect(entryInPeriod(row, aug.start, aug.end)).toBe(false);
+    expect(entryDayKey(row)).toBe('2026-09-01');
+  });
+  it('falls back to startTime, then createdAt, and stays consistent with entryDayKey', () => {
+    const byStart = { startTime: new Date('2026-09-10T08:00:00Z') } as TimeEntry;
+    expect(entryInstantMs(byStart)).toBe(new Date('2026-09-10T08:00:00Z').getTime());
+    expect(entryDayKey(byStart)).toBe('2026-09-10');
+    const byCreated = { createdAt: new Date('2026-09-12T08:00:00Z') } as TimeEntry;
+    expect(entryInstantMs(byCreated)).toBe(new Date('2026-09-12T08:00:00Z').getTime());
+    expect(entryDayKey(byCreated)).toBe('2026-09-12');
+    // A malformed `date` is ignored, not parsed.
+    expect(entryInstantMs({ date: '10/09/2026', startTime: new Date('2026-09-10T08:00:00Z') } as any)).toBe(new Date('2026-09-10T08:00:00Z').getTime());
+    expect(entryInstantMs({} as any)).toBeNull();
   });
 });

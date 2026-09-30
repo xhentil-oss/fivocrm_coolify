@@ -13,6 +13,7 @@ import { FileText, Search, Eye, DollarSign, Calendar, CreditCard, Check, Externa
 import { useToast } from '../../hooks/use-toast';
 import { currencySymbol } from '../../lib/utils';
 import { getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../../lib/finance/financialAnalytics';
+import { storedInvoiceTotals } from '../../lib/finance/invoiceTotals';
 import { StatCardsSkeleton, ListCardSkeleton } from './PortalSkeletons';
 import type { Invoice, InvoiceItem, Service, Customer } from '../../types';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../../lib/native';
@@ -504,8 +505,9 @@ const PortalInvoicesView: React.FC = () => {
                 </div>
               )}
 
-              {/* Payment Section */}
-              {(selectedInvoice.status === 'Pending' || selectedInvoice.status === 'Overdue') && (
+              {/* Payment Section — `Partial` is payable too (the checkout charges
+                  the remainder); the list button has always offered it. */}
+              {(selectedInvoice.status === 'Pending' || selectedInvoice.status === 'Overdue' || selectedInvoice.status === 'Partial') && (
                 <div className="space-y-2 pt-2">
                   {(selectedInvoice as any).paymentUrl && (
                     <Button
@@ -609,17 +611,27 @@ const PortalInvoicesView: React.FC = () => {
                     doc.setDrawColor(230); doc.line(margin, y + 7, w - margin, y + 7); y += 9;
                   }
 
-                  // Totals
+                  // Totals — the same box the staff PDF prints (invoiceTotals.ts):
+                  // the discount line was missing here, and a legacy invoice with
+                  // no stored `subtotal` printed "0.00" above a non-zero total.
+                  const totals = storedInvoiceTotals(invoice);
                   y += 5; doc.setDrawColor(200); doc.line(w - margin - 70, y, w - margin, y); y += 7;
                   doc.text('Nëntotali:', w - margin - 40, y, { align: 'right' });
-                  doc.text(`${(invoice.subtotal || 0).toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' }); y += 6;
-                  if ((invoice as any).tax) {
+                  doc.text(`${totals.subtotal.toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' }); y += 6;
+                  if (totals.discountAmount > 0) {
+                    const discountLabel = invoice.discountType === 'percent'
+                      ? `Zbritje (${Number(invoice.discount) || 0}%):`
+                      : 'Zbritje:';
+                    doc.text(discountLabel, w - margin - 40, y, { align: 'right' });
+                    doc.text(`-${totals.discountAmount.toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' }); y += 6;
+                  }
+                  if (totals.tax > 0) {
                     doc.text('Taksa:', w - margin - 40, y, { align: 'right' });
-                    doc.text(`${(invoice as any).tax.toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' }); y += 6;
+                    doc.text(`${totals.tax.toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' }); y += 6;
                   }
                   doc.setFont('helvetica', 'bold'); doc.setFontSize(12);
                   doc.text('TOTALI:', w - margin - 40, y, { align: 'right' });
-                  doc.text(`${(invoice.total || invoice.amount || 0).toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' });
+                  doc.text(`${totals.total.toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' });
 
                   if (invoice.notes) {
                     y += 15; doc.setFontSize(9); doc.setFont('helvetica', 'bold');

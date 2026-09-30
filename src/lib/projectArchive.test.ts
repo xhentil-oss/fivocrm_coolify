@@ -8,6 +8,8 @@ import {
   restoreProjectPatch,
   resumedBillingClaimPatch,
   resumeRecurringBillingPatch,
+  recurringSeriesEnded,
+  resumeBillingToastLine,
   sortArchivedLast,
 } from './projectArchive';
 import { projectBillingPeriodKey, projectPeriodsSkipped } from './finance/recurringBilling';
@@ -261,5 +263,50 @@ describe('archiveConsequences', () => {
     const lines = archiveConsequences(project()).join(' ');
     expect(lines).toContain('asgjë nuk fshihet');
     expect(lines).toContain('Arkiva');
+  });
+});
+
+describe('series-ended retainers are not resurrected', () => {
+  const ended = project({
+    status: 'Archived',
+    statusBeforeArchive: 'Active',
+    isRecurring: false,
+    wasRecurringBeforeArchive: true, // the cron stamps this for series-ended too
+    recurringEndDate: new Date('2026-06-30T23:59:59'),
+    lastInvoicePeriodKey: '2026-06',
+    recurringBillingStoppedReason: 'series-ended',
+  });
+
+  it('recurringSeriesEnded reads the end date against `at`', () => {
+    expect(recurringSeriesEnded(ended, AT)).toBe(true);
+    expect(recurringSeriesEnded(ended, new Date('2026-05-01'))).toBe(false);
+    expect(recurringSeriesEnded(project(), AT)).toBe(false);
+  });
+
+  it('restore keeps isRecurring OFF, clears the token and re-points nothing', () => {
+    const patch = restoreProjectPatch(ended, { at: AT });
+    expect(patch.status).toBe('Active');
+    expect(patch.isRecurring).toBeUndefined();
+    expect(patch.wasRecurringBeforeArchive).toBe(false);
+    expect(patch.recurringBillingStoppedReason).toBe('series-ended');
+    expect(patch.lastInvoicePeriodKey).toBeUndefined();
+  });
+
+  it('reopening a cancelled ended series behaves the same', () => {
+    const patch = resumeRecurringBillingPatch({ ...ended, status: 'Cancelled' }, { at: AT });
+    expect(patch.isRecurring).toBeUndefined();
+    expect(patch.wasRecurringBeforeArchive).toBe(false);
+  });
+
+  it('still resumes when the end date is ahead', () => {
+    const patch = restoreProjectPatch({ ...ended, recurringEndDate: new Date('2027-01-31') }, { at: AT });
+    expect(patch.isRecurring).toBe(true);
+    expect(patch.wasRecurringBeforeArchive).toBe(false);
+  });
+
+  it('the toast says why billing did not come back', () => {
+    expect(resumeBillingToastLine(ended, AT)).toMatch(/NUK u rihap/);
+    expect(resumeBillingToastLine({ ...ended, recurringEndDate: undefined }, AT)).toBe('Faturimi i përsëritur u aktivizua përsëri.');
+    expect(resumeBillingToastLine(project(), AT)).toBeUndefined();
   });
 });

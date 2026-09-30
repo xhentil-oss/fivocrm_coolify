@@ -7,6 +7,7 @@ import {
   projectEarnedToDate,
   projectWip,
 } from './revenueRecognition';
+import { monthCoverage } from './projectPeriod';
 
 const d = (iso: string) => new Date(iso);
 const project = (extra: Partial<Project> = {}): Project => ({
@@ -91,5 +92,19 @@ describe('projectWip — the four figures', () => {
     const w = projectWip(p, entries, [], d('2026-09-30'));
     expect(w.unbilledEarned).toBe(300_000);
     expect(projectEarnedToDate(p, entries, d('2026-09-30'))).toBe(300_000);
+  });
+});
+
+// ── Sep 2026 audit: a month the period END cuts short is earned by its elapsed share ──
+describe('retainer month-to-date', () => {
+  it('earns the elapsed share of the cut month in the period and to date', () => {
+    const ret = project({ billingType: 'monthly', budget: 100_000, currency: 'ALL', createdAt: d('2026-01-10') });
+    const end = new Date(2026, 8, 15, 12);
+    const share = monthCoverage(2026, 8, new Date(2026, 8, 1), end);
+    expect(projectEarnedInPeriod(ret, [], { start: new Date(2026, 8, 1), end })).toBeCloseTo(100_000 * share, 6);
+    // Jan..Aug whole, September by its share.
+    expect(projectEarnedToDate(ret, [], end)).toBeCloseTo(100_000 * (8 + share), 6);
+    // A month end is a whole month — the legacy answer, unchanged.
+    expect(projectEarnedInPeriod(ret, [], month(2026, 9))).toBe(100_000);
   });
 });

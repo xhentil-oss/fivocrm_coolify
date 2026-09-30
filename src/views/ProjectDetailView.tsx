@@ -51,7 +51,8 @@ import {
   sumProjectDirectExpenses,
 } from '../lib/finance/financialAnalytics';
 import { getInquiryCompleteness } from '../lib/inquiryBrief';
-import { archiveProjectPatch, isProjectArchived, restoreProjectPatch } from '../lib/projectArchive';
+import { archiveProjectPatch, isProjectArchived, restoreProjectPatch, resumeBillingToastLine } from '../lib/projectArchive';
+import { projectBillingBlockLabel, projectBillingBlockReason } from '../lib/finance/recurringBilling';
 import { deleteProjectCascade, deleteTaskCascade, projectCascadeToastParts } from '../lib/deleteCascade';
 import { Receipt } from 'lucide-react';
 import type { Task, Project, Team, TeamMember, TimeEntry, Expense, Invoice, Customer, ServiceInquiry } from '../types';
@@ -348,6 +349,28 @@ const ProjectDetailView: React.FC = () => {
       diff,
     };
   }, [projectInvoices, project?.budget, project?.currency, project?.billingType, project?.isRecurring]);
+
+  // The cron's last verdict on this retainer (`billingLastBlock` +
+  // `billingLastCheckedAt`, stamped by recurring-invoices Part 2), read-only.
+  // Until the cron has looked at the project we show the engine's own answer
+  // for "now" — the same predicate the cron runs — labelled as an estimate.
+  const billingCheck = React.useMemo(() => {
+    if (!project?.isRecurring && !(project as any)?.billingLastCheckedAt) return null;
+    const raw: any = (project as any)?.billingLastCheckedAt;
+    const at: Date | null = raw ? (raw?.toDate ? raw.toDate() : new Date(raw)) : null;
+    if (at && !isNaN(at.getTime())) {
+      return {
+        at,
+        label: projectBillingBlockLabel((project as any)?.billingLastBlock as string | null | undefined, project),
+        live: false,
+      };
+    }
+    return {
+      at: null,
+      label: projectBillingBlockLabel(projectBillingBlockReason(project as any, new Date()), project),
+      live: true,
+    };
+  }, [project]);
 
   // Budget burn-down: labor cost (logged hours × member cost-rate) + expenses,
   // compared to the project budget. Plus realization (billable value vs cost).
@@ -985,9 +1008,9 @@ const ProjectDetailView: React.FC = () => {
         await projectMutation.update(project.id, restoreProjectPatch(project) as any);
         toast({
           title: `"${project.name}" u kthye nga arkiva`,
-          description: project.wasRecurringBeforeArchive
-            ? 'Faturimi i përsëritur u aktivizua përsëri.'
-            : undefined,
+          // An ended series ("repeat until" in the past) is NOT switched back on
+          // by restoreProjectPatch — the toast must not claim otherwise.
+          description: resumeBillingToastLine(project),
         });
       }
     } catch (err) {
@@ -1790,6 +1813,23 @@ const ProjectDetailView: React.FC = () => {
                     <MoneyRow label="Draft (pa lëshuar)" value={billingStats.draftValue} />
                   )}
                 </div>
+
+                {billingCheck && (
+                  <p className="mt-3 text-[11.5px] leading-relaxed text-brand-muted">
+                    {billingCheck.at ? (
+                      <>
+                        Kontrolli i fundit:{' '}
+                        <span className={NUM}>
+                          {billingCheck.at.toLocaleDateString('sq-AL')}{' '}
+                          {billingCheck.at.toLocaleTimeString('sq-AL', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        {' — '}{billingCheck.label}
+                      </>
+                    ) : (
+                      <>Faturimi periodik: {billingCheck.label} <span className="opacity-70">(vlerësim — kroni s'e ka kontrolluar ende)</span></>
+                    )}
+                  </p>
+                )}
 
                 {billingStats.invoiceCount > 0 && (
                   <div className="mt-4 flex flex-col gap-2">

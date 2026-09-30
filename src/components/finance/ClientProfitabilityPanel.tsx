@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { AlertTriangle, ChevronDown, ChevronRight, Download, Lock, Printer } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, Download, Lock, LockOpen, Printer } from 'lucide-react';
 import { cn, formatALL } from '../../lib/utils';
 import { saveOrShareFile } from '../../lib/native';
 import type { ClientProfitabilityResult, ClientRow, ClientProjectLine } from '../../lib/finance/clientProfitability';
+import { MONTH_CLOSE_BLOCK_LABELS, type MonthCloseBlock } from '../../lib/finance/monthClose';
 import { RECOGNITION_METHOD_LABELS } from '../../lib/finance/revenueRecognition';
 import type { BudgetAlertLevel, MarginStatus } from '../../lib/finance/profitabilityCore';
 
@@ -21,9 +22,22 @@ interface Props {
   periodLabel: string;
   /** `YYYY-MM` when the period is one month (enables "Mbyll muajin"). */
   monthKey: string | null;
-  closeState?: { locked: boolean; closedAt?: Date | null } | null;
+  closeState?: {
+    locked: boolean;
+    closedAt?: Date | null;
+    reopenedAt?: Date | null;
+    /** `result` is the table AS CLOSED (from the close document's snapshot), not the live one. */
+    fromSnapshot?: boolean;
+    /** Live net total − closed net total; `null` when there is no snapshot to compare. */
+    liveNetDrift?: number | null;
+  } | null;
   canClose: boolean;
+  /** Why the month cannot be closed yet (monthClose.ts); `null` = closable. */
+  closeBlock?: MonthCloseBlock | null;
   onCloseMonth?: () => void;
+  /** Admin/owner-only: unlock a closed month (the close record is kept). */
+  onReopenMonth?: () => void;
+  reopening?: boolean;
   onOpenCustomer?: (customerId: string) => void;
 }
 
@@ -45,7 +59,10 @@ const h1 = (h: number) => (Math.round(h * 10) / 10).toLocaleString('sq-AL');
 
 type SortKey = 'netProfit' | 'grossProfit' | 'earned' | 'hours' | 'grossMarginPct' | 'outstanding' | 'effectiveHourlyRevenue';
 
-const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthKey, closeState, canClose, onCloseMonth, onOpenCustomer }) => {
+const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthKey, closeState, canClose, closeBlock = null, onCloseMonth, onReopenMonth, reopening, onOpenCustomer }) => {
+  // A snapshot row carries no project/role detail (it is a compact copy), so the
+  // fold-out is off while the table shows the closed figures.
+  const frozen = !!closeState?.locked && !!closeState.fromSnapshot;
   const [open, setOpen] = useState<string | null>(null);
   const [openProject, setOpenProject] = useState<string | null>(null);
   const [sort, setSort] = useState<SortKey>('netProfit');
@@ -84,16 +101,39 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
           <div>
             <h2 className="text-base font-extrabold text-[#08183A]">Fitimi për klient · {periodLabel}</h2>
             <p className={cn('mt-0.5 text-[12.5px]', result.basis === 'none' ? 'font-semibold text-[#9a6b0a]' : 'text-[#7286a3]')}>{basisNote}</p>
+            {frozen && (
+              <p className={cn('mt-0.5 text-[12px]', closeState?.liveNetDrift ? 'font-semibold text-[#9a6b0a]' : 'text-[#7286a3]')}>
+                {closeState?.liveNetDrift
+                  ? `Shifrat live ndryshojnë nga snapshot-i: ${closeState.liveNetDrift > 0 ? '+' : '−'}${formatALL(Math.abs(closeState.liveNetDrift))} fitim neto — diçka e datuar brenda muajit u shkrua pas mbylljes.`
+                  : closeState?.liveNetDrift === 0 ? 'Shifrat live përputhen me snapshot-in.' : 'Snapshot pa total neto — s\'ka krahasim me shifrat live.'}
+                {closeState?.reopenedAt ? ` Rihapur më ${closeState.reopenedAt.toLocaleDateString('sq-AL')} dhe mbyllur sërish.` : ''}
+              </p>
+            )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {closeState?.locked ? (
-              <span className="inline-flex items-center gap-1 rounded-full border border-[#e3e9f2] bg-[#f4f7fb] px-2.5 py-1 text-[11.5px] font-bold text-[#08183A]">
-                <Lock className="h-3 w-3" /> Muaj i mbyllur{closeState.closedAt ? ` · ${closeState.closedAt.toLocaleDateString('sq-AL')}` : ''}
-              </span>
+              <>
+                <span className="inline-flex items-center gap-1 rounded-full border border-[#e3e9f2] bg-[#f4f7fb] px-2.5 py-1 text-[11.5px] font-bold text-[#08183A]" title={closeState.fromSnapshot ? 'Tabela tregon shifrat e ruajtura në mbyllje (snapshot).' : 'Nuk u gjet snapshot — tabela tregon shifrat live.'}>
+                  <Lock className="h-3 w-3" /> Muaj i mbyllur{closeState.closedAt ? ` · ${closeState.closedAt.toLocaleDateString('sq-AL')}` : ''}{closeState.fromSnapshot ? ' · snapshot' : ' · live'}
+                </span>
+                {canClose && onReopenMonth && (
+                  <button type="button" disabled={reopening} onClick={onReopenMonth} className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3e9f2] px-3 py-1.5 text-xs font-bold text-[#08183A] hover:bg-[#f4f7fb] disabled:opacity-60">
+                    <LockOpen className="h-3.5 w-3.5" /> {reopening ? 'Duke rihapur…' : 'Rihap muajin'}
+                  </button>
+                )}
+              </>
             ) : monthKey && canClose && onCloseMonth ? (
-              <button type="button" onClick={onCloseMonth} className="inline-flex items-center gap-1.5 rounded-lg border border-[#08183A] px-3 py-1.5 text-xs font-bold text-[#08183A] hover:bg-[#08183A] hover:text-white">
-                <Lock className="h-3.5 w-3.5" /> Mbyll muajin
-              </button>
+              closeBlock ? (
+                // The running (or a future) month is not closable: the lock would
+                // freeze every timesheet for the rest of it. Say why, do nothing.
+                <span className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-lg border border-dashed border-[#c9d3e3] px-3 py-1.5 text-xs font-bold text-[#94a5bd]" title={MONTH_CLOSE_BLOCK_LABELS[closeBlock]} aria-disabled="true">
+                  <Lock className="h-3.5 w-3.5" /> {MONTH_CLOSE_BLOCK_LABELS[closeBlock]}
+                </span>
+              ) : (
+                <button type="button" onClick={onCloseMonth} className="inline-flex items-center gap-1.5 rounded-lg border border-[#08183A] px-3 py-1.5 text-xs font-bold text-[#08183A] hover:bg-[#08183A] hover:text-white">
+                  <Lock className="h-3.5 w-3.5" /> Mbyll muajin
+                </button>
+              )
             ) : null}
             <button type="button" onClick={exportCsv} className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3e9f2] px-3 py-1.5 text-xs font-bold text-[#08183A] hover:bg-[#f4f7fb]">
               <Download className="h-3.5 w-3.5" /> CSV
@@ -116,14 +156,20 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
           <summary className="cursor-pointer font-semibold text-[#08183A]">Si lidhet me Financat (rezultati operativ i periudhës)</summary>
           <div className="mt-2 grid gap-1 sm:grid-cols-2">
             <Line k="Pagat e periudhës" v={C.payroll} />
-            <Line k="— të absorbuara nga orët e klientëve" v={-C.absorbedLabor} />
-            <Line k="— punë e paabsorbuar (bench, mbledhje, pa orë) → overhead" v={-C.unabsorbedLabor} />
+            <Line k="— në rreshtat e klientëve (orë × kosto/orë)" v={-T.directLabor} />
+            <Line k="— pa rresht klienti → overhead (bench, orë pa projekt, projekte të brendshme / jashtë periudhës)" v={-C.poolLabor} />
+            {C.internalProjectLabor > 0 && <Line k="   nga të cilat: punë në projekte të brendshme" v={C.internalProjectLabor} />}
             <Line k="Shpenzime pa projekt → overhead" v={C.otherFixed} />
-            {C.internalProjectLabor > 0 && <Line k="Punë në projekte të brendshme" v={C.internalProjectLabor} />}
+            {C.directOutsideRows > 0 && <Line k="Shpenzime direkte të projekteve pa rresht klienti (vetëm te rezultati operativ)" v={C.directOutsideRows} />}
             {C.overAbsorbedLabor > 0 && <Line k="⚠ Orët × tarifat mbi pagën reale" v={C.overAbsorbedLabor} />}
             <Line k="Fitimi operativ i kompanisë" v={C.operatingProfit} strong />
           </div>
-          <p className="mt-2">Σ fitimi neto i klientëve + overhead i paalokuar + puna e brendshme = fitimi operativ. Kur çdo orë është orë klienti, dy shifrat përputhen.</p>
+          <p className="mt-2">
+            Çdo lek page është ose në një rresht klienti, ose në pool-in e overhead-it — asnjë orë nuk humbet.
+            {' '}Σ fitimi neto i klientëve + overhead i paalokuar{C.directOutsideRows > 0 ? ' − shpenzimet direkte të projekteve pa rresht' : ''} = fitimi operativ
+            {result.revenueBasis === 'collected' ? ' (me bazën "arkëtuar" ndryshojnë vetëm arkëtimet pa klient)' : ''}.
+            {C.overAbsorbedLabor > 0 ? ' Teprica e orëve × tarifave mbi pagën reale e prish barazimin — kontrollo tarifat.' : ''}
+          </p>
         </details>
       </section>
 
@@ -178,8 +224,8 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
                 <React.Fragment key={r.customerId}>
                   <tr className={cn('border-b border-[#eef2f8] hover:bg-[#f9fbfe]', open === r.customerId && 'bg-[#f9fbfe]')}>
                     <td className="px-5 py-2.5 sm:px-6">
-                      <button type="button" onClick={() => setOpen(open === r.customerId ? null : r.customerId)} className="flex items-center gap-2 text-left">
-                        {open === r.customerId ? <ChevronDown className="h-3.5 w-3.5 text-[#94a5bd]" /> : <ChevronRight className="h-3.5 w-3.5 text-[#94a5bd]" />}
+                      <button type="button" disabled={frozen} onClick={() => setOpen(open === r.customerId ? null : r.customerId)} className="flex items-center gap-2 text-left" title={frozen ? 'Snapshot-i i mbylljes nuk ruan detajet për projekt' : undefined}>
+                        {frozen ? <Lock className="h-3.5 w-3.5 text-[#c9d3e3]" /> : open === r.customerId ? <ChevronDown className="h-3.5 w-3.5 text-[#94a5bd]" /> : <ChevronRight className="h-3.5 w-3.5 text-[#94a5bd]" />}
                         <span>{STATUS_DOT[r.status]}</span>
                         <span className="font-bold text-[#08183A]">{r.name}</span>
                         {r.category && <span title={CAT_TITLE[r.category]} className="rounded-md border border-[#e3e9f2] px-1.5 py-px text-[10.5px] font-extrabold text-[#7286a3]">{r.category}</span>}
@@ -199,7 +245,7 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
                     <Cell v={r.collected} muted />
                     <td className={cn('px-5 py-2.5 text-right sm:px-6', NUM, r.outstanding > 0 ? 'font-bold text-[#9a6b0a]' : 'text-[#94a5bd]')}>{formatALL(Math.round(r.outstanding))}</td>
                   </tr>
-                  {open === r.customerId && (
+                  {open === r.customerId && !frozen && (
                     <tr className="bg-[#f9fbfe]">
                       <td colSpan={12} className="px-5 pb-4 pt-1 sm:px-6">
                         <ClientDetail row={r} openProject={openProject} setOpenProject={setOpenProject} thresholds={s.marginThresholds} />

@@ -28,13 +28,14 @@ import { memberSalaryForMonth } from './salaryHistory';
 import { payrollBetween } from './payroll';
 import {
   retainerEarningEnd,
+  retainerRevenueInPeriod,
   memberOnPayrollBetween,
   isProjectCompleted as isCompleted,
   projectDate,
   monthsBetween,
   billingTypeOf,
 } from './projectPeriod';
-import { allocateLabor, type LaborAllocation } from './laborAllocation';
+import { allocateLabor, laborOutsideRows, proratePlanPayroll, type LaborAllocation } from './laborAllocation';
 import type { FinanceSettings } from './profitabilityCore';
 import type { RateCardRole } from './costRates';
 import { projectEarnedInPeriod } from './revenueRecognition';
@@ -102,6 +103,12 @@ export interface DepartmentPnlResult {
   unallocatedDirect: { count: number; amount: number };
   /** 'hours' when `opts.labor` carried logged hours; 'legacy' = salary split equally. */
   laborBasis: 'hours' | 'legacy';
+  /** How the business-wide pool was spread: labour hours, revenue weight, or equally when nobody earned. */
+  allocationBasis: 'revenue' | 'equal' | 'labor-hours';
+  /** Business-wide pool that no project carried — only when there are no projects at all (an equal split otherwise). */
+  unallocatedOverhead: number;
+  /** Hours model: labour NO row carries (no project / project outside the period), pooled into overhead. */
+  laborOutsideRows: number;
   totals: { revenue: number; directCost: number; labor: number; overhead: number; cost: number; profit: number };
 }
 
@@ -125,6 +132,9 @@ export function computeDepartmentPnl(
     unmatchedDepartmentFixed: { count: 0, amount: 0 },
     unallocatedDirect: { count: 0, amount: 0 },
     laborBasis: 'legacy',
+    allocationBasis: 'revenue',
+    unallocatedOverhead: 0,
+    laborOutsideRows: 0,
     totals: { revenue: 0, directCost: 0, labor: 0, overhead: 0, cost: 0, profit: 0 },
   };
   if (!projects) return empty;
@@ -220,7 +230,10 @@ export function computeDepartmentPnl(
   // With no plan at all, the payroll is split equally across payroll members —
   // otherwise recorded payroll would vanish from every department.
   const planTotal = payrollMembers.reduce((s, m) => s + memberPlanSalary(m), 0);
-  const actualPayroll = payrollBetween(teamMembers, expenses, periodStart, periodEnd).total;
+  // Plan payroll of a month the period cuts short is charged at its elapsed
+  // share (never a recorded payment) — the same law as projectPnl's pool, the
+  // hours model and the retainer fee of that month.
+  const actualPayroll = proratePlanPayroll(payrollBetween(teamMembers, expenses, periodStart, periodEnd), periodStart, periodEnd).total;
   const payrollScale = planTotal > 0 ? actualPayroll / planTotal : 0;
   const equalShare = payrollMembers.length > 0 ? actualPayroll / payrollMembers.length : 0;
   // With recorded salary payments but NO member on payroll to carry them (the
@@ -322,19 +335,32 @@ export function computeDepartmentPnl(
       const done = parseDate((p as any).lastCompletedAt) || parseDate(p.updatedAt);
       return (!!done && done >= periodStart && done <= periodEnd) ? fee : 0;
     }
-    const s = (parseDate(p.createdAt) ?? periodStart) > periodStart ? (parseDate(p.createdAt) as Date) : periodStart;
-    const eRaw = retainerEarningEnd(p, periodEnd);
-    const e = eRaw < periodEnd ? eRaw : periodEnd;
-    // Ended before the period opened → nothing earned (it used to fall back to
-    // a full month of the fee).
-    const active = e >= s ? Math.min(monthsBetween(s, e), periodMonths) : 0;
-    return fee * active;
+    // Retainer: the shared rule (projectPeriod.ts) — a dead span earns nothing,
+    // the month the period end cuts short earns its elapsed share.
+    return retainerRevenueInPeriod(p, fee, periodStart, periodEnd, periodMonths).revenue;
   };
   const revenueByProject = new Map<string, number>(periodProjects.map(p => [p.id, revenueOf(p)]));
   const totalRevenue = periodProjects.reduce((s, p) => s + (revenueByProject.get(p.id) || 0), 0);
   const totalLaborHours = hoursLabor
     ? periodProjects.reduce((s, p) => s + (hoursLabor.byProject.get(p.id)?.hours || 0), 0)
     : 0;
+
+  // ── The business-wide pool and how it is spread ──
+  // With hours, the pool also carries the UNABSORBED payroll (bench time nobody
+  // logged on a client) AND every hour no row here carries — no project, or a
+  // project outside this period (`laborOutsideRows`). Pooling `unabsorbed`
+  // alone dropped the latter from every department and from the pool.
+  const outside = hoursLabor ? laborOutsideRows(hoursLabor, absorbable) : null;
+  const sharedPool = otherFixedPool + (hoursLabor ? Math.max(0, hoursLabor.unabsorbed) + (outside?.total || 0) : 0);
+  const useHoursWeight = !!hoursLabor && hoursLabor.settings.overheadBasis === 'labor-hours' && totalLaborHours > 0;
+  // Nobody earned anything (a month of pure delivery, a fresh tenant)? The
+  // pool is still real cost: split it equally, as projectPnl does — the old
+  // `totalRevenue > 0 ? … : 0` dropped the whole pool from every row.
+  const allocationBasis: 'revenue' | 'equal' | 'labor-hours' = useHoursWeight
+    ? 'labor-hours'
+    : totalRevenue > 0 ? 'revenue' : 'equal';
+  const equalPoolShare = periodProjects.length > 0 ? 1 / periodProjects.length : 0;
+  const unallocatedOverhead = periodProjects.length === 0 ? sharedPool : 0;
 
   // ── Build project lines ──
   const memberName = (id: string) => {
@@ -364,16 +390,14 @@ export function computeDepartmentPnl(
         });
     const labor = parts.reduce((s, x) => s + x.cost, 0);
     // Two overhead components: the business-wide pool (by labour hours when hours
-    // exist, else revenue weight), plus this department's OWN tagged expenses
-    // spread only inside the department. With hours, the pool also carries the
-    // UNABSORBED payroll — bench time nobody logged on a client.
-    const sharedPool = otherFixedPool + (hoursLabor ? Math.max(0, hoursLabor.unabsorbed) : 0);
-    const hoursWeight = hoursLabor && hoursLabor.settings.overheadBasis === 'labor-hours' && totalLaborHours > 0
-      ? (hoursLabor.byProject.get(p.id)?.hours || 0) / totalLaborHours
-      : null;
-    const globalOverhead = hoursWeight != null
-      ? sharedPool * hoursWeight
-      : totalRevenue > 0 ? sharedPool * (revenue / totalRevenue) : 0;
+    // exist, else revenue weight, else equally), plus this department's OWN
+    // tagged expenses spread only inside the department.
+    const share = allocationBasis === 'labor-hours'
+      ? (hoursLabor!.byProject.get(p.id)?.hours || 0) / totalLaborHours
+      : allocationBasis === 'revenue'
+        ? revenue / totalRevenue
+        : equalPoolShare;
+    const globalOverhead = sharedPool * share;
     const dept = deptOfProject(p);
     const deptPool = departmentFixedPool.get(dept) || 0;
     const dRev = deptRevenue.get(dept) || 0;
@@ -416,9 +440,13 @@ export function computeDepartmentPnl(
 
   // ── Unallocated labor: payroll members on no period-project ──
   const unallocatedMembers = hoursLabor
-    // With hours, whatever payroll the logged hours did not absorb is ALREADY in
-    // the shared overhead pool above; it is listed here for the reader, not added.
-    ? (hoursLabor.unabsorbed > 0 ? [{ name: 'Punë e paabsorbuar (orë të paregjistruara / të brendshme)', cost: hoursLabor.unabsorbed }] : [])
+    // With hours, whatever payroll no department row carries is ALREADY in the
+    // shared overhead pool above; it is listed here for the reader, not added.
+    ? [
+        ...(hoursLabor.unabsorbed > 0 ? [{ name: 'Punë e paabsorbuar (orë të paregjistruara / bench)', cost: hoursLabor.unabsorbed }] : []),
+        ...(outside && outside.internal > 0 ? [{ name: 'Orë pa projekt', cost: outside.internal }] : []),
+        ...(outside && outside.absentProjects > 0 ? [{ name: 'Orë në projekte jashtë periudhës', cost: outside.absentProjects }] : []),
+      ]
     : payrollMembers
       .filter(m => (projectCountByMember.get(norm(m.userId || '')) || 0) === 0)
       .map(m => ({ name: m.displayName || (m as any).email || 'Pa emër', cost: memberPeriodSalary(m) }))
@@ -442,6 +470,9 @@ export function computeDepartmentPnl(
     unmatchedDepartmentFixed,
     unallocatedDirect,
     laborBasis,
+    allocationBasis,
+    unallocatedOverhead,
+    laborOutsideRows: outside?.total || 0,
     totals,
   };
 }

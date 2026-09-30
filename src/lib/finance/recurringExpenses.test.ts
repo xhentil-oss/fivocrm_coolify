@@ -143,11 +143,46 @@ describe('expenseGenerationBlockReason', () => {
     expect(expenseGenerationBlockReason({ ...base, lastGeneratedPeriodKey: '2026-07' }, now)).toBeNull();
   });
 
-  it('catches up instead of stalling when the series lags several cycles', () => {
-    // The old guard compared the last child's createdAt ("now") against the due
-    // date, which stayed true forever and killed the series after one occurrence.
+  it('a series that lags whole periods is stale — reported and advanced, never backfilled', () => {
+    // The old timestamp guard killed a lagging series for good; the fix after it
+    // generated one row per MISSED period — rewriting closed books, which is the
+    // owner's call. A due date whose period is behind today's is `stale-period`:
+    // not permanent, the cron skips it, reports it and moves the series forward.
     const lagging = { ...base, nextRecurringDate: d('2026-02-01'), lastGeneratedPeriodKey: '2026-01' };
-    expect(expenseGenerationBlockReason(lagging, now)).toBeNull();
+    const reason = expenseGenerationBlockReason(lagging, now);
+    expect(reason).toBe('stale-period');
+    expect(isPermanentExpenseBlock(reason)).toBe(false);
+  });
+
+  it('stale-period is judged on the PERIOD key, per frequency, after the due-date checks', () => {
+    // Same month, earlier day → due, not stale (now = 7 Aug).
+    expect(expenseGenerationBlockReason({ ...base, nextRecurringDate: d('2026-08-01') }, now)).toBeNull();
+    // Previous month → stale.
+    expect(expenseGenerationBlockReason({ ...base, nextRecurringDate: d('2026-07-31') }, now)).toBe('stale-period');
+    // Weekly: Mon 3 Aug is this week (now = Fri 7 Aug) → due; Mon 27 Jul → stale.
+    expect(expenseGenerationBlockReason({ ...base, recurringFrequency: 'weekly', nextRecurringDate: d('2026-08-03') }, now)).toBeNull();
+    expect(expenseGenerationBlockReason({ ...base, recurringFrequency: 'weekly', nextRecurringDate: d('2026-07-27') }, now)).toBe('stale-period');
+    // Quarterly / yearly keys sort the same way.
+    expect(expenseGenerationBlockReason({ ...base, recurringFrequency: 'quarterly', nextRecurringDate: d('2026-04-01') }, now)).toBe('stale-period');
+    expect(expenseGenerationBlockReason({ ...base, recurringFrequency: 'yearly', nextRecurringDate: d('2025-08-01') }, now)).toBe('stale-period');
+    // A future date is still `not-due`, and a missing one `no-next-date`, before staleness is asked.
+    expect(expenseGenerationBlockReason({ ...base, nextRecurringDate: d('2026-09-01') }, now)).toBe('not-due');
+    // A stale period that WAS generated keeps its claim: the idempotency answer wins.
+    expect(expenseGenerationBlockReason({ ...base, nextRecurringDate: d('2026-07-01'), lastGeneratedPeriodKey: '2026-07' }, now)).toBe('already-generated');
+  });
+});
+
+describe('a yearly series keeps its anchor day across leap years', () => {
+  it('29 Feb + 1 year is 28 Feb, and 29 Feb again when the anchor allows', () => {
+    // `addZonedYears` overflowed 29 Feb 2028 into 1 Mar 2029, so the series
+    // silently moved to March for good.
+    const leap = new Date(2028, 1, 29, 10, 0, 0);
+    const next = nextExpenseOccurrence(leap, 'yearly', 29);
+    expect(zonedParts(next)).toMatchObject({ year: 2029, month: 1, day: 28 });
+    const again = nextExpenseOccurrence(nextExpenseOccurrence(nextExpenseOccurrence(next, 'yearly', 29), 'yearly', 29), 'yearly', 29);
+    expect(zonedParts(again)).toMatchObject({ year: 2032, month: 1, day: 29 });
+    // Without an explicit anchor the date's own day is the anchor.
+    expect(zonedParts(nextExpenseOccurrence(leap, 'yearly'))).toMatchObject({ year: 2029, month: 1, day: 28 });
   });
 });
 

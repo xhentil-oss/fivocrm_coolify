@@ -302,12 +302,21 @@ export function estimateAtCompletion(i: EacInput): EacResult {
   };
 }
 
+/**
+ * Every threshold now crossed that has not been announced yet, ascending. The
+ * caller records ALL of them and announces only the highest — recording one at
+ * a time made a single 60 % → 105 % jump fire three alarms on three runs.
+ */
+export function budgetAlertsDue(consumedPct: number | null, thresholds: number[], alreadySent: number[]): number[] {
+  if (consumedPct == null) return [];
+  const sent = new Set(alreadySent || []);
+  return thresholds.filter(t => consumedPct >= t && !sent.has(t)).sort((a, b) => a - b);
+}
+
 /** The highest threshold now crossed that has not been announced yet (null = nothing to send). */
 export function nextBudgetAlert(consumedPct: number | null, thresholds: number[], alreadySent: number[]): number | null {
-  if (consumedPct == null) return null;
-  const sent = new Set(alreadySent || []);
-  const due = thresholds.filter(t => consumedPct >= t && !sent.has(t));
-  return due.length ? Math.max(...due) : null;
+  const due = budgetAlertsDue(consumedPct, thresholds, alreadySent);
+  return due.length ? due[due.length - 1] : null;
 }
 
 export type BudgetAlertLevel = 'ok' | 'warning' | 'review' | 'stop';

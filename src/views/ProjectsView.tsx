@@ -7,7 +7,7 @@ import { doc, runTransaction, Timestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { canSeeFinancials, toAll, fromAll, currencySymbol } from '../lib/utils';
-import { projectBillingPeriodKey, projectBillingPeriodEnd, stopProjectBillingPatch } from '../lib/finance/recurringBilling';
+import { projectBillingPeriodKey, projectBillingPeriodEnd, stopProjectBillingPatch, projectBillingBlockLabel } from '../lib/finance/recurringBilling';
 import { recurringOccurrenceId } from '../lib/finance/recurringInvoices';
 import { normalizePlannedRoles, plannedFieldsPatch } from '../lib/finance/projectBudget';
 import { buildRateCard } from '../lib/finance/costRates';
@@ -22,6 +22,8 @@ import {
   isTerminalProjectStatus,
   restoreProjectPatch,
   resumeRecurringBillingPatch,
+  resumedBillingClaimPatch,
+  resumeBillingToastLine,
 } from '../lib/projectArchive';
 import { deleteProjectCascade, projectCascadeToastParts } from '../lib/deleteCascade';
 import { projectTaskProgress } from '../lib/projectProgress';
@@ -116,6 +118,18 @@ async function createInvoiceOccurrence(
     if (err instanceof Error && err.message === OCCURRENCE_EXISTS) return false;
     throw err;
   }
+}
+
+// "Kontrolli i fundit" — the cron stamps `billingLastBlock` + `billingLastCheckedAt`
+// on every recurring project it evaluates (api/cron/run.ts, recurring-invoices
+// Part 2). Shown read-only, in the row tooltip here and in the Faturimi panel of
+// ProjectDetailView; the labels live next to the engine (recurringBilling.ts).
+function billingCheckTooltip(project: Project): string {
+  const raw: any = (project as any).billingLastCheckedAt;
+  const at: Date | null = raw ? (raw?.toDate ? raw.toDate() : new Date(raw)) : null;
+  const reason = (project as any).billingLastBlock as string | null | undefined;
+  if (!at || isNaN(at.getTime())) return 'Faturim periodik — ende pa kontroll nga kroni';
+  return `Kontrolli i fundit: ${at.toLocaleDateString('sq-AL')} — ${projectBillingBlockLabel(reason, project)}`;
 }
 
 const ProjectsView: React.FC = () => {
@@ -423,6 +437,26 @@ const ProjectsView: React.FC = () => {
       }
     }
 
+    // The counter is a Firestore transaction on `counters/invoices_{businessId}`.
+    // Its failure used to escape this handler AFTER the project document existed,
+    // so the first invoice and the period claim were never written — and the cron
+    // then billed the period as if nothing had. Fall back to a label and say so:
+    // the occurrence + claim are what must not be lost.
+    const nextInvoiceLabel = async (fallback: string): Promise<string> => {
+      if (!invoiceScopeId) return fallback;
+      try {
+        return await getNextInvoiceNumber(invoiceScopeId, maxInvNum);
+      } catch (err: any) {
+        console.error('[ProjectsView] numëratori atomik i faturave dështoi:', err?.code || err);
+        toast({
+          title: 'Numri u caktua pa numërator atomik — kontrollo dublikatët',
+          description: `Fatura e projektit mori numrin ${fallback} (${err?.code || err?.message || 'gabim'}).`,
+          variant: 'destructive',
+        });
+        return fallback;
+      }
+    };
+
     if (billableTotal > 0) {
     if (isRecurring) {
       // The recurrence is PROJECT-driven (cron `recurring-invoices` Part 2), so this
@@ -434,9 +468,7 @@ const ProjectsView: React.FC = () => {
       // Same id the cron computes for this (project, period) — see
       // createInvoiceOccurrence above and api/cron/run.ts Part 2.
       const occurrenceId = recurringOccurrenceId('auto', newProject.id, periodKey);
-      const invoiceLabel = invoiceScopeId
-        ? await getNextInvoiceNumber(invoiceScopeId, maxInvNum)
-        : `AUTO-${periodKey}-${newProject.id.slice(0, 6).toUpperCase()}`;
+      const invoiceLabel = await nextInvoiceLabel(`AUTO-${periodKey}-${newProject.id.slice(0, 6).toUpperCase()}`);
       const occurrenceCreated = await createInvoiceOccurrence(occurrenceId, {
         invoiceNumber: invoiceLabel,
         projectId: newProject.id,
@@ -536,9 +568,7 @@ const ProjectsView: React.FC = () => {
       } // end: only when THIS call created the period's occurrence
     } else {
       // Non-recurring project: create a plain Draft invoice
-      const invoiceLabel = invoiceScopeId
-        ? await getNextInvoiceNumber(invoiceScopeId, maxInvNum)
-        : `DRAFT-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${newProject.id.slice(0, 6).toUpperCase()}`;
+      const invoiceLabel = await nextInvoiceLabel(`DRAFT-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${newProject.id.slice(0, 6).toUpperCase()}`);
       const newInvoice = await invoiceMutation.create({
         invoiceNumber: invoiceLabel,
         projectId: newProject.id,
@@ -699,9 +729,9 @@ const ProjectsView: React.FC = () => {
       );
       toast({
         title: `Projekti "${project.name}" u kthye`,
-        description: project.wasRecurringBeforeArchive
-          ? 'Faturimi i përsëritur u aktivizua përsëri.'
-          : undefined,
+        // A series whose "repeat until" has passed is NOT switched back on
+        // (restoreProjectPatch) — the toast must not claim otherwise.
+        description: resumeBillingToastLine(project),
       });
     } catch (err) {
       console.error('[ProjectsView] kthimi nga arkiva dështoi:', err);
@@ -844,7 +874,9 @@ const ProjectsView: React.FC = () => {
       billingType,
       startDate,
       department,
-      billingDayOfMonth,
+      // Explicit null CLEARS the field (removeUndefined strips undefined, so an
+      // emptied billing day used to keep the old one forever).
+      billingDayOfMonth: billingDayOfMonth ?? null,
       // '' (not undefined): the mutation layer strips undefined, so "Pa klient"
       // silently kept the OLD customer — and with it the old client's portal
       // access to the project and its tasks.
@@ -864,6 +896,13 @@ const ProjectsView: React.FC = () => {
             recurringEndDate: recurringEndDate ?? null,
             // Re-enabling a stopped series wipes the stop record.
             ...(projectToEdit.isRecurring ? {} : { recurringBillingStoppedReason: null, recurringBillingStoppedAt: null }),
+            // Leaving a manual stop OR a pause re-points a stale claim, exactly
+            // like a restore from the archive does: otherwise the first run after
+            // the switch reports every paused month as "pa faturë" and notifies
+            // the owner about periods that were deliberately not billed.
+            ...((!projectToEdit.isRecurring || (projectToEdit.isRecurringPaused && !isRecurringPaused))
+              ? resumedBillingClaimPatch(billingSubject, editedAt)
+              : {}),
           }
         : (projectToEdit.isRecurring
             ? { ...stopProjectBillingPatch(), recurringEndDate: null }
@@ -1246,6 +1285,16 @@ const ProjectsView: React.FC = () => {
                       {isGuestOnProject && (
                         <Badge className="text-[10px] px-1.5 py-0 h-4 bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400 border-0">
                           Guest
+                        </Badge>
+                      )}
+                      {project.isRecurring && !archived && (
+                        <Badge
+                          variant="outline"
+                          className="gap-1 text-[10px] px-1.5 py-0 h-4 cursor-help"
+                          title={billingCheckTooltip(project)}
+                        >
+                          <RefreshCw className="w-2.5 h-2.5" />
+                          Periodik
                         </Badge>
                       )}
                     </div>

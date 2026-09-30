@@ -82,8 +82,12 @@ const PaymentsView: React.FC = () => {
       // webhook / manual) are not duplicated by the derived backfill.
       // The currency is part of the signature: without it 100 EUR and 100 ALL on the
       // same invoice and day collapsed into one row and the second was never created.
+      // Normalised to 'ALL' on BOTH sides: the Stripe webhook writes
+      // `currency: inv.currency || 'ALL'` while a derived row from an ALL invoice
+      // carries no currency at all, so `'' !== 'ALL'` re-created every webhook
+      // payment as a duplicate on the next sync.
       const sig = (p: { invoiceId: string; amount: number; currency?: string; method?: string; paidAt?: any }) =>
-        `${p.invoiceId}|${Math.round(p.amount || 0)}|${p.currency || ''}|${p.method || ''}|${(parseDate(p.paidAt) || new Date(0)).toISOString().slice(0, 10)}`;
+        `${p.invoiceId}|${Math.round(p.amount || 0)}|${p.currency || 'ALL'}|${p.method || ''}|${(parseDate(p.paidAt) || new Date(0)).toISOString().slice(0, 10)}`;
       const existing = new Set((payments || []).map(p => p.sourceKey).filter(Boolean));
       const existingSigs = new Set((payments || []).map(sig));
       const missing = missingPayments(invoices, existing).filter(m => !existingSigs.has(sig(m)));

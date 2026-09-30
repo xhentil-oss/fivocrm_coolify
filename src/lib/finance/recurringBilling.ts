@@ -250,3 +250,38 @@ export function stopProjectBillingPatch(at: Date = new Date()): Partial<Project>
 export function isPermanentBillingBlock(reason: ProjectBillingBlock | null): boolean {
   return !!reason && PERMANENT_BILLING_BLOCKS.includes(reason);
 }
+
+// ── Human labels for the block reasons ──────────────────────────────────────
+// The cron stamps `billingLastBlock` + `billingLastCheckedAt` on every recurring
+// project it evaluates, and the Faturimi panel shows them read-only. One label
+// table, so the panel, the list tooltip and any future notification say the
+// same thing for the same reason.
+
+export const PROJECT_BILLING_BLOCK_LABELS: Record<ProjectBillingBlock, string> = {
+  'not-recurring': 'Projekti nuk faturohet periodikisht',
+  'unsupported-frequency': 'Frekuencë e pambështetur (vetëm javore / mujore)',
+  'terminal-status': 'Projekti është anuluar ose arkivuar',
+  'paused': 'Faturimi është në pauzë',
+  'one-time': 'Lloji i faturimit është një-herësh',
+  'series-ended': 'Seria mbaroi (data e fundit e përsëritjes kaloi)',
+  'already-billed': 'Periudha u faturua',
+  'before-billing-day': 'Pret ditën e faturimit',
+};
+
+/**
+ * Albanian label for a block reason, with the project's own numbers filled in
+ * (`before-billing-day` → "Pret ditën e faturimit (25)"). An unknown string —
+ * a reason added to the cron before this table learns it — is shown verbatim
+ * rather than as nothing. `null` means the project may bill right now.
+ */
+export function projectBillingBlockLabel(
+  reason: ProjectBillingBlock | string | null | undefined,
+  project?: Pick<ProjectBillingCandidate, 'billingDayOfMonth'> | null,
+): string {
+  if (!reason) return 'Gati për faturim';
+  if (reason === 'before-billing-day') {
+    const day = project?.billingDayOfMonth;
+    return day ? `Pret ditën e faturimit (${day})` : PROJECT_BILLING_BLOCK_LABELS[reason];
+  }
+  return (PROJECT_BILLING_BLOCK_LABELS as Record<string, string>)[reason] ?? reason;
+}

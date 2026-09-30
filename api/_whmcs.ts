@@ -370,6 +370,23 @@ export function whmcsGatewayForMethod(method: string | undefined | null): string
   return fallback;
 }
 
+/** `YYYY-MM-DD HH:mm:ss` in the WHMCS install's local zone (WHMCS_TIMEZONE, default Europe/Tirane). */
+export function formatWhmcsLocalDateTime(d: Date): string {
+  const timeZone = (process.env.WHMCS_TIMEZONE || 'Europe/Tirane').trim() || 'Europe/Tirane';
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone, hourCycle: 'h23',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).formatToParts(d);
+  } catch {
+    return d.toISOString().slice(0, 19).replace('T', ' ');
+  }
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? '00';
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`;
+}
+
 // ── Write-back: record a payment on a WHMCS invoice (FivoCRM → WHMCS) ──────────
 /**
  * Record a payment against a WHMCS invoice when a WHMCS-sourced invoice is paid
@@ -396,7 +413,10 @@ export async function pushInvoicePayment(args: {
   };
   // Amount in the invoice's own currency. If omitted, WHMCS pays the full balance.
   if (typeof args.amount === 'number' && args.amount > 0) params.amount = args.amount.toFixed(2);
-  if (args.date) params.date = args.date.toISOString().slice(0, 19).replace('T', ' ');
+  // WHMCS reads the date as its own local time (the install runs on Europe/Tirane).
+  // `toISOString()` is UTC, so a payment taken after 22:00 Tirane was dated
+  // YESTERDAY in WHMCS — the wrong day in its reports and in the client's receipt.
+  if (args.date) params.date = formatWhmcsLocalDateTime(args.date);
 
   try {
     await whmcsCall('AddInvoicePayment', params);

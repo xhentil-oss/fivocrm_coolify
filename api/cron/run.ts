@@ -37,7 +37,7 @@ import {
 import { notifyUser, getUserPrefs, isDndActive, isSilenced, escapeHtml, BASE_URL } from '../_push.js';
 import { runChatScheduled } from '../_chatScheduled.js';
 import { isTypeMutedByPrefs } from '../_notificationTypes.js';
-import { costRateFor, resolveFinanceSettings, nextBudgetAlert, type FinanceSettings } from '../_profitabilityCore.js';
+import { costRateFor, resolveFinanceSettings, budgetAlertsDue, type FinanceSettings } from '../_profitabilityCore.js';
 // `.js` is NOT optional here: package.json declares "type": "module", so the
 // deployed function runs as native ESM, where a relative specifier without an
 // extension throws ERR_MODULE_NOT_FOUND at LOAD time — taking down every job in
@@ -318,12 +318,6 @@ function daysInZonedMonth(year: number, month: number): number {
 function addZonedDays(from: Date, days: number): Date {
   const p = zonedParts(from);
   return zonedDate(p.year, p.month, p.day + days, p.hours, p.minutes, p.seconds, p.ms);
-}
-
-/** `from` shifted by whole zone years, keeping its wall-clock time of day. */
-function addZonedYears(from: Date, years: number): Date {
-  const p = zonedParts(from);
-  return zonedDate(p.year + years, p.month, p.day, p.hours, p.minutes, p.seconds, p.ms);
 }
 
 /** Add months in the business zone, clamped (31 Jan + 1 = 28/29 Feb, never 3 Mar). */
@@ -775,7 +769,16 @@ async function runInvoiceReminders(opts?: { businessId?: string | null }) {
     // creator "🔴 Faturë e skaduar" — on the morning of the day it was due,
     // while the client still had the whole day to pay.
     if (endOfBillingDay(dueDate) < now) {
-      ops.push(doc.ref.update({ status: 'Overdue', updatedAt: admin.firestore.Timestamp.now() }));
+      if (invoice.status === 'Partial') {
+        // `Partial` is FivoCRM-only and STAYS the stored status (overdue-reminders
+        // and the WHMCS sync both promise it never flips — flipping it here lost
+        // the "money already received" state and re-dunned the full total). The
+        // creator is still told once, stamped so the row is not re-noticed daily.
+        if (invoice.overdueNoticeSentAt) continue;
+        ops.push(doc.ref.update({ overdueNoticeSentAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
+      } else {
+        ops.push(doc.ref.update({ status: 'Overdue', updatedAt: admin.firestore.Timestamp.now() }));
+      }
       overdueMarked++;
       if (invoice.createdByUserId) {
         const ovTitle = `🔴 Faturë e skaduara: #${invoiceLabel}`;
@@ -1515,10 +1518,14 @@ function projectBillingBlockReason(project: any, now: Date): string | null {
 
   // Chosen billing day (monthly only): hold until that day of the month arrives,
   // clamped to the month's length. Transient — bills normally once reached.
+  // Read in the business zone (mirrors `billingDayForMonth`): the machine-zone
+  // getters made a Vercel (UTC) tick on the evening of the billing day hold the
+  // invoice until the next run, and a 1st-of-month series bill a day early.
   if (frequency === 'monthly' && project.billingDayOfMonth) {
-    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const z = zonedParts(now);
+    const lastDay = daysInZonedMonth(z.year, z.month);
     const day = Math.min(Math.max(1, Math.round(Number(project.billingDayOfMonth))), lastDay);
-    if (now.getDate() < day) return 'before-billing-day';
+    if (z.day < day) return 'before-billing-day';
   }
   return null;
 }
@@ -1550,9 +1557,18 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
   } catch { /* a failed lookup must not stop billing for everyone else */ }
   let suspendedSkipped = 0;
 
-  // ── Part 1: Invoice-based recurrence (user-created recurring invoices) ──────
-  const invoicesSnap = await scoped(db.collection('invoices').where('isRecurring', '==', true)).get();
+  // The two engines are ISOLATED. They used to share one straight-line body, so
+  // a thrown error in Part 1 (a non-ALREADY_EXISTS `create()` failure, a dead
+  // SMTP transport) skipped Part 2 for the whole platform — every retainer went
+  // unbilled that day — while run-all still recorded the job as ok. Each part now
+  // reports its own error and Part 2 always runs.
   const blockedReasons: Record<string, number> = {};
+  let part1Error: string | null = null;
+  let part2Error: string | null = null;
+
+  // ── Part 1: Invoice-based recurrence (user-created recurring invoices) ──────
+  try {
+  const invoicesSnap = await scoped(db.collection('invoices').where('isRecurring', '==', true)).get();
 
   // Linked projects in ONE round trip instead of one per series. Each is needed
   // by `projectAlsoBills` before the cheap blocks can even be evaluated, so this
@@ -1652,9 +1668,10 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
     const nextTrigger = new Date(newDueDate);
 
     // Number & date the invoice from the period actually being billed.
-    const scheduledYear = billingDate.getFullYear();
-    const scheduledMonth = billingDate.getMonth();
-    const scheduledDay = billingDate.getDate();
+    const scheduledZ = zonedParts(billingDate);
+    const scheduledYear = scheduledZ.year;
+    const scheduledMonth = scheduledZ.month;
+    const scheduledDay = scheduledZ.day;
     // Include the day so sub-monthly (weekly) children in the same month get
     // distinct numbers instead of colliding on REC-YYYY-MM-<parent>.
     const invoiceNumber = `REC-${scheduledYear}-${String(scheduledMonth + 1).padStart(2, '0')}-${String(scheduledDay).padStart(2, '0')}-${doc.id.slice(0, 6).toUpperCase()}`;
@@ -1866,8 +1883,12 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
 
     created++;
   }
-
-  await settleAll(ops, 'recurring-invoices');
+  } catch (err: any) {
+    part1Error = String(err?.message || err).slice(0, 500);
+    console.error('[CRON:recurring-invoices] Part 1 (recurring invoices) failed:', err);
+  } finally {
+    await settleAll(ops, 'recurring-invoices');
+  }
 
   // ── Part 2: Project-driven recurrence (a retainer bills its own fee) ─────────
   // Guarded by projectBillingBlockReason() so that, unlike before, a Cancelled or
@@ -1875,21 +1896,45 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
   // series is honoured, and the period KEY makes the run idempotent against the
   // first invoice the UI creates at project-creation time.
   const legacyOps: Promise<any>[] = [];
-
-  const projectsSnap = await scoped(db.collection('projects').where('isRecurring', '==', true)).get();
   let legacyCreated = 0;
   let zeroBudget = 0;
   let projectPeriodsMissed = 0;
+  let projectsEvaluated = 0;
+  // Per-reason tally, like Part 1's `blocked` — "0 created" for retainers was
+  // unexplainable before (the reasons were computed and thrown away).
+  const projectBlockedReasons: Record<string, number> = {};
+  const tallyProjectBlock = (reason: string) => {
+    projectBlockedReasons[reason] = (projectBlockedReasons[reason] || 0) + 1;
+  };
+  /**
+   * Diagnosability stamp: what the engine decided for this project, last time it
+   * looked. Written ONLY when the decision changed (cost rule — a stable
+   * "already-billed" must not cost a write per project per run).
+   */
+  const stampBillingCheck = (projectDoc: FirebaseFirestore.QueryDocumentSnapshot, project: any, reason: string | null) => {
+    const stored = project.billingLastBlock === undefined ? undefined : (project.billingLastBlock ?? null);
+    if (stored !== undefined && stored === reason) return;
+    legacyOps.push(projectDoc.ref.update({
+      billingLastBlock: reason,
+      billingLastCheckedAt: admin.firestore.Timestamp.now(),
+    }));
+  };
+
+  try {
+  const projectsSnap = await scoped(db.collection('projects').where('isRecurring', '==', true)).get();
 
   for (const projectDoc of projectsSnap.docs) {
     const project = projectDoc.data();
     if (project.businessId && suspendedBusinessIds.has(project.businessId)) {
       suspendedSkipped++; skipped++; continue;
     }
+    projectsEvaluated++;
     const frequency: string = project.recurringFrequency || 'monthly';
 
     const block = projectBillingBlockReason(project, now);
     if (block) {
+      stampBillingCheck(projectDoc, project, block);
+      tallyProjectBlock(block);
       // A permanently-blocked series is switched off so we stop reading — and
       // re-evaluating — it on every single run.
       if (PERMANENT_BILLING_BLOCKS.includes(block)) {
@@ -1944,6 +1989,8 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
     // the client. Warn the owner once per period instead, so it is not silent.
     if (budget <= 0) {
       zeroBudget++;
+      tallyProjectBlock('zero-budget');
+      stampBillingCheck(projectDoc, project, 'zero-budget');
       if (project.zeroBudgetNoticePeriodKey !== periodKey) {
         legacyOps.push(projectDoc.ref.update({
           zeroBudgetNoticePeriodKey: periodKey,
@@ -1969,6 +2016,9 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
       continue;
     }
 
+    // Nothing blocks it: the stamp says so (cleared only when it was set before).
+    stampBillingCheck(projectDoc, project, null);
+
     const periodLabel = frequency === 'weekly'
       ? `java ${startOfBillingWeek(now).toLocaleDateString('sq-AL', { day: '2-digit', month: 'long' })}`
       : now.toLocaleDateString('sq-AL', { month: 'long', year: 'numeric' });
@@ -1989,6 +2039,7 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
         lastInvoicePeriodKey: periodKey,
         updatedAt: admin.firestore.Timestamp.now(),
       }));
+      tallyProjectBlock('already-billed');
       skipped++; continue;
     }
     // businessId + customerId are mandatory: `invoiceItems` is business-isolated and
@@ -2046,12 +2097,24 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
 
     legacyCreated++;
   }
-
-  await settleAll(legacyOps, 'recurring-invoices-legacy');
+  } catch (err: any) {
+    part2Error = String(err?.message || err).slice(0, 500);
+    console.error('[CRON:recurring-invoices] Part 2 (recurring projects) failed:', err);
+  } finally {
+    await settleAll(legacyOps, 'recurring-invoices-legacy');
+  }
   // `blocked` is what the manual "Gjenero Periodike" run reports back: a named
   // reason per skipped series instead of an opaque count, so "0 created" is
   // explainable ("3 already-generated, 1 paused") rather than alarming.
-  return { created, legacyCreated, skipped, zeroBudget, blocked: blockedReasons, projectPeriodsMissed, suspendedSkipped, businessId: scopeId };
+  // `projectBlocked` is the same tally for Part 2 (retainers).
+  return {
+    created, legacyCreated, skipped, zeroBudget, projectsEvaluated,
+    blocked: blockedReasons, projectBlocked: projectBlockedReasons,
+    projectPeriodsMissed, suspendedSkipped, businessId: scopeId,
+    part1Error, part2Error,
+    // A part that died is a failure of the job, even though the other part ran.
+    ...(part1Error || part2Error ? { error: [part1Error, part2Error].filter(Boolean).join(' | ') } : {}),
+  };
 }
 
 // ── JOB: project-completion-reminder ─────────────────────────────────────────
@@ -2236,11 +2299,32 @@ function addMonthsClamped(from: Date, months: number, anchorDay?: number): Date 
 
 function nextExpenseOccurrence(from: Date, frequency: string, anchorDay?: number): Date {
   if (frequency === 'weekly') return addZonedDays(from, 7);
-  if (frequency === 'yearly') return addZonedYears(from, 1);
+  // Yearly = +12 months CLAMPED with the anchor: a 29 Feb series lands on 28 Feb
+  // in a common year, never on 1 Mar (the overflow a bare year step produced).
+  if (frequency === 'yearly') return addMonthsClamped(from, 12, anchorDay);
   // Quarterly goes through the clamped adder too: 30 Nov + 3 months must be
   // 28/29 Feb, never 2 Mar.
   if (frequency === 'quarterly') return addMonthsClamped(from, 3, anchorDay);
   return addMonthsClamped(from, 1, anchorDay);
+}
+
+/**
+ * The series' day-of-month: the stored anchor, else the occurrence's day read in
+ * the BUSINESS zone. Mirrors `resolveInvoiceAnchorDay` — never `getDate()`.
+ */
+function resolveExpenseAnchorDay(expense: any, occurrence: Date): number {
+  const raw = expense?.recurringAnchorDay;
+  const n = raw == null || raw === '' ? NaN : Math.round(Number(raw));
+  if (Number.isFinite(n) && n >= 1 && n <= 31) return n;
+  return zonedParts(occurrence).day;
+}
+
+/**
+ * Deterministic id of a generated expense occurrence — `create()` on it is the
+ * idempotency guarantee, exactly as `recurringOccurrenceId` is for invoices.
+ */
+function recurringExpenseOccurrenceId(parentId: string, periodKey: string): string {
+  return `rec_exp_${parentId}_${periodKey}`;
 }
 
 /** Why this series may not generate now, or null when an occurrence is due. */
@@ -2289,10 +2373,28 @@ async function runRecurringExpenses(opts?: { businessId?: string | null }) {
   let suspendedSkipped = 0;
 
   const expensesSnap = await scoped(db.collection('expenses').where('isRecurring', '==', true)).get();
-  if (expensesSnap.empty) return { created: 0, healed: 0, ended: 0, suspendedSkipped, scopedTo: scopeId };
+  if (expensesSnap.empty) return { created: 0, healed: 0, ended: 0, periodsSkipped: 0, blocked: {}, suspendedSkipped, scopedTo: scopeId };
 
-  let created = 0, healed = 0, ended = 0;
+  let created = 0, healed = 0, ended = 0, periodsSkipped = 0;
   const ops: Promise<any>[] = [];
+  // Every non-generation is a NAMED reason, tallied for the run report.
+  const blockedReasons: Record<string, number> = {};
+  const tally = (reason: string) => { blockedReasons[reason] = (blockedReasons[reason] || 0) + 1; };
+  // `financeMonthCloses/{bid}_{YYYY-MM}.locked` — one read per (tenant, month) per run.
+  const monthCloseCache = new Map<string, boolean>();
+  const monthIsClosed = async (businessId: string, at: Date): Promise<boolean> => {
+    const z = zonedParts(at);
+    const key = `${businessId}_${z.year}-${String(z.month + 1).padStart(2, '0')}`;
+    const cached = monthCloseCache.get(key);
+    if (cached !== undefined) return cached;
+    let locked = false;
+    try {
+      const snap = await db.collection('financeMonthCloses').doc(key).get();
+      locked = snap.exists && (snap.data() as any)?.locked === true;
+    } catch { /* an unreadable close is treated as open — the row is what the owner expects */ }
+    monthCloseCache.set(key, locked);
+    return locked;
+  };
 
   for (const doc of expensesSnap.docs) {
     const expense = doc.data();
@@ -2314,10 +2416,7 @@ async function runRecurringExpenses(opts?: { businessId?: string | null }) {
       // series degraded it to the 30th for good — the exact drift the anchor
       // exists to prevent. Only a series that never had one gets a fresh anchor,
       // and that one is read in the business zone.
-      const storedAnchorRaw = Number(expense.recurringAnchorDay);
-      const storedAnchor = Number.isFinite(storedAnchorRaw) && storedAnchorRaw >= 1 && storedAnchorRaw <= 31
-        ? Math.round(storedAnchorRaw) : null;
-      const healAnchor = storedAnchor ?? zonedParts(own).day;
+      const healAnchor = resolveExpenseAnchorDay(expense, own);
       const seeded = nextExpenseOccurrence(anchor, frequency, healAnchor);
       ops.push(doc.ref.update({
         nextRecurringDate: admin.firestore.Timestamp.fromDate(seeded),
@@ -2327,6 +2426,7 @@ async function runRecurringExpenses(opts?: { businessId?: string | null }) {
         lastGeneratedPeriodKey: expensePeriodKey(frequency, anchor),
         updatedAt: admin.firestore.Timestamp.now(),
       }));
+      tally('no-next-date');
       healed++;
       continue;
     }
@@ -2334,16 +2434,117 @@ async function runRecurringExpenses(opts?: { businessId?: string | null }) {
     // "Repeat until": the series is complete — stop generating. Past entries stay.
     if (reason === 'series-ended') {
       ops.push(doc.ref.update({ isRecurring: false, nextRecurringDate: null, updatedAt: admin.firestore.Timestamp.now() }));
+      tally('series-ended');
       ended++;
       continue;
     }
 
-    if (reason) continue;  // not-due / paused / already-generated / unsupported
+    // A stale pointer: the period of `nextRecurringDate` is already claimed (the
+    // advance write failed after the row was created). Move the pointer forward
+    // ONE step instead of leaving the series blocked forever.
+    if (reason === 'already-generated') {
+      const rawStale = expense.nextRecurringDate;
+      const staleDate: Date = rawStale.toDate ? rawStale.toDate() : new Date(rawStale);
+      const staleAnchor = resolveExpenseAnchorDay(expense, staleDate);
+      ops.push(doc.ref.update({
+        nextRecurringDate: admin.firestore.Timestamp.fromDate(nextExpenseOccurrence(staleDate, frequency, staleAnchor)),
+        updatedAt: admin.firestore.Timestamp.now(),
+      }));
+      tally('already-generated');
+      healed++;
+      continue;
+    }
+
+    if (reason) { tally(reason); continue; }  // not-due / paused / inactive / unsupported
 
     const rawNext = expense.nextRecurringDate;
     const nextDate: Date = rawNext.toDate ? rawNext.toDate() : new Date(rawNext);
-    const periodKey = expensePeriodKey(frequency, nextDate);
-    const anchorDay: number = expense.recurringAnchorDay || nextDate.getDate();
+    // The anchor is read in the business zone, exactly as the heal path does —
+    // `nextDate.getDate()` was the machine's (UTC) day, so a series due at
+    // 00:30 Tirane on the 1st got anchored to the 31st.
+    const anchorDay = resolveExpenseAnchorDay(expense, nextDate);
+
+    // ── Only the period containing NOW is ever generated ────────────────────
+    // Same law as both invoice engines. This loop used to book ONE past period
+    // per run, so a series paused in May and resumed in September wrote May,
+    // June, July and August rows over four nights — into months that were
+    // already closed and reported. The skipped periods are counted, stamped on
+    // the parent and told to the owner; never backfilled.
+    const currentKey = expensePeriodKey(frequency, now);
+    let occurrence = nextDate;
+    let stalePeriods = 0;
+    for (let guard = 0; guard < 240 && expensePeriodKey(frequency, occurrence) !== currentKey && occurrence <= now; guard++) {
+      occurrence = nextExpenseOccurrence(occurrence, frequency, anchorDay);
+      stalePeriods++;
+    }
+    const periodKey = expensePeriodKey(frequency, occurrence);
+    const skipPatch = (periods: number) => (periods > 0 ? {
+      recurringPeriodsSkipped: periods,
+      recurringPeriodsSkippedAt: admin.firestore.Timestamp.now(),
+    } : {});
+    const notifySkipped = (periods: number, why: string) => {
+      if (periods <= 0 || !expense.createdByUserId) return;
+      ops.push(notifyUser({
+        userId: expense.createdByUserId,
+        type: 'recurring_expense_created',
+        title: `⚠️ ${periods} periudhë pa shpenzim: ${expense.title}`,
+        message: `${why} ${periods} periudhë NUK u regjistruan automatikisht — shtoji manualisht nëse duhen.`,
+        actionUrl: '/app/expenses',
+        actionLabel: 'Shiko Shpenzimet',
+        businessId: expense.businessId ?? null,
+        teamId: expense.teamId ?? null,
+      }));
+    };
+    if (stalePeriods > 0) {
+      tally('stale-period');
+      periodsSkipped += stalePeriods;
+    }
+
+    // The first occurrence in/after the current period is still ahead of us:
+    // advance the pointer past the stale periods and wait for its day.
+    if (occurrence > now) {
+      if (stalePeriods > 0) {
+        ops.push(doc.ref.update({
+          nextRecurringDate: admin.firestore.Timestamp.fromDate(occurrence),
+          recurringAnchorDay: anchorDay,
+          ...skipPatch(stalePeriods),
+          updatedAt: admin.firestore.Timestamp.now(),
+        }));
+        notifySkipped(stalePeriods, 'Seria kishte mbetur pas; periudha aktuale do të regjistrohet në datën e saj.');
+      }
+      tally('not-due');
+      continue;
+    }
+
+    const next = nextExpenseOccurrence(occurrence, frequency, anchorDay);
+
+    if (expense.lastGeneratedPeriodKey === periodKey) {
+      // The current period is already claimed; only the pointer was stale.
+      ops.push(doc.ref.update({
+        nextRecurringDate: admin.firestore.Timestamp.fromDate(next),
+        recurringAnchorDay: anchorDay,
+        ...skipPatch(stalePeriods),
+        updatedAt: admin.firestore.Timestamp.now(),
+      }));
+      notifySkipped(stalePeriods, 'Seria kishte mbetur pas; periudha aktuale ishte tashmë e regjistruar.');
+      tally('already-generated');
+      continue;
+    }
+
+    // A CLOSED month is never written into — the close is the Admin's lock on
+    // the books. The period is reported as skipped, exactly like a stale one.
+    if (expense.businessId && await monthIsClosed(expense.businessId, occurrence)) {
+      tally('month-closed');
+      periodsSkipped += 1;
+      ops.push(doc.ref.update({
+        nextRecurringDate: admin.firestore.Timestamp.fromDate(next),
+        recurringAnchorDay: anchorDay,
+        ...skipPatch(stalePeriods + 1),
+        updatedAt: admin.firestore.Timestamp.now(),
+      }));
+      notifySkipped(stalePeriods + 1, 'Muaji i periudhës aktuale është i mbyllur (Financat → Mbyllja e muajit), ndaj rreshti nuk u krijua.');
+      continue;
+    }
 
     // Belt and braces for series that predate `lastGeneratedPeriodKey`: refuse if
     // a child already sits in this period. One equality query, no composite index.
@@ -2362,17 +2563,26 @@ async function runRecurringExpenses(opts?: { businessId?: string | null }) {
       // Record the key and move on, so the next run advances instead of retrying.
       ops.push(doc.ref.update({
         lastGeneratedPeriodKey: periodKey,
-        nextRecurringDate: admin.firestore.Timestamp.fromDate(nextExpenseOccurrence(nextDate, frequency, anchorDay)),
+        nextRecurringDate: admin.firestore.Timestamp.fromDate(next),
+        recurringAnchorDay: anchorDay,
+        ...skipPatch(stalePeriods),
         updatedAt: admin.firestore.Timestamp.now(),
       }));
+      notifySkipped(stalePeriods, 'Seria kishte mbetur pas; periudha aktuale ishte tashmë e regjistruar.');
+      tally('already-generated');
       continue;
     }
 
-    const next = nextExpenseOccurrence(nextDate, frequency, anchorDay);
-
-    // Create a new expense entry for this cycle. Use the SCHEDULED date (nextDate),
-    // not today, so the occurrence lands in its planned month even if cron runs late.
-    ops.push(db.collection('expenses').add({
+    // Create the occurrence for this period. Its date is the SCHEDULED one (the
+    // anchor day inside the current period), not today, so a late run still
+    // lands the row on its planned day.
+    //
+    // The id IS the idempotency guarantee (same law as the invoice engines):
+    // `create()` on a deterministic id makes the database refuse a second row
+    // for the same period, whatever happened to the claim write or to a run
+    // that died between the two.
+    const childRef = db.collection('expenses').doc(recurringExpenseOccurrenceId(doc.id, periodKey));
+    const child = {
       title: expense.title,
       description: expense.description || null,
       amount: expense.amount,
@@ -2397,10 +2607,26 @@ async function runRecurringExpenses(opts?: { businessId?: string | null }) {
       approvalStatus: expense.approvalStatus === 'Rejected' ? 'Submitted' : (expense.approvalStatus || 'Submitted'),
       approvedByUserId: expense.approvalStatus === 'Approved' ? (expense.approvedByUserId || null) : null,
       createdByUserId: expense.createdByUserId || null,
-      date: admin.firestore.Timestamp.fromDate(nextDate),
+      date: admin.firestore.Timestamp.fromDate(occurrence),
       createdAt: admin.firestore.Timestamp.now(),
       updatedAt: admin.firestore.Timestamp.now(),
-    }));
+    };
+    try {
+      await childRef.create(child);
+    } catch (err) {
+      if (!isAlreadyExists(err)) throw err;
+      // A concurrent run (or a retried invocation) already booked this period:
+      // record the claim, advance, and never write a second row.
+      ops.push(doc.ref.update({
+        lastGeneratedPeriodKey: periodKey,
+        nextRecurringDate: admin.firestore.Timestamp.fromDate(next),
+        recurringAnchorDay: anchorDay,
+        ...skipPatch(stalePeriods),
+        updatedAt: admin.firestore.Timestamp.now(),
+      }));
+      tally('already-generated');
+      continue;
+    }
 
     // Advance the parent AND record the period — a failed write here used to be
     // invisible; now the key makes a retry idempotent instead of duplicating.
@@ -2408,8 +2634,10 @@ async function runRecurringExpenses(opts?: { businessId?: string | null }) {
       nextRecurringDate: admin.firestore.Timestamp.fromDate(next),
       lastGeneratedPeriodKey: periodKey,
       recurringAnchorDay: anchorDay,
+      ...skipPatch(stalePeriods),
       updatedAt: admin.firestore.Timestamp.now(),
     }));
+    notifySkipped(stalePeriods, 'Seria kishte mbetur pas — u regjistrua vetëm periudha aktuale.');
 
     // Notify the creator
     if (expense.createdByUserId) {
@@ -2428,7 +2656,7 @@ async function runRecurringExpenses(opts?: { businessId?: string | null }) {
   }
 
   await settleAll(ops, 'recurring-expenses');
-  return { created, healed, ended, suspendedSkipped, scopedTo: scopeId };
+  return { created, healed, ended, periodsSkipped, blocked: blockedReasons, suspendedSkipped, scopedTo: scopeId };
 }
 
 // ── JOB: expire-invitations ───────────────────────────────────────────────────
@@ -6309,7 +6537,12 @@ async function runProjectSpendRollup(opts?: { full?: boolean; businessId?: strin
     const consumedPct = plannedCost > 0 ? (spent / plannedCost) * 100 : plannedHours > 0 ? (l.hours / plannedHours) * 100 : null;
     const fin = financeFor(p.teamId);
     const terminal = p.status === 'Completed' || p.status === 'Cancelled' || p.status === 'Archived';
-    const alert = terminal ? null : nextBudgetAlert(consumedPct, fin.settings.budgetAlertThresholds, Array.isArray(p.budgetAlertsSent) ? p.budgetAlertsSent : []);
+    // EVERY threshold crossed since the last run is recorded, and only the
+    // highest is announced. Recording just the highest made a 60 % → 105 % jump
+    // fire 🔴, then 🟠 on the next run, then 🟡 on the one after — three alarms
+    // for one event, in descending order.
+    const alertsDue = terminal ? [] : budgetAlertsDue(consumedPct, fin.settings.budgetAlertThresholds, Array.isArray(p.budgetAlertsSent) ? p.budgetAlertsSent : []);
+    const alert = alertsDue.length ? Math.max(...alertsDue) : null;
 
     // Clear the recompute flag even when nothing changed, or the project stays
     // in the dirty set and is re-read on every single run from now on.
@@ -6322,7 +6555,7 @@ async function runProjectSpendRollup(opts?: { full?: boolean; businessId?: strin
         spent, laborCost, billableValue, loggedHours, hoursByRole,
         spendRolledUpAt: now,
         spendRollupDirty: admin.firestore.FieldValue.delete(),
-        ...(alert != null ? { budgetAlertsSent: admin.firestore.FieldValue.arrayUnion(alert) } : {}),
+        ...(alertsDue.length ? { budgetAlertsSent: admin.firestore.FieldValue.arrayUnion(...alertsDue) } : {}),
       }));
       if (changed) updated++;
     }
@@ -6515,12 +6748,34 @@ async function recordJobRun(entry: {
 }) {
   try {
     // Keep only scalar/short fields — a full result blob could be megabytes.
+    //
+    // Flattened ONE level: run-all reports each job as a nested object
+    // (`recurringInvoices: { created, legacyCreated, … }`), and a scalar-only
+    // filter dropped every one of them, so the history could never say what
+    // recurring billing did on a given night — only that run-all "ran". A child
+    // scalar is stored as `parent.child` (a literal field name under set/add),
+    // a sub-job's `error` string is always kept, and the whole map is capped.
+    const MAX_KEYS = 80;
     const compact: Record<string, unknown> = {};
+    let keys = 0;
+    const put = (k: string, v: unknown) => {
+      if (keys >= MAX_KEYS) return;
+      if (typeof v === 'string') { compact[k] = v.slice(0, 200); keys++; }
+      else if (typeof v === 'number' || typeof v === 'boolean') { compact[k] = v; keys++; }
+      else if (Array.isArray(v)) { compact[k] = v.length; keys++; }
+    };
     for (const [k, v] of Object.entries(entry.summary || {})) {
-      if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string') {
-        compact[k] = typeof v === 'string' ? v.slice(0, 200) : v;
-      } else if (Array.isArray(v)) {
-        compact[k] = v.length;
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        const child = v as Record<string, unknown>;
+        // A failed sub-job is the one thing the history must never lose.
+        if (typeof child.error === 'string') put(`${k}.error`, child.error);
+        for (const [ck, cv] of Object.entries(child)) {
+          if (ck === 'error') continue;
+          if (cv && typeof cv === 'object' && !Array.isArray(cv)) continue; // two levels deep: dropped
+          put(`${k}.${ck}`, cv);
+        }
+      } else {
+        put(k, v);
       }
     }
     await db.collection('platformJobRuns').add({
@@ -7140,9 +7395,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: ${[...SCOPED_JOBS, ...PLATFORM_ONLY_JOBS, ...BOOTSTRAP_JOBS].sort().join(', ')}` });
     }
 
+    // A job that reports an `error` (its own, or one of run-all's sub-jobs) is
+    // recorded as NOT ok — run-all used to log ok while a whole engine had died.
+    const resultRecord = (result ?? {}) as Record<string, unknown>;
+    const subErrors = Object.entries(resultRecord)
+      .filter(([, v]) => v && typeof v === 'object' && typeof (v as any).error === 'string')
+      .map(([k, v]) => `${k}: ${(v as any).error}`);
+    if (typeof resultRecord.error === 'string') subErrors.unshift(resultRecord.error);
     await recordJobRun({
-      job, ok: true, ms: Date.now() - startedAt, actorUid, manual: isManual,
-      dryRun: req.query.dryRun === '1', summary: result as Record<string, unknown>,
+      job, ok: subErrors.length === 0, ms: Date.now() - startedAt, actorUid, manual: isManual,
+      dryRun: req.query.dryRun === '1', summary: resultRecord,
+      ...(subErrors.length ? { error: subErrors.join(' | ') } : {}),
     });
     return res.status(200).json({ success: true, job, ...result, timestamp: new Date().toISOString() });
   } catch (err: unknown) {

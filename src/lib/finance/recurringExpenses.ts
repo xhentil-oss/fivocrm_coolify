@@ -22,6 +22,14 @@
 // Everything that decides "which period is this, and may it generate" now lives
 // here, is unit-tested, and is mirrored by `expensePeriodKey` /
 // `expenseGenerationBlockReason` in `api/cron/run.ts` — keep the two in sync.
+//
+// MIRROR NOTE (Sep 2026): two rules the cron copy must carry as well —
+//   · a yearly step is `addMonthsClamped(+12, anchorDay)`, never a raw year
+//     bump: 29 Feb + 1 year overflowed to 1 Mar and the series lost its day;
+//   · `'stale-period'`: a due date whose period key is BEFORE the current
+//     period's is a period the series MISSED. The engine refuses to generate it
+//     (backfilling rewrites closed books — the owner's call); the cron skips it,
+//     reports it, and advances `nextRecurringDate` forward. It is not permanent.
 
 import type { Expense, ExpenseFrequency } from '../../types';
 import { toAll } from '../utils';
@@ -30,7 +38,7 @@ import { startOfBillingWeek } from './recurringBilling';
 // read with the machine's getters the browser (Europe/Tirane) and the cron body
 // (Vercel, UTC) disagreed about which month an occurrence belonged to, which
 // either blocked a series forever or booked its month twice. See recurringUtils.
-import { zonedParts, addZonedDays, addZonedYears, addZonedMonthsClamped } from '../recurringUtils';
+import { zonedParts, addZonedDays, addZonedMonthsClamped } from '../recurringUtils';
 
 export type { ExpenseFrequency };
 
@@ -54,7 +62,9 @@ export type ExpenseGenerationBlock =
   | 'no-next-date'
   | 'not-due'
   | 'series-ended'
-  | 'already-generated';
+  | 'already-generated'
+  /** The due date's period is already behind the current one — missed, never backfilled. */
+  | 'stale-period';
 
 /** Blocks that end the series for good — the caller should clear `isRecurring`. */
 export const PERMANENT_EXPENSE_BLOCKS: ReadonlyArray<ExpenseGenerationBlock> = ['series-ended'];
@@ -106,7 +116,9 @@ export function addMonthsClamped(from: Date, months: number, anchorDay?: number)
 /** The due date one cycle after `from`. `anchorDay` guards against month-end drift. */
 export function nextExpenseOccurrence(from: Date, frequency: string, anchorDay?: number): Date {
   if (frequency === 'weekly') return addZonedDays(from, 7);
-  if (frequency === 'yearly') return addZonedYears(from, 1);
+  // A year is twelve clamped months, not a raw year bump: 29 Feb 2028 + 1 year
+  // is 28 Feb 2029 (and 29 Feb 2032 again through `anchorDay`), never 1 Mar.
+  if (frequency === 'yearly') return addMonthsClamped(from, 12, anchorDay);
   // Quarterly and monthly both go through the clamped adder, never setMonth():
   // 30 Nov + 3 months must be 28/29 Feb, not 2 Mar.
   if (frequency === 'quarterly') return addMonthsClamped(from, 3, anchorDay);
@@ -202,7 +214,17 @@ export function expenseGenerationBlockReason(
   if (nextDate > now) return 'not-due';
 
   // The period key — not a timestamp — decides whether this cycle was covered.
-  if (expense.lastGeneratedPeriodKey === expensePeriodKey(frequency, nextDate)) return 'already-generated';
+  const dueKey = expensePeriodKey(frequency, nextDate);
+  if (expense.lastGeneratedPeriodKey === dueKey) return 'already-generated';
+
+  // A due date whose PERIOD is already behind today's is a period the series
+  // missed (cron downtime across a month end, a series revived months later).
+  // It is never generated here: backfilling a closed month rewrites books that
+  // were already reported — the owner's decision, never a job's. Keys of one
+  // frequency sort lexicographically ('2026-08' < '2026-09', 'W2026-08-24' <
+  // 'W2026-08-31', 'Q2026-2' < 'Q2026-3', 'Y2026' < 'Y2027'), so a plain string
+  // comparison is the period order. The cron skips, reports and advances.
+  if (dueKey < expensePeriodKey(frequency, now)) return 'stale-period';
 
   return null;
 }

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Lock } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
+import { useToast } from '../../hooks/use-toast';
 
 /**
  * "Mbyll muajin": the pre-close checklist, then the lock. Closing with open
@@ -18,6 +19,27 @@ interface Props {
 
 const MonthCloseDialog: React.FC<Props> = ({ open, onClose, periodLabel, checks, onConfirm }) => {
   const [busy, setBusy] = useState(false);
+  const { toast } = useToast();
+  // The write can legitimately be REFUSED (rules: admin of the business only,
+  // tenant active) or fail on the network. A bare try/finally swallowed that:
+  // the dialog closed as if the month were locked while nothing was written.
+  // On failure the dialog stays open and the error code is shown.
+  const confirm = async () => {
+    setBusy(true);
+    try {
+      await onConfirm(checks);
+      onClose();
+    } catch (err: any) {
+      console.error('[MonthClose] close failed:', err);
+      toast({
+        title: 'Muaji nuk u mbyll',
+        description: `${err?.code ? `${err.code}: ` : ''}${err?.message || 'Nuk ke leje për këtë veprim ose ndodhi një gabim — provo përsëri.'}`,
+        variant: 'destructive',
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="max-w-md">
@@ -43,7 +65,7 @@ const MonthCloseDialog: React.FC<Props> = ({ open, onClose, periodLabel, checks,
           )}
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={onClose}>Anulo</Button>
-            <Button disabled={busy} onClick={async () => { setBusy(true); try { await onConfirm(checks); onClose(); } finally { setBusy(false); } }}>
+            <Button disabled={busy} onClick={confirm}>
               {busy ? 'Duke mbyllur…' : 'Mbyll muajin'}
             </Button>
           </div>
