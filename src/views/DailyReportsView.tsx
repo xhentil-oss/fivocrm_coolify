@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
+import { aiResponseError } from '../lib/aiClient';
 import { auth } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -272,11 +273,12 @@ const DailyReportsView: React.FC<DailyReportsViewProps> = ({ embedded = false })
         }),
       });
 
-      if (!res.ok) throw new Error('API error');
+      if (!res.ok) throw await aiResponseError(res);
       const data = await res.json();
       setAiSummary(data.reply || data.message || 'Nuk mund të gjeneroj analizë.');
-    } catch {
-      toast({ title: 'Gabim AI', description: 'Nuk mund të lidhem me AI-n.', variant: 'destructive' });
+    } catch (err: any) {
+      console.error('[DailyReportsView] AI summary failed', err);
+      toast({ title: 'Gabim AI', description: err?.message || 'Nuk mund të lidhem me AI-n.', variant: 'destructive' });
     } finally {
       setAiLoading(false);
     }

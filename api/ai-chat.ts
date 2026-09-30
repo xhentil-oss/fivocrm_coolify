@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminDb } from './_firebaseAdmin.js';
 import { generateChatWith, resolveAiConfig, type ChatMsg } from './_aiProvider.js';
+import { classifyAiError } from './_aiErrors.js';
 import { checkPersistentRateLimit } from './_rateLimit.js';
 import { authenticate, isPortalOnlyToken, activeMembership, businessIdOfTeam } from './_callerIdentity.js';
 
@@ -150,10 +151,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({ reply });
   } catch (err: any) {
-    console.error('AI Chat error:', err?.message || err);
-    if (err?.status === 429 || err?.statusCode === 429) {
-      return res.status(429).json({ error: 'Serveri AI është i ngarkuar. Provoni përsëri.' });
-    }
-    return res.status(500).json({ error: 'Gabim i brendshëm' });
+    // Never an opaque 500: the provider's failure is classified (invalid key, model
+    // typo, quota, timeout, …) into a status + an actionable sentence, and the
+    // redacted provider message travels as `detail` so the browser console shows
+    // the real reason without anyone opening the Vercel logs.
+    const classified = classifyAiError(err);
+    console.error('[ai-chat] provider call failed', {
+      code: classified.code,
+      provider: cfg.preferred ?? 'platform-env',
+      providerMismatch: cfg.providerMismatch,
+      model: cfg.model || '(default)',
+      teamId: scopedTeamId,
+      detail: classified.detail,
+    });
+    return res.status(classified.httpStatus).json({
+      error: classified.message,
+      code: classified.code,
+      detail: classified.detail,
+    });
   }
 }

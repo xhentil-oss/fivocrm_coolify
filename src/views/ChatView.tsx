@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate, Link as RouterLink } from 'react-router-dom';
 import { useCollection, useMutation, getGlobalTeamId, getGlobalBusinessId } from '../hooks/useFirestore';
+import { aiResponseError } from '../lib/aiClient';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Input } from '../components/ui/input';
@@ -992,7 +993,7 @@ const ChatView: React.FC = () => {
           teamId: getGlobalTeamId(),
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw await aiResponseError(res);
       const data = await res.json();
       setSummaryText(data.reply || 'Pa përgjigje.');
     } catch (err: any) {
@@ -1025,7 +1026,7 @@ const ChatView: React.FC = () => {
           teamId: getGlobalTeamId(),
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw await aiResponseError(res);
       const data = await res.json();
       const polished = String(data.reply || '').trim().replace(/^["']|["']$/g, '');
       if (polished) {
@@ -1074,7 +1075,7 @@ const ChatView: React.FC = () => {
           teamId: getGlobalTeamId(),
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw await aiResponseError(res);
       const data = await res.json();
       const raw = String(data.reply || '').trim();
       let parsed: string[] = [];
@@ -1123,7 +1124,7 @@ const ChatView: React.FC = () => {
           teamId: getGlobalTeamId(),
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw await aiResponseError(res);
       const data = await res.json();
       const translated = String(data.reply || '').trim().replace(/^["']|["']$/g, '');
       if (translated) setTranslations(prev => ({ ...prev, [msgId]: translated }));
@@ -1170,7 +1171,7 @@ const ChatView: React.FC = () => {
           teamId: getGlobalTeamId(),
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw await aiResponseError(res);
       const data = await res.json();
       const raw = String(data.reply || '').trim();
       let parsed: any[] = [];
@@ -2632,10 +2633,7 @@ const ChatView: React.FC = () => {
         }),
       });
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({ error: 'Gabim serveri' }));
-        throw new Error(errData.error || `HTTP ${res.status}`);
-      }
+      if (!res.ok) throw await aiResponseError(res);
 
       const data = await res.json();
       setAiMessages(prev => prev.map(m => m.id === loadingMsg.id ? { ...m, content: data.reply, isLoading: false } : m));

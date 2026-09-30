@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { useCollection, useMutation, useGlobalTeamId, getGlobalTeamId } from '../hooks/useFirestore';
+import { aiResponseError } from '../lib/aiClient';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useToast } from '../hooks/use-toast';
@@ -303,11 +304,12 @@ const MomentumView: React.FC = () => {
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ messages: [{ role: 'user', content }], teamId: getGlobalTeamId() }),
       });
-      if (!res.ok) throw new Error('api');
+      if (!res.ok) throw await aiResponseError(res);
       const data = await res.json();
       setAiText(data.reply || data.message || 'Nuk mund të gjeneroj analizë.');
-    } catch {
-      toast({ title: 'Gabim AI', description: 'Nuk u lidha me AI-n.', variant: 'destructive' });
+    } catch (err: any) {
+      console.error('[MomentumView] AI coach failed', err);
+      toast({ title: 'Gabim AI', description: err?.message || 'Nuk u lidha me AI-n.', variant: 'destructive' });
     } finally {
       setAiLoading(false);
     }

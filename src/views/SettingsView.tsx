@@ -1189,7 +1189,8 @@ const SettingsView: React.FC = () => {
             </div>
 
             <div className="flex justify-end">
-              <Button onClick={handleSaveAiSettings} disabled={!aiApiKey.trim()} className="gap-2">
+              {/* With a key already in the vault, the provider/model can be corrected without re-pasting it. */}
+              <Button onClick={handleSaveAiSettings} disabled={!aiApiKey.trim() && !firestoreSettings?.hasAiApiKey} className="gap-2">
                 {aiSaved ? <><Check className="w-4 h-4" /> Ruajtur</> : 'Ruaj Konfigurimin'}
               </Button>
             </div>

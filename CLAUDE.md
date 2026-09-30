@@ -648,6 +648,28 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
   `overdueNoticeSentAt`); budget alarms record every crossed threshold at once
   (`budgetAlertsDue`), so a jump 60 → 105 % fires one 🔴, not a descending cascade.
 
+### FivoAI provider layer (`api/_aiProvider.ts` + `api/_aiErrors.ts`)
+
+- **`resolveAiConfig()` is the one answer to "which key, which provider, which model"**
+  for chat (`ai-chat.ts`), the WhatsApp draft (`_aiReply.ts`) and GMB replies (`_gmb.ts`):
+  tenant key from `teamSecrets.aiApiKey` (+ `teamSettings.aiProvider` / `aiModel`), else
+  the platform env `GEMINI_API_KEY` / `OPENAI_API_KEY`, with one fallback leg between
+  providers. **The key's SHAPE decides the provider** (`AIza…` = Gemini, `sk-…` = OpenAI,
+  `resolveProviderChoice` in the import-free `_aiErrors.ts`): the Settings form stores
+  `aiProvider` apart from the key, so an OpenAI key saved under "Gemini" was sent to
+  Gemini, refused as "API key not valid", and surfaced as an opaque 500. On a mismatch the
+  stored `aiModel` is ignored too (typed for the other provider) and `providerMismatch`
+  is logged.
+- **A failed provider call is never an opaque 500.** `classifyAiError()` maps it to a
+  named code + status + Albanian sentence (`invalid-key` 502, `model-not-found` 502,
+  `rate-limited` 429, `timeout` 504, `not-configured` 503, `bad-request`/`upstream` 502)
+  and the redacted provider message travels as `detail`; when both legs fail the PRIMARY
+  (tenant-key) error is reported. Every browser caller reads it through
+  `aiResponseError()` (`src/lib/aiClient.ts`) — never `throw new Error(\`HTTP ${status}\`)`.
+  `ai-chat.ts` has `maxDuration: 60` in `vercel.json` (provider timeout is 25 s + a
+  fallback leg; the platform default would cut it off first). Tests:
+  `src/lib/aiErrors.test.ts`.
+
 ### WhatsApp via Baileys (VPS): agent lifecycle & honest send status
 
 - **Firestore `whatsappAccounts` IS the agent set.** `vps/server.ts` mirrors it live

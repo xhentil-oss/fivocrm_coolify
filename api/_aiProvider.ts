@@ -16,8 +16,9 @@
  * `api/` never imports from `src/`; nothing here touches the request/response.
  */
 import { getTeamConfig } from './_tenantConfig.js';
+import { resolveProviderChoice, type AiProviderName } from './_aiErrors.js';
 
-export type AiProviderName = 'gemini' | 'openai';
+export type { AiProviderName } from './_aiErrors.js';
 export type ChatMsg = { role: 'user' | 'assistant'; content: string };
 
 export interface AiGenOptions {
@@ -45,6 +46,13 @@ export interface ResolvedAiConfig {
   /** The tenant's model override (applies to its preferred provider). */
   model: string;
   hasKey: boolean;
+  /**
+   * The stored `aiProvider` when the tenant key's SHAPE contradicted it (an OpenAI
+   * `sk-…` key saved under "Gemini", or the reverse) — the key was routed by its
+   * shape and the stored model override ignored, since it was typed for the other
+   * provider. Null when everything agrees.
+   */
+  providerMismatch: AiProviderName | null;
 }
 
 const DEFAULT_GEMINI_MODEL = () => process.env.GEMINI_MODEL || 'gemini-2.5-flash';
@@ -59,11 +67,19 @@ const DEFAULT_TIMEOUT_MS = 25_000;
 export async function resolveAiConfig(teamId: string | null | undefined): Promise<ResolvedAiConfig> {
   const cfg: Record<string, any> = teamId ? await getTeamConfig(teamId).catch(() => ({})) : {};
   const teamKey = typeof cfg.aiApiKey === 'string' ? cfg.aiApiKey.trim() : '';
-  const preferred: AiProviderName | null = teamKey ? (cfg.aiProvider === 'openai' ? 'openai' : 'gemini') : null;
+  // The key's shape wins over the stored `aiProvider`: a key sent to the wrong
+  // provider is just "invalid" there, and the UI then showed an opaque 500.
+  const choice = teamKey ? resolveProviderChoice(cfg.aiProvider, teamKey) : null;
+  const preferred: AiProviderName | null = choice?.provider ?? null;
+  const providerMismatch = choice?.mismatch ?? null;
+  if (providerMismatch) {
+    console.warn(`[aiProvider] team ${teamId}: aiProvider=${providerMismatch} but the key looks like a ${preferred} key — using ${preferred}`);
+  }
   const geminiKey = preferred === 'gemini' ? teamKey : (process.env.GEMINI_API_KEY || '');
   const openaiKey = preferred === 'openai' ? teamKey : (process.env.OPENAI_API_KEY || '');
-  const model = typeof cfg.aiModel === 'string' ? cfg.aiModel.trim() : '';
-  return { preferred, geminiKey, openaiKey, model, hasKey: !!(geminiKey || openaiKey) };
+  // A model typed for the OTHER provider would only 404 here.
+  const model = !providerMismatch && typeof cfg.aiModel === 'string' ? cfg.aiModel.trim() : '';
+  return { preferred, geminiKey, openaiKey, model, hasKey: !!(geminiKey || openaiKey), providerMismatch };
 }
 
 /** Does this tenant (or the platform) have any AI key at all? */
@@ -170,20 +186,21 @@ export async function generateChatWith(
   const gemini = () => callGeminiChat(geminiKey, system, messages, modelFor('gemini'), opts);
   const openai = () => callOpenAiChat(openaiKey, system, messages, modelFor('openai'), opts);
 
-  if (preferGemini && geminiKey) {
-    try { return await gemini(); } catch (err: any) {
-      if (!openaiKey) throw err;
-      console.error('[aiProvider] Gemini failed, falling back to OpenAI:', err?.message || err);
-      return openai();
+  // When both legs fail, the PRIMARY error is the one to report: it is about the
+  // key the tenant configured, which is what they can act on.
+  const withFallback = async (primary: () => Promise<AiChatResult>, fallback: (() => Promise<AiChatResult>) | null, label: string) => {
+    try { return await primary(); } catch (err: any) {
+      if (!fallback) throw err;
+      console.error(`[aiProvider] ${label} failed, falling back:`, err?.message || err);
+      try { return await fallback(); } catch (err2: any) {
+        console.error('[aiProvider] fallback failed too:', err2?.message || err2);
+        throw err;
+      }
     }
-  }
-  if (openaiKey) {
-    try { return await openai(); } catch (err: any) {
-      if (!geminiKey) throw err;
-      console.error('[aiProvider] OpenAI failed, falling back to Gemini:', err?.message || err);
-      return gemini();
-    }
-  }
+  };
+
+  if (preferGemini && geminiKey) return withFallback(gemini, openaiKey ? openai : null, 'Gemini');
+  if (openaiKey) return withFallback(openai, geminiKey ? gemini : null, 'OpenAI');
   return gemini();
 }
 
