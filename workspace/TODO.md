@@ -20,7 +20,7 @@ Rules:
 
 <todo>
 Deploy audit-in e financave 30 Shtator + konfirmo shkakun e 25 shtatorit
-workspace/FINANCE_AUDIT_2026_09_30.md — ~40 gjetje, të gjitha të rregulluara në kod (rregulla 178/178 në emulator, motorët 482 teste). Mbeten operatoriale: (1) `firebase deploy --only firestore:rules` — KUJDES: settlement-i i faturave (Paguar/Pjesërisht/Anuluar, këstet) bëhet Admin/Manager-only, `counters` sipas businessId; (2) push main (Vercel merr cron + webhook); (3) `pm2 restart` në VPS që `recurring-invoices` 07:00 / `recurring-expenses` 07:10 Tiranë të fillojnë; (4) `node scripts/audit-retainer-billing.mjs --at=2026-09-25T08:00:00Z` (vetëm-lexim) — tregon për çdo retainer arsyen e bllokimit atë ditë dhe nëse run-all u regjistrua fare; faturo me dorë periudhat e kapërcyera. Strukturore, e pabërë: run-all mbetet 27 punë në një thirrje 60s — ndaje edhe punët e tjera në thirrje më vete nga VPS-ja.
+workspace/FINANCE_AUDIT_2026_09_30.md — ~40 gjetje, të gjitha të rregulluara në kod (rregulla 178/178 në emulator, motorët 482 teste). Rregullat u deployuan dhe main u push-ua më 30 Shtator (6159276) — KUJDES: settlement-i i faturave (Paguar/Pjesërisht/Anuluar, këstet) është tani Admin/Manager-only. Mbeten: (3) `pm2 restart` në VPS që `recurring-invoices` 07:00 / `recurring-expenses` 07:10 Tiranë të fillojnë; (4) `node scripts/audit-retainer-billing.mjs --at=2026-09-25T08:00:00Z` (vetëm-lexim) — tregon për çdo retainer arsyen e bllokimit atë ditë dhe nëse run-all u regjistrua fare; faturo me dorë periudhat e kapërcyera. Strukturore, e pabërë: run-all mbetet 27 punë në një thirrje 60s — ndaje edhe punët e tjera në thirrje më vete nga VPS-ja.
 </todo>
 
 <todo>
