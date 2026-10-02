@@ -16,7 +16,7 @@
  * `api/` never imports from `src/`; nothing here touches the request/response.
  */
 import { getTeamConfig } from './_tenantConfig.js';
-import { resolveProviderChoice, type AiProviderName } from './_aiErrors.js';
+import { classifyAiError, resolveProviderChoice, type AiProviderName } from './_aiErrors.js';
 
 export type { AiProviderName } from './_aiErrors.js';
 export type ChatMsg = { role: 'user' | 'assistant'; content: string };
@@ -191,8 +191,26 @@ export async function generateChatWith(
   const modelFor = (p: AiProviderName) =>
     opts.model || (cfg.preferred === p && cfg.model ? cfg.model : (p === 'gemini' ? DEFAULT_GEMINI_MODEL() : DEFAULT_OPENAI_MODEL()));
 
-  const gemini = () => callGeminiChat(geminiKey, system, messages, modelFor('gemini'), opts);
-  const openai = () => callOpenAiChat(openaiKey, system, messages, modelFor('openai'), opts);
+  // A model name the provider no longer serves (a retired `gemini-1.5-*`, a typo in
+  // Cilësimet → FivoAI) must not take the assistant down: when the CONFIGURED model
+  // 404s, the same key is retried once with the provider's current default. Any
+  // other failure (key, quota, timeout) is rethrown untouched — it is not about the
+  // model. The reply then reports the model that actually answered.
+  const withModelFallback = async (
+    p: AiProviderName,
+    call: (model: string) => Promise<AiChatResult>,
+  ): Promise<AiChatResult> => {
+    const model = modelFor(p);
+    const fallbackModel = p === 'gemini' ? DEFAULT_GEMINI_MODEL() : DEFAULT_OPENAI_MODEL();
+    try { return await call(model); } catch (err: any) {
+      if (model === fallbackModel || classifyAiError(err).code !== 'model-not-found') throw err;
+      console.warn(`[aiProvider] model "${model}" not found at ${p} — retrying with the default "${fallbackModel}"`);
+      return call(fallbackModel);
+    }
+  };
+
+  const gemini = () => withModelFallback('gemini', (m) => callGeminiChat(geminiKey, system, messages, m, opts));
+  const openai = () => withModelFallback('openai', (m) => callOpenAiChat(openaiKey, system, messages, m, opts));
 
   // When both legs fail, the PRIMARY error is the one to report: it is about the
   // key the tenant configured, which is what they can act on.

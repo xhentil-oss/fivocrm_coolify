@@ -165,10 +165,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       teamId: scopedTeamId,
       detail: classified.detail,
     });
+    // The provider layer already retried a configured model that 404s with the
+    // default, so a `model-not-found` that reaches here means the DEFAULT is gone
+    // too (or `opts.model` named it): "clear the Modeli field" would be wrong advice.
+    const error = classified.code === 'model-not-found' && !cfg.model
+      ? 'Modeli i parazgjedhur AI nuk ekziston më te ofruesi — shkruani një model aktual te Cilësimet → Integrime → FivoAI (fusha "Modeli").'
+      : classified.message;
     return res.status(classified.httpStatus).json({
-      error: classified.message,
+      error,
       code: classified.code,
       detail: classified.detail,
+      model: cfg.model || null,
     });
   }
 }
