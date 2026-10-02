@@ -39,6 +39,9 @@ import { safeExternalUrl } from '../lib/safeUrl';
 import { useUnreadChat } from '../hooks/useUnreadChat';
 import { isDmForMe, isUnreadClientMessage, groupFullyReadAfter, unionById } from '../lib/chat/unread';
 import { useNotificationPrefs, useConversationPresence } from '../hooks/useNotificationPrefs';
+import { useTeamSettingsData } from '../hooks/useTeamSettings';
+import { NAZMIJE_BLOCK_LABELS, NAZMIJE_UID, mentionsNazmije, resolveNazmijeSettings } from '../lib/nazmije/core';
+import { askNazmije, NazmijeApiError } from '../lib/nazmije/client';
 import { channelConversationKey, dmConversationKey } from '../lib/notificationPrefs';
 import { auth, db } from '../lib/firebase';
 import { writeBatch, doc, updateDoc, setDoc, deleteDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
@@ -362,6 +365,11 @@ const ChatView: React.FC = () => {
   // mirroring how DMs span teams.
   const { data: allGroups } = useCollection<Channel>('channels', { skipTeamFilter: true });
   const channelMutation = useMutation<Channel>('channels');
+  // Nazmije (virtual secretary). She has no teamMembers row on purpose, so every
+  // surface that lists people adds her by hand when the tenant switched her on:
+  // the DM list, the DM search, the @mention picker and the name cache.
+  const teamSettingsData = useTeamSettingsData();
+  const nazmije = useMemo(() => resolveNazmijeSettings(teamSettingsData?.nazmije), [teamSettingsData?.nazmije]);
   // Only Admin/Manager/Owner may create groups.
   const canCreateGroups = !!(permissions.isAdmin || permissions.isManager || permissions.isOwner);
   // Groups the current user belongs to — only members see a group.
@@ -696,7 +704,9 @@ const ChatView: React.FC = () => {
   const displayNameCache = useMemo(() => {
     const map = new Map<string, string>();
     if (user?.uid) map.set(user.uid, user.displayName || user.email?.split('@')[0] || 'Ti');
-    userProfiles?.forEach(p => { if (p.userId && p.displayName) map.set(p.userId, p.displayName); });
+    // Her profile doc may lag the settings by a snapshot; the settings name wins.
+    if (nazmije.enabled) map.set(NAZMIJE_UID, nazmije.displayName);
+    userProfiles?.forEach(p => { if (p.userId && p.displayName && p.userId !== NAZMIJE_UID) map.set(p.userId, p.displayName); });
     teamMembers?.forEach(m => {
       if (m.userId && !map.has(m.userId)) {
         if (m.displayName) map.set(m.userId, m.displayName);
@@ -715,7 +725,7 @@ const ChatView: React.FC = () => {
       }
     });
     return map;
-  }, [user?.uid, user?.displayName, user?.email, userProfiles, teamMembers, teams, portalAccess, customers]);
+  }, [user?.uid, user?.displayName, user?.email, userProfiles, teamMembers, teams, portalAccess, customers, nazmije.enabled, nazmije.displayName]);
 
   const getUserDisplayName = useCallback((userId: string) => {
     const cached = displayNameCache.get(userId);
@@ -771,12 +781,20 @@ const ChatView: React.FC = () => {
   const otherMembers = useMemo(() => {
     if (!teamMembers) return [];
     const seen = new Set<string>();
-    return teamMembers.filter(m => {
-      if (m.userId === user?.uid || seen.has(m.userId)) return false;
+    const list = teamMembers.filter(m => {
+      if (m.userId === user?.uid || seen.has(m.userId) || (m as any).isBot) return false;
       seen.add(m.userId);
       return true;
     });
-  }, [teamMembers, user?.uid]);
+    // Nazmije as a virtual member: reachable by DM search, @mention and as a group member.
+    if (nazmije.enabled && !seen.has(NAZMIJE_UID)) {
+      list.push({
+        id: NAZMIJE_UID, userId: NAZMIJE_UID, teamId: getGlobalTeamId() || '', displayName: nazmije.displayName,
+        role: 'Member', status: 'Active', isBot: true,
+      } as TeamMember);
+    }
+    return list;
+  }, [teamMembers, user?.uid, nazmije.enabled, nazmije.displayName]);
 
   // Who is legitimately IN a conversation — i.e. the only people a notification
   // about it may reach. A group channel carries an explicit `members` array; a
@@ -2000,6 +2018,7 @@ const ChatView: React.FC = () => {
   }, [memberNameIndex, customerNameIndex, user?.uid]);
 
   const isOnline = useCallback((userId: string) => {
+    if (userId === NAZMIJE_UID) return nazmije.enabled; // she never sleeps
     const profile = profileMap.get(userId);
     if (!profile) return false;
     const ls = (profile as any).lastSeen;
@@ -2264,7 +2283,7 @@ const ChatView: React.FC = () => {
         const notifiedMentions = new Set<string>();
         if (mentions.length > 0) {
           mentions
-            .filter(uid => uid !== user.uid)
+            .filter(uid => uid !== user.uid && uid !== NAZMIJE_UID)
             // A mention must never reach someone outside the conversation: the
             // notification ships 100 characters of the message and a linkTo that the
             // rules would refuse them. The picker is filtered too; this is the guard
@@ -2292,6 +2311,14 @@ const ChatView: React.FC = () => {
         // the channel's own `members` array, minus the sender and minus anyone the
         // mention pass above already notified (two rows for one message otherwise).
         const isGroupTarget = (allGroups || []).some(g => g.id === targetChannel && (g as any).isGroup);
+        if (isGroupTarget && messageId && nazmije.enabled && mentionsNazmije(finalText)) {
+          askNazmije({ teamId: getGlobalTeamId(), messageId }).then(r => {
+            if (r.blocked) toast({ title: nazmije.displayName, description: NAZMIJE_BLOCK_LABELS[r.blocked] });
+          }).catch(err => {
+            const reason = err instanceof NazmijeApiError && err.blocked ? NAZMIJE_BLOCK_LABELS[err.blocked] : (err as Error)?.message;
+            toast({ title: `${nazmije.displayName} nuk u përgjigj`, description: reason || 'Provo pas pak.' });
+          });
+        }
         if (isGroupTarget && audience) {
           const eligible = audience.filter(uid => uid && uid !== user.uid && !notifiedMentions.has(uid));
           const recipients = eligible.slice(0, MAX_CHANNEL_NOTIFY);
@@ -2421,6 +2448,21 @@ const ChatView: React.FC = () => {
               }
             }
           }
+        }
+      } else if (targetDirectUserId === NAZMIJE_UID) {
+        // The rules cannot prove a bot uid is "a user of my tenant", so the server
+        // writes the person's row AND her reply (api/_nazmije.ts). Text only.
+        if (!finalText.trim()) {
+          toast({ title: nazmije.displayName, description: 'Më shkruaj me fjalë — bashkëngjitjet nuk i lexoj dot.' });
+          return;
+        }
+        try {
+          const r = await askNazmije({ teamId: getGlobalTeamId(), text: finalText });
+          if (r.blocked && !r.ok) toast({ title: nazmije.displayName, description: NAZMIJE_BLOCK_LABELS[r.blocked] });
+        } catch (err) {
+          const reason = err instanceof NazmijeApiError && err.blocked ? NAZMIJE_BLOCK_LABELS[err.blocked] : (err as Error)?.message;
+          toast({ title: `${nazmije.displayName} nuk u përgjigj`, description: reason || 'Provo pas pak.', variant: 'destructive' });
+          return;
         }
       } else if (targetDirectUserId) {
         const createdDm = await messageMutation.create({ ...baseMessage, receiverId: targetDirectUserId } as Omit<ChatMessage, 'id'>);
@@ -3167,7 +3209,8 @@ const ChatView: React.FC = () => {
             });
             // Staff DMs (existing convos + all active members so new DMs can start)
             const staffIds = new Set<string>(directConversations || []);
-            (teamMembers || []).forEach(m => { if (m.userId && m.userId !== user?.uid) staffIds.add(m.userId); });
+            (teamMembers || []).forEach(m => { if (m.userId && m.userId !== user?.uid && !(m as any).isBot) staffIds.add(m.userId); });
+            if (nazmije.enabled) staffIds.add(NAZMIJE_UID);
             staffIds.forEach(uid => {
               const last = dmLastMessageMap.get(uid);
               const status = getUserStatus(uid);
@@ -4006,6 +4049,9 @@ const ChatView: React.FC = () => {
                               {!isOwn && !sameSender && (
                                 <div className="flex items-center gap-1.5 mb-1 ml-1">
                                   <span className="text-[12px] font-semibold text-foreground/80">{senderName}</span>
+                                  {(message.senderId === NAZMIJE_UID || (message as any).botId === NAZMIJE_UID) && (
+                                    <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-sky-300 text-sky-700 dark:text-sky-400" title="Sekretare virtuale — çdo shifër vjen nga FivoCRM">Asistente</Badge>
+                                  )}
                                   {(message as any).senderType === 'client' && (
                                     <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 border-amber-300 text-amber-700 dark:text-amber-400">Klient</Badge>
                                   )}

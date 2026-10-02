@@ -21,6 +21,7 @@ import platformAdminHandler from './_platformAdmin.js';
 import waInboundHandler from './_waInbound.js';
 import contactEmailHandler from './_contact-email.js';
 import aiReplyHandler from './_ai-reply.js';
+import nazmijeHandler from './_nazmije.js';
 
 /**
  * Consolidated dispatcher (named "email" for historical reasons — it also routes
@@ -45,6 +46,7 @@ import aiReplyHandler from './_ai-reply.js';
  *   /api/wa-inbound               -> ?type=wa-inbound      (VPS → inbound WhatsApp event, Bearer CRON_SECRET)
  *   /api/contact-email            -> ?type=contact-email   (1:1 email to a lead/customer, logged + Reply-To staff)
  *   /api/ai-reply                 -> ?type=ai-reply        (on-demand WhatsApp reply suggestion — AI proposes, a person sends)
+ *   /api/nazmije                  -> ?type=nazmije         (virtual secretary: ask / enable / disable — staff only)
  *
  * Created to stay under Vercel Hobby's 12-function limit.
  */
@@ -76,9 +78,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('wa-inbound')) type = 'wa-inbound';
     else if (req.url.includes('contact-email')) type = 'contact-email';
     else if (req.url.includes('ai-reply')) type = 'ai-reply';
+    else if (req.url.includes('/api/nazmije')) type = 'nazmije';
   }
 
   switch (type) {
+    case 'nazmije':
+      // Nazmije, the team's virtual secretary: replies to a DM / @mention, and the
+      // Admin's enable/disable. Every row she sends is written here (api/_nazmije.ts).
+      return nazmijeHandler(req, res);
     case 'contact-email':
       // 1:1 email from the CRM to a lead/customer through the tenant's provider;
       // the server writes the timeline row + contact stamps (the client must not).

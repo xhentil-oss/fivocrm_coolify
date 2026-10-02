@@ -42,6 +42,7 @@ import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceC
 import { useFilteredTasks, useFilteredProjects, useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import MomentumWidget from '../components/MomentumWidget';
 import TodayFollowUpsWidget from '../components/dashboard/TodayFollowUpsWidget';
+import { NAZMIJE_AVATAR_PATH, NAZMIJE_SIGNATURE, dayIndexOf, localParts, sayingForDay } from '../lib/nazmije/core';
 
 
 // ── Greeting based on time of day ──
@@ -54,20 +55,12 @@ function getGreeting(): string {
   return 'Natën e mirë';
 }
 
-// ── Motivational quote rotation ──
-const QUOTES = [
-  { text: 'Suksesi nuk është përfundimtar, dështimi nuk është fatal: është guximi për të vazhduar që ka rëndësi.', author: 'W. Churchill' },
-  { text: 'Puna e mirë nuk lind nga komoditeti, por nga përkushtimi.', author: 'Proverbë' },
-  { text: 'Çdo ditë e re është mundësi e re.', author: 'Proverbë shqiptare' },
-  { text: 'Fillo ku je, përdor çfarë ke, bëj çfarë mundesh.', author: 'Arthur Ashe' },
-  { text: 'Kreativiteti kërkon guximin të lësh siguritë.', author: 'Erich Fromm' },
-  { text: 'Planifiko punën, puno planin.', author: 'Proverbë' },
-  { text: 'Përparimi nuk vjen nga përsosja, por nga përmirësimi.', author: 'Kaizen' },
-];
-
-function getDailyQuote() {
-  const day = Math.floor(Date.now() / (1000 * 60 * 60 * 24));
-  return QUOTES[day % QUOTES.length];
+// ── Thënia e ditës — Nazmija's (src/lib/nazmije/core.ts) ──
+// The old author-quote rotation was replaced by the virtual secretary's own work
+// sayings: the same deterministic line for every colleague on the same day.
+function getDailyQuote(): { text: string; author: string } {
+  const s = sayingForDay(dayIndexOf(localParts(new Date(), 'Europe/Tirane').date));
+  return { text: s.text, author: NAZMIJE_SIGNATURE };
 }
 
 // ── Streak calculator ──
@@ -505,8 +498,9 @@ const StaffDashboard: React.FC = () => {
               <h1 className="text-2xl sm:text-3xl font-bold text-foreground">
                 {getGreeting()}, {displayName}! 👋
               </h1>
-              <p className="text-sm text-muted-foreground mt-1 italic">
-                "{quote.text}" — <span className="font-medium">{quote.author}</span>
+              <p className="text-sm text-muted-foreground mt-1 italic flex items-start gap-2" title="Thënia e ditës nga sekretarja virtuale">
+                <img src={NAZMIJE_AVATAR_PATH} alt="" aria-hidden="true" className="w-5 h-5 rounded-md mt-0.5 flex-shrink-0" />
+                <span>"{quote.text}" — <span className="font-medium not-italic">{quote.author}</span></span>
               </p>
             </div>
             

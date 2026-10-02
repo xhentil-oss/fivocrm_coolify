@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useGlobalTeamId, setGlobalWaEnabled } from './useFirestore';
+import type { NazmijeSettings } from '../lib/nazmije/core';
 
 export interface BankAccount {
   id: string;
@@ -207,6 +208,9 @@ export interface TeamSettings {
   gmbAutoReply?: 'off' | 'positive' | 'all';
   /** Kontekst i lirë për AI (ton, emri i markës, oraret…) — futet në prompt. */
   gmbAiContext?: string;
+  // ── Nazmije (sekretarja virtuale) ──
+  /** `enabled`/`channelId` are written by POST /api/nazmije (enable/disable); the rest by Cilësimet. Shape: NazmijeSettings. */
+  nazmije?: Partial<NazmijeSettings>;
 }
 
 /** Credential fields that must never be written to `teamSettings` (see tenantSecrets). */

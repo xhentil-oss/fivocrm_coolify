@@ -19,6 +19,12 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
+### [2026-10-02] — Nazmija: sekretarja virtuale e ekipit (chat bot vetëm për stafin, fazat 0–2)
+- Motor i pastër `src/lib/nazmije/core.ts` (personazhi, 46 thënie, humor, gate, fakte sipas rolit, digest-e) + kopje byte-identike `api/_nazmijeCore.ts`; 35 teste.
+- `api/_nazmije.ts` (`POST /api/nazmije`: ask/enable/disable, `postAsNazmije`, `runNazmijeDigest`) — pa Auth user, pa rresht `teamMembers`; DM-ja te ajo kalon nga serveri.
+- Cron `nazmije-morning/afternoon/weekly` (08:45/16:00/16:30 lokal në `vps/server.ts`, jo run-all; idempotent `nazmijePosts`); ChatView DM/@mention + badge; `NazmijeSettingsPanel` + opt-out.
+- Thënia e ditës në StaffDashboard është e saja (zëvendësoi rotacionin e citateve me autorë). Runbook: `workspace/NAZMIJE.md`. Deploy: push + restart VPS.
+
 ### [2026-10-02] — Tasks: "detyra më caktohet vetëm mua dhe s'e ndryshoj dot" (matilda@fivo.al) — leja `canAssignTasks`
 - Shkaku: Member/Sales caktojnë detyra vetëm për vete pa override-in `teamMembers.canAssignTasks`; por grant-i lexohej vetëm nga `bestMembership` (një rresht për ekip → admini shënon një tjetër) dhe përmes cache-it statik 5-min (grant-i s'mbërrinte pa reload)
 - Ndreqje: `src/lib/permissions/memberOverrides.ts` (`grantsCanAssignTasks`, 7 teste) lexon grant-in mbi çdo rresht aktiv të biznesit; `usePermissions` identity queries `live: true`; `SettingsView.handleApplyToAll` nuk fshin më grant-in individual kur template-i e ka off

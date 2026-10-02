@@ -801,6 +801,37 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
   (`AutomationRulesPanel`, CRM view toggle **Automatizime**) renders from the META
   tables, so it needs no change for a new condition field.
 
+### Nazmije — the virtual secretary (chat bot for STAFF only)
+
+Runbook: `workspace/NAZMIJE.md`. Built 2 Oct 2026 (phases 0–2; the CRM-automation
+action and "actions with confirmation" are open).
+
+- **`src/lib/nazmije/core.ts` decides, `api/_nazmije.ts` executes.** The core is
+  import-free (persona prompt, 46 work sayings, humour bank, `nazmijeBlockReason`,
+  role-filtered facts, deterministic digests) and `api/_nazmijeCore.ts` is a
+  **byte-identical copy** (test-enforced). Numbers never come from the model: the
+  digests are templates, the reply prompt only sees `renderFactsForPrompt()` output.
+- **She has NO Auth user and NO `teamMembers` row** (a row would hit seats, payroll,
+  `daily-report-check` and every assignee picker). Only `userProfiles/nazmije_<bid>`.
+  ChatView injects `NAZMIJE_UID` by hand when `teamSettings.nazmije.enabled`; a DM to
+  her goes THROUGH `POST /api/nazmije` (`action: 'ask'`, the server writes both rows —
+  the rules cannot prove a bot uid is in the tenant); a group `@Nazmije` is written by
+  the browser and only the reply is requested. `notifyUser()` answers `skipped: 'bot'`.
+- **Law 4 in code:** `factsForAudience()` strips finance unless DM + Admin/Manager
+  (claims `roles` / membership role), and strips the missing-report NAMES in a group.
+  Humour: `humorModeFor()` — the model may improvise only on `full`, in a group, in
+  the morning/weekly post; the bank never takes a person's name (tested).
+- **Scheduled from `vps/server.ts`** (`nazmije-morning` 08:45, `-afternoon` 16:00,
+  `-weekly` 16:30 local; the job answers `not-friday` on other days), `SCOPED_JOBS`,
+  NOT in `run-all`. Idempotent per tenant/day/kind: `nazmijePosts/{bid}_{date}_{kind}`
+  via `create()`. `nothing-to-say` is silence, never "asgjë sot". Every non-post is
+  written to `teamSettings.nazmije.lastRun` and shown in Cilësimet → Automatizimi.
+- Replies: 20/user/hour (`rateLimits`), `dailyReplyCap`/tenant/day (`nazmijeUsage`),
+  tenant AI key via `resolveAiConfig`; a provider failure posts a fixed line, never a
+  500. Per-user opt-out: `userPreferences.nazmijeOptOut` (Cilësimet → Njoftimet).
+- The StaffDashboard "quote of the day" IS her saying (`sayingForDay`); the portal
+  keeps its own quotes — she never speaks to clients.
+
 ### Daily staff report (mandatory, 16:50)
 
 - **One form, two mounts.** `DailyReportForm` is the ONLY place the daily questions

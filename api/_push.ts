@@ -436,7 +436,7 @@ export interface NotifyUserResult {
   written: boolean;
   push?: PushResult;
   email?: string;
-  skipped?: 'no-user' | 'self';
+  skipped?: 'no-user' | 'self' | 'bot';
   /** The recipient was reading this very conversation → push + email suppressed. */
   inConversation?: boolean;
 }
@@ -467,6 +467,10 @@ export async function notifyUser(input: NotifyUserInput): Promise<NotifyUserResu
     }
   }
   if (input.actorUserId && input.actorUserId === userId) return { written: false, skipped: 'self' };
+  // Nazmije (the virtual secretary) is a channel member for display only: no auth
+  // user, no push token, no mailbox. A group fan-out that reaches her is a no-op,
+  // not an error.
+  if (userId === 'nazmije') return { written: false, skipped: 'bot' };
 
   // Both are contract violations by the CALLER, surfaced loudly instead of silently
   // degrading: an unregistered type can never be muted (fail-open) and gets no icon;

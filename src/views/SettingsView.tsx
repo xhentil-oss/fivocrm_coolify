@@ -44,6 +44,7 @@ import { Separator } from '../components/ui/separator';
 import WhatsAppStatusBadge from '../components/WhatsAppStatusBadge';
 import ModulesSettingsPanel from '../components/ModulesSettingsPanel';
 import FollowUpSettingsPanel from '../components/settings/FollowUpSettingsPanel';
+import NazmijeSettingsPanel, { NazmijeOptOutCard } from '../components/settings/NazmijeSettingsPanel';
 import FinanceSettingsPanel from '../components/settings/FinanceSettingsPanel';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
@@ -899,6 +900,7 @@ const SettingsView: React.FC = () => {
         </TabsContent>
 
         <TabsContent value="notifications" className="space-y-6">
+          <NazmijeOptOutCard />
           <Card className="p-6 space-y-6">
             <div>
               <h3 className="text-h4 text-foreground mb-4">Preferencat e Njoftimeve</h3>
@@ -2240,6 +2242,9 @@ const SettingsView: React.FC = () => {
           {/* Ndjekja & Përgjigjet automatike — every follow-up / WhatsApp-reply
               knob in one place (replaces the old WhatsappAutomation modal). */}
           <FollowUpSettingsPanel teamId={teamId} settings={firestoreSettings} canEdit={isAdmin || isOwner} />
+
+          {/* Nazmija — the virtual secretary (chat digests + @mention replies). */}
+          <NazmijeSettingsPanel teamId={teamId} settings={firestoreSettings} canEdit={isAdmin || isOwner} />
 
           {/* Info banner */}
           <div className="p-4 bg-primary/5 border border-primary/20 rounded-lg flex items-start gap-3">

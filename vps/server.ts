@@ -1835,6 +1835,15 @@ function startCronSchedulers(): void {
   scheduleDailyInZone(CRON_LOCAL_TZ, 8, 30, () => {
     void triggerCronJob('lead-follow-up-reminders');
   });
+  // ── Nazmije, the virtual secretary (api/_nazmije.ts) ──
+  // Three wall-clock promises into each tenant's group channel: the day's plan,
+  // "ku jemi" before the daily report, and the week in numbers on Friday. The job
+  // itself applies the tenant's off days / quiet hours / per-digest switches and is
+  // idempotent per tenant/day/kind, so a restart-day double fire is silent. NOT in
+  // run-all: she speaks to real people unprompted, on an hour someone chose.
+  scheduleDailyInZone(CRON_LOCAL_TZ, 8, 45, () => { void triggerCronJob('nazmije-morning'); });
+  scheduleDailyInZone(CRON_LOCAL_TZ, 16, 0, () => { void triggerCronJob('nazmije-afternoon'); });
+  scheduleDailyInZone(CRON_LOCAL_TZ, 16, 30, () => { void triggerCronJob('nazmije-weekly'); }); // the job answers not-friday on other days
 
   // Kick the frequent set shortly after boot so a restart doesn't stall a broadcast.
   setTimeout(() => { void triggerCronJob('whatsapp-broadcasts'); }, MIN);

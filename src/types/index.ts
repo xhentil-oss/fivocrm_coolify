@@ -762,6 +762,12 @@ export interface TeamMember {
   canAccessExpenses?: boolean;
   canAccessProfile?: boolean;
   /**
+   * A virtual member (Nazmije). Not written today — she deliberately has NO
+   * teamMembers row (seats, payroll, the daily report and every picker would
+   * count her) — but every reader that iterates members must skip it if one appears.
+   */
+  isBot?: boolean;
+  /**
    * Per-member override of "may assign a task to someone else". Role defaults
    * (Admin/Manager/SalesAgent = yes, Member/Sales = no) live in usePermissions;
    * this flag lifts a single person above their role's default without promoting
@@ -2307,6 +2313,10 @@ export interface ChatMessage {
   editedAt?: Date;
   deletedAt?: Date;
   reactions?: Record<string, string[]>; // emoji -> userId[]
+  /** Set on rows written AS a bot by the server (`'nazmije'`); the UI shows a badge, analytics skip it. */
+  botId?: string;
+  /** Nazmije: why she wrote it — 'reply' | 'morning' | 'afternoon' | 'weekly' | 'event'. */
+  nazmijeKind?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -2489,6 +2499,8 @@ export interface UserProfile {
   customStatus?: string;
   customStatusEmoji?: string;
   customStatusExpiresAt?: Date | null;
+  /** Nazmije's per-tenant profile (`userId: 'nazmije'`) — never a person. */
+  isBot?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

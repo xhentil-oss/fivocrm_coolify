@@ -36,6 +36,7 @@ import {
 // One delivery path for every notification — see the header of api/_push.ts.
 import { notifyUser, getUserPrefs, isDndActive, isSilenced, escapeHtml, BASE_URL } from '../_push.js';
 import { runChatScheduled } from '../_chatScheduled.js';
+import { runNazmijeDigest } from '../_nazmije.js';
 import { isTypeMutedByPrefs } from '../_notificationTypes.js';
 import { costRateFor, resolveFinanceSettings, budgetAlertsDue, type FinanceSettings } from '../_profitabilityCore.js';
 // `.js` is NOT optional here: package.json declares "type": "module", so the
@@ -6833,6 +6834,8 @@ const SCOPED_JOBS = new Set<string>([
   'hosting-lifecycle', 'hosting-sync', 'hosting-backups', 'hosting-expiry-report',
   'crm-automations', 'report-schedules', 'report-reminders', 'client-health-rollup',
   'report-metrics-social', 'gmb-sync',
+  // Nazmije's scheduled posts — into ONE tenant's group channel when run by hand.
+  'nazmije-morning', 'nazmije-afternoon', 'nazmije-weekly',
 ]);
 const BOOTSTRAP_JOBS = new Set<string>(['set-superadmin-claim']);
 
@@ -6899,6 +6902,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       case 'task-reminders':
         result = await runTaskReminders({ businessId: manualScope });
+        break;
+      case 'nazmije-morning':
+      case 'nazmije-afternoon':
+      case 'nazmije-weekly':
+        // Nazmije (virtual secretary) — the day's plan (08:45), "ku jemi" (16:00) and
+        // the week in numbers (Fri 16:30), posted into each tenant's chosen group.
+        // Wall-clock promises → scheduleDailyInZone in vps/server.ts, NOT in run-all.
+        // Idempotent per tenant/day/kind (nazmijePosts, create()); the clock gate,
+        // off days and the per-digest switches live in api/_nazmijeCore.ts.
+        result = await runNazmijeDigest(job.replace('nazmije-', '') as 'morning' | 'afternoon' | 'weekly', { businessId: manualScope });
         break;
       case 'chat-scheduled':
         // Scheduled chat messages ("Programo") — a wall-clock promise, every 5 min

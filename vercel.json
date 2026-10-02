@@ -63,6 +63,10 @@
       "destination": "/api/email?type=hosting"
     },
     {
+      "source": "/api/nazmije",
+      "destination": "/api/email?type=nazmije"
+    },
+    {
       "source": "/api/sync-claims",
       "destination": "/api/email?type=sync-claims"
     },
