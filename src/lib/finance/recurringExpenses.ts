@@ -233,6 +233,69 @@ export function isPermanentExpenseBlock(reason: ExpenseGenerationBlock | null): 
   return !!reason && PERMANENT_EXPENSE_BLOCKS.includes(reason);
 }
 
+/**
+ * The next due date for a series that RESUMES (pause → run, Inactive → Active):
+ * the first occurrence in or after the CURRENT period, and past the period the
+ * series already claimed.
+ *
+ * Resuming with the stored `nextRecurringDate` untouched left it pointing into
+ * the first paused month, and the cron — which advances the date one cycle per
+ * generated row — then backfilled every month the series had been paused,
+ * rewriting closed books. Same law as `seedNextRecurringDate`: never backwards.
+ * The anchor day is the SERIES' anchor (`recurringAnchorDay`), never re-read
+ * from a clamped cursor, so a 31st series is still a 31st series afterwards.
+ */
+export function advanceToCurrentPeriod(
+  from: Date,
+  frequency: string,
+  anchorDay: number | undefined,
+  now: Date,
+  claim: string | null | undefined,
+): Date {
+  const currentKey = expensePeriodKey(frequency, now);
+  const anchor = anchorDay || zonedParts(from).day;
+  let cursor = from;
+  for (let guard = 0; guard < 600; guard++) {
+    const key = expensePeriodKey(frequency, cursor);
+    if (key >= currentKey && (!claim || key > claim)) return cursor;
+    cursor = nextExpenseOccurrence(cursor, frequency, anchor);
+  }
+  return cursor;
+}
+
+/**
+ * The write that pauses or resumes a series. Resume re-seeds the next date
+ * FORWARD (see `advanceToCurrentPeriod`) so the paused months are never
+ * generated; pause touches nothing but the flag. Shared by the list and the
+ * series page so the two can never disagree about where a resumed series lands.
+ */
+export function togglePausePlan(
+  expense: {
+    isRecurring?: boolean; isRecurringPaused?: boolean; recurringFrequency?: string;
+    nextRecurringDate?: unknown; recurringAnchorDay?: number; lastGeneratedPeriodKey?: string;
+    date?: unknown; createdAt?: unknown;
+  },
+  now: Date,
+): { paused: boolean; patch: Record<string, unknown>; resumedNext: Date | null; moved: boolean } {
+  const paused = !expense.isRecurringPaused;
+  let resumedNext: Date | null = null;
+  if (!paused && expense.isRecurring) {
+    const freq = expense.recurringFrequency || 'monthly';
+    const stored = toExpenseDate(expense.nextRecurringDate);
+    const own = toExpenseDate(expense.date) || toExpenseDate(expense.createdAt) || now;
+    const anchor = expense.recurringAnchorDay || zonedParts(stored || own).day;
+    const from = stored || nextExpenseOccurrence(own, freq, anchor);
+    resumedNext = advanceToCurrentPeriod(from, freq, anchor, now, expense.lastGeneratedPeriodKey);
+  }
+  const moved = !!resumedNext && resumedNext.getTime() !== (toExpenseDate(expense.nextRecurringDate)?.getTime() ?? -1);
+  const patch: Record<string, unknown> = { isRecurringPaused: paused };
+  if (moved && resumedNext) {
+    patch.nextRecurringDate = resumedNext;
+    patch.recurringAnchorDay = expense.recurringAnchorDay || zonedParts(resumedNext).day;
+  }
+  return { paused, patch, resumedNext, moved };
+}
+
 // ── Known monthly commitment ────────────────────────────────────────────────
 // Lives here, not in cashflowAlarms.ts, because that module imports forecast.ts
 // and BOTH need this number — putting it there would have been an import cycle.

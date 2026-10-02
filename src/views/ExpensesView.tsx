@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { toAll, currencySymbol } from '../lib/utils';
 import { saveOrShareFile } from '../lib/native';
@@ -6,7 +7,7 @@ import { projectPickerLabel, sortArchivedLast } from '../lib/projectArchive';
 import { MONTH_LABELS_SQ, getExpenseDate } from '../lib/finance/financialAnalytics';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search, Check, X, ThumbsUp, ThumbsDown, Clock, Pause, Play, CircleStop, AlertTriangle, Filter, RotateCcw, Download } from 'lucide-react';
+import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search, Check, X, ThumbsUp, ThumbsDown, Clock, Pause, Play, CircleStop, AlertTriangle, Filter, RotateCcw, Download, ExternalLink } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -30,8 +31,11 @@ import {
   expenseGenerationBlockReason,
   toExpenseDate,
   SUPPORTED_EXPENSE_FREQUENCIES,
+  advanceToCurrentPeriod,
+  togglePausePlan,
 } from '../lib/finance/recurringExpenses';
 import { createValue, createDateValue, updateValue, updateDateValue } from '../lib/formValue';
+import { EXPENSE_FREQ_LABELS, expenseCategoryLabel, expenseCategoryClass } from '../lib/finance/expenseLabels';
 // Calendar days of a recurring series are read in the BUSINESS zone, never with
 // the machine's getters: the engine (and its cron mirror) answer `expensePeriodKey`
 // / `addMonthsClamped` in Europe/Tirane, so an anchor day taken from `getDate()`
@@ -39,38 +43,19 @@ import { createValue, createDateValue, updateValue, updateDateValue } from '../l
 import { zonedParts } from '../lib/recurringUtils';
 import type { Expense, Team, Project, TeamMember } from '../types';
 
-/**
- * The next due date for a series that RESUMES (pause → run, Inactive → Active):
- * the first occurrence in or after the CURRENT period, and past the period the
- * series already claimed.
- *
- * Resuming with the stored `nextRecurringDate` untouched left it pointing into
- * the first paused month, and the cron — which advances the date one cycle per
- * generated row — then backfilled every month the series had been paused,
- * rewriting closed books. Same law as `seedNextRecurringDate`: never backwards.
- * The anchor day is the SERIES' anchor (`recurringAnchorDay`), never re-read
- * from a clamped cursor, so a 31st series is still a 31st series afterwards.
- */
-function advanceToCurrentPeriod(from: Date, frequency: string, anchorDay: number | undefined, now: Date, claim: string | null | undefined): Date {
-  const currentKey = expensePeriodKey(frequency, now);
-  const anchor = anchorDay || zonedParts(from).day;
-  let cursor = from;
-  for (let guard = 0; guard < 600; guard++) {
-    const key = expensePeriodKey(frequency, cursor);
-    if (key >= currentKey && (!claim || key > claim)) return cursor;
-    cursor = nextExpenseOccurrence(cursor, frequency, anchor);
-  }
-  return cursor;
-}
-
 const ExpensesView: React.FC = () => {
   const { user } = useAuth();
   const permissions = usePermissions();
   const logActivity = useActivityLogger();
   const { toast } = useToast();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  /** The series page (`/app/expenses/:id`) opens the edit form here via `?edit=<id>`
+   *  — ONE form for every expense write, so the two can never drift. */
+  const openSeriesPage = (id: string) => navigate(`/app/expenses/${id}`);
   // Delete flow: a recurring parent opens a choice dialog (stop / delete one /
   // delete whole series); everything else deletes directly with a confirm.
   const [deleteTarget, setDeleteTarget] = useState<Expense | null>(null);
@@ -97,6 +82,20 @@ const ExpensesView: React.FC = () => {
   const expenseMutation = useMutation<Expense>('expenses');
   const projectMutation = useMutation<Project>('projects');
   const notificationMutation = useMutation<any>('notifications');
+
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId || !rawExpenses) return;
+    const target = rawExpenses.find(e => e.id === editId);
+    if (target) {
+      setSelectedExpense(target);
+      setIsEditDialogOpen(true);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('edit');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, rawExpenses]);
 
   /**
    * Ask the `project-spend-rollup` cron to recompute these projects.
@@ -188,8 +187,9 @@ const ExpensesView: React.FC = () => {
     const firstNext = isRecurring ? firstGenerationDate(expenseDate, freq, pickedNext) : null;
 
     const isAdminOrManager = permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin;
+    let createdId: string | undefined;
     try {
-      await expenseMutation.create({
+      const created = await expenseMutation.create({
         title,
         description: createValue(description),
         amount,
@@ -214,13 +214,14 @@ const ExpensesView: React.FC = () => {
         projectId,
         memberId,
       } as any);
+      createdId = created?.id;
     } catch (err: any) {
       console.error('[Expenses] create failed:', err);
       toast({ title: 'Shpenzimi nuk u ruajt', description: err?.message || 'Ndodhi një gabim — provo përsëri.', variant: 'destructive' });
       return; // keep the dialog open so the entry isn't lost
     }
 
-    logActivity('expense_added', `Shpenzim: ${title}`, { entityType: 'expense', description: `${amount} ${currencySymbol(currency)}` });
+    logActivity('expense_added', `Shpenzim: ${title}`, { entityType: 'expense', entityId: createdId, description: `${amount} ${currencySymbol(currency)}` });
 
     // Notify ACTIVE Admins and Managers about new expense (exclude submitter —
     // off-boarded Inactive members must not keep receiving push/email)
@@ -439,6 +440,10 @@ const ExpensesView: React.FC = () => {
     // it sees the NEW project but never the one the cost moved AWAY from.
     await markProjectsForSpendRecompute([selectedExpense.projectId, projectId ?? undefined]);
 
+    logActivity('expense_updated', `Shpenzimi u ndryshua: ${title}`, {
+      entityType: 'expense', entityId: selectedExpense.id,
+      description: materialChange ? `${selectedExpense.amount} → ${amount} ${currencySymbol(currency)}` : undefined,
+    });
     setIsEditDialogOpen(false);
     setSelectedExpense(null);
     // The clamp above is silent otherwise: the user typed one date and the
@@ -472,30 +477,18 @@ const ExpensesView: React.FC = () => {
     });
   };
 
-  // Pause/resume generation without ending the series.
+  // Pause/resume generation without ending the series. The write is decided by
+  // `togglePausePlan` (shared with the series page): resume re-seeds FORWARD so
+  // the paused months are never generated.
   const handleTogglePause = async (expense: Expense) => {
-    const paused = !(expense as any).isRecurringPaused;
-    // Resume = re-seed FORWARD (see `advanceToCurrentPeriod`): the months the
-    // series sat paused are never generated. The anchor day is kept as is.
-    let resumedNext: Date | null = null;
-    if (!paused && expense.isRecurring) {
-      const freq = (expense.recurringFrequency as string) || 'monthly';
-      const stored = toExpenseDate(expense.nextRecurringDate);
-      const own = getExpenseDate(expense) || new Date();
-      const anchor = expense.recurringAnchorDay || zonedParts(stored || own).day;
-      const from = stored || nextExpenseOccurrence(own, freq, anchor);
-      resumedNext = advanceToCurrentPeriod(from, freq, anchor, new Date(), expense.lastGeneratedPeriodKey);
-    }
-    const moved = !!resumedNext && resumedNext.getTime() !== (toExpenseDate(expense.nextRecurringDate)?.getTime() ?? -1);
+    const { paused, patch, resumedNext, moved } = togglePausePlan(expense, new Date());
     try {
-      await expenseMutation.update(expense.id, {
-        isRecurringPaused: paused,
-        ...(moved ? { nextRecurringDate: resumedNext, recurringAnchorDay: expense.recurringAnchorDay || zonedParts(resumedNext!).day } : {}),
-      } as any);
+      await expenseMutation.update(expense.id, patch as any);
     } catch (err: any) {
       reportWriteFailure(err, paused ? 'Seria nuk u pauzua' : 'Seria nuk u rinis');
       return;
     }
+    logActivity('expense_updated', paused ? `Seria u pauzua: ${expense.title}` : `Seria u rinis: ${expense.title}`, { entityType: 'expense', entityId: expense.id });
     toast({
       title: paused ? 'Seria u pauzua' : 'Seria u rinis ✓',
       description: moved && resumedNext ? `Data e ardhshme: ${resumedNext.toLocaleDateString('sq-AL')} — muajt e pauzës nuk gjenerohen.` : undefined,
@@ -515,6 +508,7 @@ const ExpensesView: React.FC = () => {
       reportWriteFailure(err, 'Përsëritja nuk u ndalua');
       throw err; // the delete dialog must not close as if it had worked
     }
+    logActivity('expense_updated', `Përsëritja u ndal: ${expense.title}`, { entityType: 'expense', entityId: expense.id });
     toast({ title: 'Përsëritja u ndal ✓', description: 'Rreshtat ekzistues mbeten të paprekur.' });
   };
 
@@ -631,36 +625,8 @@ const ExpensesView: React.FC = () => {
     }
   };
 
-  const getCategoryColor = (category: string) => {
-    switch (category) {
-      case 'Salary':
-        return 'bg-blue-100 text-blue-800';
-      case 'Rent':
-        return 'bg-accent-soft text-primary';
-      case 'Utilities':
-        return 'bg-yellow-100 text-yellow-800';
-      case 'Office':
-        return 'bg-green-100 text-green-800';
-      case 'Hosting':
-        return 'bg-navy-700/10 text-navy-700';
-      default:
-        return 'bg-gray-100 text-gray-800';
-    }
-  };
-
-  const getCategoryLabel = (category: string) => {
-    switch (category) {
-      case 'Salary': return 'Paga';
-      case 'Rent': return 'Qira';
-      case 'Utilities': return 'Shërbime (Ujë, Dritë)';
-      case 'Office': return 'Zyrë';
-      case 'Hosting': return 'Hosting & Software';
-      case 'Marketing': return 'Marketing';
-      case 'Travel': return 'Udhëtim';
-      case 'Other': return 'Tjetër';
-      default: return category;
-    }
-  };
+  const getCategoryColor = (category: string) => expenseCategoryClass(category);
+  const getCategoryLabel = (category: string) => expenseCategoryLabel(category);
 
   // Rejected expenses are shown in the list but must not hit any total.
   const countable = (exp: any) => exp.approvalStatus !== 'Rejected';
@@ -1445,7 +1411,14 @@ const ExpensesView: React.FC = () => {
             <Card key={expense.id} className="p-4 space-y-3">
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium text-foreground truncate">{expense.title}</p>
+                  <button
+                    type="button"
+                    onClick={() => openSeriesPage(expense.id)}
+                    className="block max-w-full truncate text-left font-medium text-foreground hover:text-primary hover:underline"
+                    title="Hap shpenzimin"
+                  >
+                    {expense.title}
+                  </button>
                   {groupSizeById.has(expense.id) && (
                     <Badge className="bg-amber-100 text-amber-800 text-[10px] py-0 mt-1">
                       <AlertTriangle className="w-2.5 h-2.5 mr-0.5" />
@@ -1580,7 +1553,14 @@ const ExpensesView: React.FC = () => {
                     <td className="px-6 py-4">
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
-                          <p className="text-body font-normal text-foreground">{expense.title}</p>
+                          <button
+                            type="button"
+                            onClick={() => openSeriesPage(expense.id)}
+                            className="text-left text-body font-normal text-foreground hover:text-primary hover:underline"
+                            title="Hap shpenzimin"
+                          >
+                            {expense.title}
+                          </button>
                           {groupSizeById.has(expense.id) && (
                             <Badge
                               className="bg-amber-100 text-amber-800 text-[10px] py-0"
@@ -1665,6 +1645,11 @@ const ExpensesView: React.FC = () => {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex gap-2 flex-wrap">
+                        {(expense.isRecurring || expense.autoGenerated || expense.parentExpenseId) && (
+                          <Button variant="outline" size="sm" className="gap-1" onClick={() => openSeriesPage(expense.id)} title="Hap serinë: historiku periudhë për periudhë">
+                            <ExternalLink className="w-3.5 h-3.5" /> Historiku
+                          </Button>
+                        )}
                         {permissions.canEdit && (
                           <Button
                             variant="outline"
@@ -1806,12 +1791,7 @@ const MONTH_NAMES_SQ = [
   'Korrik', 'Gusht', 'Shtator', 'Tetor', 'Nëntor', 'Dhjetor',
 ];
 
-const FREQ_LABELS: Record<string, string> = {
-  weekly: 'Javore',
-  monthly: 'Mujore',
-  quarterly: 'Tremujore',
-  yearly: 'Vjetore',
-};
+const FREQ_LABELS = EXPENSE_FREQ_LABELS;
 /** Only frequencies the engine can generate — driven off the engine's own list so
  *  the dropdown can never offer a cycle the cron will refuse. */
 const FREQ_OPTIONS = SUPPORTED_EXPENSE_FREQUENCIES.map(v => ({ value: v, label: FREQ_LABELS[v] || v }));

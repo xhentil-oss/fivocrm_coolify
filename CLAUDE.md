@@ -458,6 +458,31 @@ permission `canAccessHosting`.
 - **Never overwrite `recurringAnchorDay` on edit.** Setting it to
   `nextDate.getDate()` degraded a 31st series to the 28th forever the first time
   any field was touched — the exact drift `addMonthsClamped` exists to prevent.
+- **A recurring expense is an ENTITY: `/app/expenses/:expenseId`**
+  (`ExpenseDetailView`). The ledger is built from the rows alone by
+  `src/lib/finance/expenseSeries.ts` (`buildExpenseSeriesLedger`, unit-tested):
+  every period from the parent's own to the current one — `booked` / `missing` /
+  `pending` (due later this period) / `upcoming` — plus totals, average, amount
+  changes (Δ between consecutive booked periods), paid/unpaid, duplicates, and
+  `expenseSeriesHealth` (the engine's block reason in Albanian + monthly/yearly
+  commitment). A paused/stopped/inactive series ends at its LAST BOOKED period —
+  the months it was off are not "missing". A generated occurrence opens its
+  SERIES with that period focused. Title clicks in ExpensesView and a
+  **Historiku** button lead there; the page edits through the list's ONE form
+  (`/app/expenses?edit=<id>`), never a second form.
+- **"Shto manualisht" is the owner's backfill the cron refuses to do**:
+  `backfillOccurrenceDraft` writes the EXACT document the cron would have
+  (id `rec_exp_<parentId>_<periodKey>` via `create(data, docId)`, same shape;
+  `teamId`/`businessId` left `undefined` so the hook stamps them — a literal
+  `null` fails `businessOfTeam()` in the rules), `backfillBlockReason` refuses a
+  closed month / a future period / a Salary row for a non-approver, and
+  `backfillParentPatch` moves the claim/pointer forward ONLY if the period is
+  newer than them. A non-approver's row is always `Submitted`.
+  `togglePausePlan` (`recurringExpenses.ts`) is the one pause/resume write for
+  both the list and the page; `findUnlinkedSiblings` offers same-title rows
+  outside the series for linking (never links on its own). Activity rows now
+  carry `entityId` (`expense_added` / `expense_updated`) so the page's timeline
+  can show who paused/stopped/backfilled.
 
 ### Expense attribution & write hygiene
 
