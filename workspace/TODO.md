@@ -19,8 +19,8 @@ Rules:
 <!-- Add tasks here only when there are real next steps. -->
 
 <todo>
-Deploy audit-in e financave 30 Shtator + konfirmo shkakun e 25 shtatorit
-workspace/FINANCE_AUDIT_2026_09_30.md — ~40 gjetje, të gjitha të rregulluara në kod (rregulla 178/178 në emulator, motorët 482 teste). Rregullat u deployuan dhe main u push-ua më 30 Shtator (6159276) — KUJDES: settlement-i i faturave (Paguar/Pjesërisht/Anuluar, këstet) është tani Admin/Manager-only. SHKAKU U GJET më 2 Tetor: VPS-ja ishte e vdekur 14 Shtator → 2 Tetor (një `npm start` i harruar mbante portën 3001, pm2 binte çdo 2 s me EADDRINUSE, 402 250 restarte) — asnjë orar s'u ekzekutua; u rregullua (kill + pm2 restart, uptime i verifikuar). Mbeten: (4) `node scripts/audit-retainer-billing.mjs --at=2026-09-25T08:00:00Z` (vetëm-lexim) — tregon për çdo retainer arsyen e bllokimit atë ditë dhe nëse run-all u regjistrua fare; faturo me dorë periudhat e kapërcyera. Strukturore, e pabërë: run-all mbetet 27 punë në një thirrje 60s — ndaje edhe punët e tjera në thirrje më vete nga VPS-ja.
+Pas auditit te financave 30 Shtator: dergo faturat e shtatorit dhe kontrollo rolet
+Gjithcka teknike u mbyll me 2 Tetor: shkaku i faturave/pagave te munguara ishte VPS-ja e vdekur 14 Shtator -> 2 Tetor (npm start i harruar mbante porten 3001; pm2 binte cdo 2 s) - u rregullua, uptime i verifikuar; 13 pagat e shtatorit dhe 22 faturat AUTO-2026-09-* u krijuan me scripts/audit-recurring-expenses.mjs / audit-retainer-billing.mjs --generate. Mbeten per pronarin: (1) Faturat -> filtro shtatorin -> kontrollo 22 faturat "Ne pritje" dhe dergoji me "Dergo" (nuk u derguan automatikisht); (2) nga 30 Shtatori "Paguar/Pjeserisht/Anuluar", kestet dhe kategoria "Paga" jane vetem Admin/Manager/pronar - ngri ne Manager ata qe i bejne; (3) me 25 Tetor verifiko qe 22 retainer-et u faturuan vete (paneli Faturimi i projektit tregon "Kontrolli i fundit"). Strukturore, e pabere: run-all mbetet 27 pune ne nje thirrje 60s.
 </todo>
 
 <todo>
