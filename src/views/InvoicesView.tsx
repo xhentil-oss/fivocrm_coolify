@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { getNextInvoiceNumber, recordInvoicePartialPayment, deleteInvoicePaymentRows } from '../lib/firebase';
@@ -935,6 +935,48 @@ const InvoicesView: React.FC = () => {
     setProjectFilter(p === 'none' ? '__none__' : p);
     window.history.replaceState({}, '', window.location.pathname);
   }, []);
+
+  // Deep link to ONE invoice: /app/invoices?invoice=<id> (Customer360's invoice
+  // rows, HostingView's "fatura" links). Opens the quick-view drawer once the
+  // rows are loaded; the Stripe return URL (`?payment=success&invoice=…`) is
+  // handled by its own effect above and is left alone here. The param is
+  // consumed so a refresh does not re-open the drawer.
+  const deepLinkInvoiceId = useRef<string | null>(
+    (() => {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('payment') ? null : params.get('invoice');
+    })(),
+  );
+  useEffect(() => {
+    const id = deepLinkInvoiceId.current;
+    if (!id || !rawInvoices) return;
+    const inv = rawInvoices.find(i => i.id === id);
+    deepLinkInvoiceId.current = null;
+    const params = new URLSearchParams(window.location.search);
+    params.delete('invoice');
+    const qs = params.toString();
+    window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
+    if (inv) {
+      setDrawerInvoice(inv);
+    } else {
+      toast({ title: 'Fatura nuk u gjet', description: 'Mund të jetë fshirë, ose nuk ke leje ta shohësh.', variant: 'destructive' });
+    }
+  }, [rawInvoices]);
+
+  // Deep link to a CLIENT's invoices: /app/invoices?customer=<id> — the search
+  // box already matches customer name/company, so it is filled with the name.
+  const deepLinkCustomerId = useRef<string | null>(new URLSearchParams(window.location.search).get('customer'));
+  useEffect(() => {
+    const id = deepLinkCustomerId.current;
+    if (!id || !customers) return;
+    const c = customers.find(x => x.id === id);
+    deepLinkCustomerId.current = null;
+    const params = new URLSearchParams(window.location.search);
+    params.delete('customer');
+    const qs = params.toString();
+    window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
+    if (c?.name) setSearchQuery(c.name);
+  }, [customers]);
 
   // How many issued invoices carry no project — the exact set that vanishes from the
   // "Faturuar" basis of the per-project P&L while overhead is still allocated.
