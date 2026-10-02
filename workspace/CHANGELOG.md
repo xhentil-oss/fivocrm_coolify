@@ -19,6 +19,11 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
+### [2026-10-02] — Tasks: "detyra më caktohet vetëm mua dhe s'e ndryshoj dot" (matilda@fivo.al) — leja `canAssignTasks`
+- Shkaku: Member/Sales caktojnë detyra vetëm për vete pa override-in `teamMembers.canAssignTasks`; por grant-i lexohej vetëm nga `bestMembership` (një rresht për ekip → admini shënon një tjetër) dhe përmes cache-it statik 5-min (grant-i s'mbërrinte pa reload)
+- Ndreqje: `src/lib/permissions/memberOverrides.ts` (`grantsCanAssignTasks`, 7 teste) lexon grant-in mbi çdo rresht aktiv të biznesit; `usePermissions` identity queries `live: true`; `SettingsView.handleApplyToAll` nuk fshin më grant-in individual kur template-i e ka off
+- UX: QuickTaskForm + TaskDetailPanel thonë PSE picker-i është i kyçur (më parë "Asnjë anëtar nuk përputhet" / asgjë); CLAUDE.md § Roles & Permissions
+- Hapi i pronarit: Ekipet → matilda → Ndrysho Lejet → ✓ «Cakto detyra te të tjerët» (ose roli Manager)
 ### [2026-09-22] — Tasks: ~30 gjetjet e auditimit u rregulluan (motori, paneli, TasksView, cron, rules, portal)
 - Motori (`src/lib/recurringUtils.ts` + pasqyra në `api/cron/run.ts`): mujorja me `addZonedMonthsClamped` (Jan 31 s'bëhet më Mar 31), `seriesId` mbi çdo okurencë + `sameSeries` pa term frekuence, `remapDependsOnForNextCycle`, projeksion i përbashkët kalendari `recurringOccurrencesInMonth`, dedupe i cron-it me arsye të emërtuar; 17 teste të reja
 - Paneli: `readOnly = guest || !canEdit` (Viewer), `ProjectDetailView` i jep `allTasks`, nën-detyra me `customerId` + Done përmes `completeTask`, timer me guard + catch + toast, komenti/nën-detyra raportojnë gabimin
@@ -278,40 +283,4 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 - Current auth uses Anima Playground SDK OAuth (Google/GitHub only)
 - Files reviewed: `src/views/TasksView.tsx`, `src/components/TaskDetailDialog.tsx`
 
-### [2026-03-07] — Collaboration Enhancements
-- Added admin permission management: admins can edit member roles and permissions from Teams view
-- Implemented @mentions in comments with autocomplete suggestions and notifications
-- Added real-time collaboration indicators showing who's working on each task
-- Built file attachments UI with upload, view, and delete functionality
-- Task cards now show visual indicator when someone is actively working on them
-- Files: `src/views/TeamsView.tsx`, `src/components/TaskDetailDialog.tsx`, `src/views/TasksView.tsx`, `src/hooks/usePermissions.ts`
-
-### [2026-03-07] — Deployment Guidance
-- Explained hosting options: Vercel, Netlify, GitHub Pages
-- Noted that Anima Playground SDK works within playground environment
-- For production deployment, would need separate backend (Firebase, Supabase, etc.)
-
-
-### [2026-03-07] — Investigated Accordion Warning
-- Warning "Accordion is changing from uncontrolled to controlled" comes from Radix UI internals
-- Not a bug in project code - Radix uses Accordion internally for Tabs and other components
-- Warning only appears in development/StrictMode, doesn't affect production
-- No code changes needed - warning can be safely ignored
-
-### [2026-03-07] — Debug Permission System
-- Added debug logs to `usePermissions.ts` to trace user ID matching
-- Fixed userId matching to check both user.id AND user.email (since members may be added with email)
-- Updated AddMemberForm to show current user's ID for easy copying
-- Query all active TeamMembers then filter client-side for flexible matching
-- Files: `src/hooks/usePermissions.ts`, `src/views/TeamsView.tsx`
-
-### [2026-03-07] — Permission-Based Navigation System
-- Created `src/hooks/usePermissions.ts` hook to fetch user's team membership and permissions
-- Updated Sidebar to filter navigation items based on TeamMember permission flags
-- Shows user's role and team name in sidebar when they have team membership
-- Navigation items filtered by: canAccessProjects, canAccessTasks, canAccessCRM, canAccessInvoices, etc.
-- Admin role gets full access; no membership = full access (owner mode)
-
-<!-- Hyrjet para kesaj date u hoqen per ta mbajtur skedarin nen 300 rreshta
-     (udhezimi ne krye). Historiku i plote eshte ne git. -->
 </changelog>

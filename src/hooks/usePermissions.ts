@@ -4,6 +4,9 @@ import { useTenantOverride } from '../lib/platformContext';
 // Reporting capabilities are resolved in ONE place so every role branch below
 // stays a single spread instead of seven hand-maintained booleans.
 import { reportingCapabilitiesFor, NO_REPORTING_CAPABILITIES } from '../lib/reporting/permissions';
+// `canAssignTasks` is a per-member override that may sit on ANY of the user's rows
+// in the business, not only on the one the role sort put first.
+import { grantsCanAssignTasks } from '../lib/permissions/memberOverrides';
 import { useAuth } from '../contexts/AuthContext';
 import { useMemo, useEffect, useRef } from 'react';
 import { doc, getDoc, updateDoc, setDoc, Timestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
@@ -140,6 +143,12 @@ export function usePermissions(): UserPermissions {
     where: [{ field: 'userId', operator: '==', value: user?.uid || '__never__' }],
     skipTeamFilter: true,
     skipBusinessFilter: true, // identity resolution must read unscoped to find the business
+    // LIVE, not the 5-minute static cache: these are the user's OWN rows (a handful
+    // of documents), and they are what every permission in the app is derived
+    // from. With the cache, a right granted in Ekipet → Ndrysho Lejet (e.g.
+    // "Cakto detyra te të tjerët") reached the person only after a reload or
+    // the TTL — they kept seeing the locked control and reported it as a bug.
+    live: true,
   });
 
   // Fallback query: by email field — catches members added manually where userId wasn't set to the Firebase UID.
@@ -157,6 +166,7 @@ export function usePermissions(): UserPermissions {
       : [{ field: 'email', operator: '==', value: '__never__' }],
     skipTeamFilter: true,
     skipBusinessFilter: true, // identity resolution must read unscoped to find the business
+    live: true, // see above
   });
 
   // Merge both queries, deduplicate by id, prefer records already having the correct userId
@@ -427,8 +437,10 @@ export function usePermissions(): UserPermissions {
         canComment: true,
         // Per-member override: the role default is "assign only to yourself", but an
         // owner/admin can lift one person above it from Ekipet → Ndrysho Lejet
-        // (teamMembers.canAssignTasks) without promoting them to Manager.
-        canAssignTasks: membership.canAssignTasks === true,
+        // (teamMembers.canAssignTasks) without promoting them to Manager. Read
+        // across every active row of this business — the admin ticks ONE row,
+        // and it is not necessarily the one the role sort picked.
+        canAssignTasks: grantsCanAssignTasks(teamMembers, membership),
         canManageMembers: false,
         // Reporting capabilities: role defaults + per-member overrides, resolved in
         // one place. Spread AFTER the literals so an override always wins.
@@ -554,7 +566,7 @@ export function usePermissions(): UserPermissions {
       // right to assign work to colleagues without becoming a Manager. A Viewer
       // never can — the whole role is read-only, so assigning would contradict
       // `canEdit: false`.
-      canAssignTasks: !isViewer && membership.canAssignTasks === true,
+      canAssignTasks: !isViewer && grantsCanAssignTasks(teamMembers, membership),
       canManageMembers: false,
       // Reporting capabilities: role defaults + per-member overrides, resolved in
       // one place. Spread AFTER the literals so an override always wins.

@@ -2543,7 +2543,12 @@ const RoleTemplatesSection: React.FC = () => {
         return;
       }
       const batch = writeBatch(db);
-      const perms = templates[role];
+      const perms: Record<string, unknown> = { ...templates[role] };
+      // `canAssignTasks` is a per-member grant (Ekipet → Ndrysho Lejet), not a
+      // module: a template that leaves it OFF describes the role's default and
+      // must not silently revoke the people an admin lifted above it. ON still
+      // grants everyone; revoking stays an explicit per-member action.
+      if (perms.canAssignTasks !== true) delete perms.canAssignTasks;
       snap.docs.forEach(d => {
         batch.update(d.ref, { ...perms, updatedAt: Timestamp.now() });
       });

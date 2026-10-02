@@ -754,6 +754,16 @@ const QuickTaskForm: React.FC<{
               buttonClass="rounded-lg py-1.5 pl-3 text-xs"
               wrapClass="max-w-[200px]"
             />
+            {!canAssignTasks && (
+              // A locked control with no explanation reads as a bug. The right is
+              // the per-member "Cakto detyra te të tjerët" (Ekipet → Ndrysho Lejet).
+              <span
+                className="text-[11px] font-medium text-muted-foreground"
+                title="Roli yt krijon detyra vetëm për vete. Një admin mund të të japë lejen «Cakto detyra te të tjerët» te Ekipet → Ndrysho Lejet."
+              >
+                vetëm për vete · pa lejen «Cakto detyra te të tjerët»
+              </span>
+            )}
             <PillSelect
               value={prio}
               onChange={e => setPrio(e.target.value)}

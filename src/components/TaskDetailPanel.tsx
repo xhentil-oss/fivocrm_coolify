@@ -1664,7 +1664,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                       <div className="px-2.5 pb-1 pt-2 text-[10px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground">Anëtarët e ekipit</div>
                     )}
                     {permissions.canAssignTasks && assignMembers.map((m: any) => memberOption(m.userId, m.email, false))}
-                    {!showSelfOption && (!permissions.canAssignTasks || assignMembers.length === 0) && (
+                    {!permissions.canAssignTasks && (
+                      <div className="px-3 py-3 text-center text-[11px] leading-relaxed text-muted-foreground">
+                        Roli yt cakton detyra vetëm për vete. Lejen «Cakto detyra te të tjerët» e jep një admin te Ekipet → Ndrysho Lejet.
+                      </div>
+                    )}
+                    {!showSelfOption && permissions.canAssignTasks && assignMembers.length === 0 && (
                       <div className="px-3 py-5 text-center text-xs text-muted-foreground">Asnjë anëtar nuk përputhet me "{assignQuery}"</div>
                     )}
                     {permissions.canAssignTasks && (

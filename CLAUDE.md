@@ -1264,9 +1264,16 @@ Full runbook: `workspace/FOLLOW_UP.md`.
 - `canAssignTasks` ("may hand work to a colleague") is role-derived for
   Admin/Manager/SalesAgent, and a **per-member override** for Member/Sales:
   `teamMembers.canAssignTasks`, set from Ekipet → Ndrysho Lejet (or Cilësimet →
-  Rolet → Apliko te të gjithë). A Viewer can never have it. Without it the
+  Rolet → Apliko te të gjithë — which only ever GRANTS it; a template with it off
+  leaves individual grants alone). A Viewer can never have it. Without it the
   assignee picker in QuickTaskForm/TaskDetailPanel is filtered to the user
-  themselves — the reason a Member sees "no other users" when assigning.
+  themselves and says so — the reason a Member sees "no other users" when
+  assigning. The grant is read by `grantsCanAssignTasks()`
+  (`src/lib/permissions/memberOverrides.ts`) across EVERY active row of the
+  business, not only `bestMembership` (a person on several teams has one row per
+  team and the admin ticks one of them), and the identity queries in
+  `usePermissions` are `live: true`, so a right granted in Ekipet applies without
+  a reload.
 - Client portal users are separate — they use `clientPortalAccess` collection.
 
 ---
