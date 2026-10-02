@@ -57,7 +57,8 @@ import { isBreakReminderEnabled, setBreakReminderEnabled } from '../hooks/useBre
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { getDocs, getDoc, setDoc, query, where, collection, writeBatch, doc, Timestamp } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, auth } from '../lib/firebase';
+import { testAiConnection, type AiConnectionTest } from '../lib/aiClient';
 import { dndZoneStamp } from '../lib/notificationPrefs';
 import { toast } from '../hooks/use-toast';
 import { copyText } from '../lib/clipboard';
@@ -172,6 +173,8 @@ const SettingsView: React.FC = () => {
   const [inquiryReminderDays, setInquiryReminderDays] = useState('3');
   const [inquiryReminderSaved, setInquiryReminderSaved] = useState(false);
   const [aiSaved, setAiSaved] = useState(false);
+  const [aiTesting, setAiTesting] = useState(false);
+  const [aiTest, setAiTest] = useState<AiConnectionTest | null>(null);
 
   // ── Email marketing provider ──
   const [emailProvider, setEmailProvider] = useState<'resend' | 'sendgrid' | 'mailgun' | 'brevo' | 'smtp'>('resend');
@@ -555,7 +558,25 @@ const SettingsView: React.FC = () => {
       }
     }
     setAiSaved(true);
+    setAiTest(null);
     setTimeout(() => setAiSaved(false), 3000);
+  };
+
+  // Round-trips the SAVED key through /api/ai-chat and shows the provider's own
+  // reason — the browser console only ever shows "502" for a refused key/model.
+  const handleTestAiConnection = async () => {
+    if (!teamId || aiTesting) return;
+    setAiTesting(true);
+    setAiTest(null);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Not authenticated');
+      setAiTest(await testAiConnection(token, teamId));
+    } catch (e) {
+      setAiTest({ ok: false, status: 0, message: (e as Error).message || 'Gabim i papritur' });
+    } finally {
+      setAiTesting(false);
+    }
   };
 
   const handleSaveEmailSettings = async () => {
@@ -1190,7 +1211,46 @@ const SettingsView: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex justify-end">
+            {aiTest && (
+              <div
+                className={`rounded-lg border p-3 text-sm space-y-1 ${aiTest.ok ? 'border-success/40 bg-success/5' : 'border-destructive/40 bg-destructive/5'}`}
+                role="status"
+              >
+                {aiTest.ok ? (
+                  <p className="flex items-center gap-2 text-foreground">
+                    <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
+                    Lidhja funksionon — {aiTest.provider === 'gemini' ? 'Google Gemini' : aiTest.provider === 'openai' ? 'OpenAI' : aiTest.provider}
+                    {' · '}<span className="font-mono text-xs">{aiTest.model}</span>
+                  </p>
+                ) : (
+                  <>
+                    <p className="flex items-start gap-2 text-foreground">
+                      <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                      <span>{aiTest.message}</span>
+                    </p>
+                    {(aiTest.code || aiTest.detail) && (
+                      <p className="font-mono text-xs text-muted-foreground break-all pl-6">
+                        {aiTest.status ? `HTTP ${aiTest.status}` : ''}{aiTest.code ? ` · ${aiTest.code}` : ''}{aiTest.detail ? ` · ${aiTest.detail}` : ''}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2">
+              {/* The test uses the key in the VAULT: text still in the field must be saved first. */}
+              {aiApiKey.trim() && firestoreSettings?.hasAiApiKey && (
+                <p className="text-xs text-muted-foreground sm:mr-auto">Ruani çelësin e ri para se ta testoni.</p>
+              )}
+              <Button
+                variant="outline"
+                onClick={handleTestAiConnection}
+                disabled={aiTesting || !firestoreSettings?.hasAiApiKey || !!aiApiKey.trim()}
+                className="gap-2"
+              >
+                {aiTesting ? <><RefreshCw className="w-4 h-4 animate-spin" /> Duke testuar…</> : <><Zap className="w-4 h-4" /> Testo lidhjen</>}
+              </Button>
               {/* With a key already in the vault, the provider/model can be corrected without re-pasting it. */}
               <Button onClick={handleSaveAiSettings} disabled={!aiApiKey.trim() && !firestoreSettings?.hasAiApiKey} className="gap-2">
                 {aiSaved ? <><Check className="w-4 h-4" /> Ruajtur</> : 'Ruaj Konfigurimin'}

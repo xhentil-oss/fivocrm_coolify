@@ -65,7 +65,15 @@ const DEFAULT_TIMEOUT_MS = 25_000;
  * is server-side either way, this only prevents cross-tenant quota use).
  */
 export async function resolveAiConfig(teamId: string | null | undefined): Promise<ResolvedAiConfig> {
-  const cfg: Record<string, any> = teamId ? await getTeamConfig(teamId).catch(() => ({})) : {};
+  // A vault read that fails (e.g. a secret encrypted under a SECRETS_ENC_KEY this
+  // process does not have) must be visible in the logs — silently falling back to
+  // the platform key made it look like the tenant had never saved one.
+  const cfg: Record<string, any> = teamId
+    ? await getTeamConfig(teamId).catch((e: any) => {
+        console.error(`[aiProvider] team ${teamId}: could not read team config/secrets:`, e?.message || e);
+        return {};
+      })
+    : {};
   const teamKey = typeof cfg.aiApiKey === 'string' ? cfg.aiApiKey.trim() : '';
   // The key's shape wins over the stored `aiProvider`: a key sent to the wrong
   // provider is just "invalid" there, and the UI then showed an opaque 500.

@@ -149,7 +149,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       createdAt: new Date(),
     }).catch(() => {});
 
-    return res.status(200).json({ reply });
+    // `provider` / `model` let Cilësimet → FivoAI "Testo lidhjen" say WHAT answered.
+    return res.status(200).json({ reply, provider: result.provider, model: result.model });
   } catch (err: any) {
     // Never an opaque 500: the provider's failure is classified (invalid key, model
     // typo, quota, timeout, …) into a status + an actionable sentence, and the
