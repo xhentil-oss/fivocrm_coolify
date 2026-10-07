@@ -30,7 +30,6 @@ import {
   Cloud,
   Maximize2,
   Minimize2,
-  ImageIcon,
   Loader2,
   FileText,
   Download,
