@@ -994,7 +994,7 @@ const SettingsView: React.FC = () => {
                   <div className="space-y-1">
                     <p className="text-body text-foreground font-normal">🐦 Kujtesa e Pushimit</p>
                     <p className="text-body-sm text-muted-foreground">
-                      Dëgjo cicërim zogu çdo 2 orë (08:00–18:00) — ngriu e leviz!
+                      Dëgjo një cicërim të lehtë zogu çdo 2 orë (10:00–18:00) — ngrihu e lëviz!
                     </p>
                   </div>
                   <Switch
