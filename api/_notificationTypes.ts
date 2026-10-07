@@ -85,6 +85,7 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   hosting_backup_failed: 'system',
   hosting_upgrade_invoice: 'invoices',
   recurring_expense_created: 'invoices',
+  expense_daily_reminder: 'invoices',
   expense_submitted: 'invoices',
   quote_sent: 'invoices',
   quote_accepted: 'invoices',

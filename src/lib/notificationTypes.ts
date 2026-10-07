@@ -129,6 +129,7 @@ export const NOTIFICATION_TYPES = {
   hosting_backup_failed:    { category: 'system',   priority: 'warning',  groupLabel: 'backup-e të dështuara' },
   hosting_upgrade_invoice:  { category: 'invoices', priority: 'info',     groupLabel: 'fatura upgrade', portal: true },
   recurring_expense_created:{ category: 'invoices', priority: 'neutral' },
+  expense_daily_reminder:   { category: 'invoices', priority: 'info',     groupLabel: 'kujtesa shpenzimesh' },
   expense_submitted:        { category: 'invoices', priority: 'neutral',  groupLabel: 'shpenzime të reja' },
   quote_sent:               { category: 'invoices', priority: 'neutral',  portal: true },
   quote_accepted:           { category: 'invoices', priority: 'success' },

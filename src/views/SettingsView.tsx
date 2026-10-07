@@ -2358,6 +2358,19 @@ const SettingsView: React.FC = () => {
             lastRun={getLastRun('invoice_reminders')}
           />
 
+          {/* Daily "any expenses to add?" nudge to the finance people */}
+          <CronJobCard
+            title="Kujtesë ditore për shpenzimet"
+            description="Çdo ditë pune në 17:00 (ora lokale) dërgon te Admin/Manager një njoftim «A ke shpenzime për të shtuar sot?» me buton që hap direkt formularin. Thotë sa shpenzime u regjistruan sot. Një herë në ditë për person, jo në fundjavë."
+            schedule="Çdo ditë pune në 17:00 (VPS)"
+            icon={<CreditCard className="w-5 h-5 text-primary" />}
+            enabled={cronSettings['expense_daily_reminder']?.enabled ?? true}
+            onToggle={(v) => handleToggleCron('expense_daily_reminder', v)}
+            status={cronRunStatus['expense_daily_reminder']}
+            onRun={() => handleRunCron('/api/cron/run?job=expense-daily-reminder', 'expense_daily_reminder')}
+            lastRun={getLastRun('expense_daily_reminder')}
+          />
+
           {/* WHMCS Sync — a platform-wide integration (one WHMCS instance, env-configured);
               the cron endpoint refuses a manual run from anyone but a super-admin, so the
               card is only shown to them. */}

@@ -59,6 +59,9 @@ import { Checkbox } from './ui/checkbox';
 import { ScrollArea } from './ui/scroll-area';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import RichTextEditor, { RichTextDisplay } from './RichTextEditor';
+import CommentEditor, { type MentionCandidate } from './comments/CommentEditor';
+import CommentBody from './comments/CommentBody';
+import { commentMentionUids, commentToPlainText } from '../lib/commentMarkdown';
 import { toast } from '../hooks/use-toast';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { useCommentFocus, COMMENT_FLASH_CLASS } from '../hooks/useCommentFocus';
@@ -196,40 +199,28 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const { registerComment, isFlashing } = useCommentFocus(focusCommentId);
   const { isConnected: isGoogleConnected } = useGoogleApi();
   const { upload: uploadCommentImage, uploading: commentImageUploading } = useFileUpload();
-  const commentFileInputRef = useRef<HTMLInputElement | null>(null);
-  const commentInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const handleCommentImageUpload = async (file: File) => {
-    if (!/^image\/(png|jpe?g|gif|webp|svg\+xml)$/.test(file.type)) {
-      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP, SVG.', variant: 'destructive' });
-      return;
+  // Images in comments: uploaded to the file server, stored as their URL line.
+  // No SVG — it is a document that can carry script (see RichTextEditor).
+  const handleCommentImageUpload = async (file: File): Promise<string | null> => {
+    if (!/^image\/(png|jpe?g|gif|webp)$/.test(file.type)) {
+      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP.', variant: 'destructive' });
+      return null;
     }
     if (file.size > 5 * 1024 * 1024) {
       toast({ title: 'Imazhi shumë i madh', description: 'Maksimumi 5 MB.', variant: 'destructive' });
-      return;
+      return null;
     }
     try {
       const res = await uploadCommentImage(file, 'comment-images');
-      setCommentText(prev => (prev ? prev.trimEnd() + ' ' : '') + res.url + ' ');
+      return res.url;
     } catch (err) {
       toast({ title: 'Ngarkimi dështoi', description: (err as Error)?.message || 'Provo përsëri.', variant: 'destructive' });
+      return null;
     }
   };
-  const [commentText, setCommentText] = useState('');
   // Per-comment client visibility (opt-in; resets after every send).
   const [commentVisibleToClient, setCommentVisibleToClient] = useState(false);
-  const [mentionMap, setMentionMap] = useState<Record<string, string>>({}); // displayName → uid
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
-  const [editingCommentText, setEditingCommentText] = useState('');
-  const editCommentRef = useRef<HTMLTextAreaElement | null>(null);
-  // The inline editor must show the WHOLE comment: grow with the text (capped
-  // at ~half the viewport, then scroll) instead of a fixed two-row box.
-  useEffect(() => {
-    const el = editCommentRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    const cap = Math.max(160, Math.floor(window.innerHeight * 0.5));
-    el.style.height = `${Math.min(el.scrollHeight + 2, cap)}px`;
-  }, [editingCommentText, editingCommentId]);
   const [confirmDeleteCommentId, setConfirmDeleteCommentId] = useState<string | null>(null);
   // Which comment's emoji picker is open (WhatsApp/Slack-style reactions on comments).
   const [reactionPickerId, setReactionPickerId] = useState<string | null>(null);
@@ -241,38 +232,31 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const startEditComment = (c: TaskComment) => {
     setConfirmDeleteCommentId(null);
     setEditingCommentId(c.id);
-    // Show the human-readable text (strip the @[Name](uid) storage format).
-    setEditingCommentText((c.content || '').replace(/@\[([^\]]+)\]\([^)]+\)/g, '@$1'));
   };
-  const saveEditComment = async () => {
-    const id = editingCommentId;
-    const text = editingCommentText.trim();
-    if (!id || !text) return;
-    await onEditComment?.(id, text);
-    setEditingCommentId(null);
-    setEditingCommentText('');
+  // The editor loads the stored text as-is, so @[Name](uid) mentions survive an
+  // edit (the old textarea flattened them to "@Name" and lost the uid).
+  const saveEditComment = async (id: string, text: string): Promise<boolean> => {
+    if (!text.trim()) return false;
+    try {
+      await onEditComment?.(id, text);
+      setEditingCommentId(null);
+      return true;
+    } catch (err: any) {
+      toast({ title: 'Ndryshimi nuk u ruajt', description: err?.message, variant: 'destructive' });
+      return false;
+    }
   };
   const deleteComment = async (id: string) => {
     await onDeleteComment?.(id);
     setConfirmDeleteCommentId(null);
   };
 
-  // Auto-grow the comment composer so the whole comment is visible (grows on
-  // type/mention-insert, shrinks back after submit clears the text).
-  useEffect(() => {
-    const el = commentInputRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-  }, [commentText]);
   // (a `showSubtasks` toggle used to live here; the collapse control it drove was
   //  removed, so the state was dead — subtasks are always shown.)
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleText, setTitleText] = useState(task.title);
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const [descriptionText, setDescriptionText] = useState(task.description || '');
-  const [showMentionSuggestions, setShowMentionSuggestions] = useState(false);
-  const [mentionQuery, setMentionQuery] = useState('');
   const [chatMessageText, setChatMessageText] = useState('');
   const [showChat, setShowChat] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -497,17 +481,16 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     return list;
   }, [teamMembers, teams]);
 
-  // Filter mentionable users for @mention suggestions
-  const mentionSuggestions = React.useMemo(() => {
-    if (!allMentionable.length) return [];
-    const others = allMentionable.filter(m => m.userId !== user?.uid);
-    if (!mentionQuery) return others.slice(0, 5);
-    const query = mentionQuery.toLowerCase();
-    return others.filter(m => {
-      const displayName = getUserDisplayName(m.userId).toLowerCase();
-      return displayName.includes(query) || m.userId.toLowerCase().includes(query);
-    }).slice(0, 5);
-  }, [allMentionable, mentionQuery, getUserDisplayName, user?.uid]);
+  // People the comment composer offers after "@" (one entry per person — a
+  // member of several teams has one teamMembers row per team).
+  const mentionCandidates = React.useMemo(() => {
+    const byId = new Map<string, MentionCandidate>();
+    for (const m of allMentionable) {
+      if (!m.userId || m.userId === user?.uid || byId.has(m.userId)) continue;
+      byId.set(m.userId, { id: m.userId, name: getUserDisplayName(m.userId) });
+    }
+    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name, 'sq'));
+  }, [allMentionable, getUserDisplayName, user?.uid]);
 
   // Find running entry for this task
   const runningEntry = React.useMemo(() => {
@@ -814,35 +797,6 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     }
   };
 
-  const handleCommentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setCommentText(value);
-
-    const lastAtIndex = value.lastIndexOf('@');
-    if (lastAtIndex !== -1) {
-      const afterAt = value.slice(lastAtIndex + 1);
-      const spaceIndex = afterAt.indexOf(' ');
-      if (spaceIndex === -1) {
-        setMentionQuery(afterAt);
-        setShowMentionSuggestions(true);
-      } else {
-        setShowMentionSuggestions(false);
-      }
-    } else {
-      setShowMentionSuggestions(false);
-    }
-  };
-
-  const insertMention = (userId: string) => {
-    const displayName = getUserDisplayName(userId);
-    const lastAtIndex = commentText.lastIndexOf('@');
-    // Store only the readable name in the input; uid is kept in mentionMap
-    const newText = commentText.slice(0, lastAtIndex) + `@${displayName} `;
-    setCommentText(newText);
-    setMentionMap(prev => ({ ...prev, [displayName]: userId }));
-    setShowMentionSuggestions(false);
-  };
-
   const playFrogSound = () => {
     try {
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -883,21 +837,14 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     }
   };
 
-  const handleAddCommentSubmit = async () => {
-    const text = commentText.trim();
-    if (!text) return;
-
-    // Transform @DisplayName → @[DisplayName](uid) for storage using mentionMap
-    let finalText = text;
-    Object.entries(mentionMap).forEach(([displayName, uid]) => {
-      finalText = finalText.split(`@${displayName}`).join(`@[${displayName}](${uid})`);
-    });
-
-    // Also extract uids from already-formatted text (legacy or pasted content)
-    const newFormatRegex = /@\[[^\]]+\]\(([^)]+)\)/g;
-    const mentionedUids = new Set<string>(Object.values(mentionMap));
-    let m: RegExpExecArray | null;
-    while ((m = newFormatRegex.exec(finalText)) !== null) mentionedUids.add(m[1]);
+  /** Resolves true once the comment is SAVED (the composer then clears) — a
+   *  failed follower update afterwards must not keep the text for a duplicate send. */
+  const handleAddCommentSubmit = async (text: string): Promise<boolean> => {
+    // The composer already writes mentions as @[Name](uid) (lib/commentMarkdown).
+    const finalText = text.trim();
+    if (!finalText) return false;
+    const mentionedUids = new Set<string>(commentMentionUids(finalText));
+    let saved = false;
 
     try {
       // Save comment first — then notify. The created id (when the parent hands it
@@ -906,11 +853,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       const created = await onAddComment(task.id, finalText, {
         visibleToClient: commentVisibleToClient && !!(task as any).customerId,
       });
+      saved = true;
       const newCommentId: string | undefined = (created as any)?.id;
       const commentLink = taskDeepLink(task.id, task.projectId, newCommentId);
       const taskLabel = task.projectId ? 'Shiko Detyrën' : 'Shiko Detyrat';
-      setCommentText('');
-      setMentionMap({});
       setCommentVisibleToClient(false);
       playFrogSound();
 
@@ -981,7 +927,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       currentCollaboratorIds.forEach(uid => participantIds.add(uid));
       comments.forEach(c => { if (c.userId) participantIds.add(c.userId); });
 
-      const commentPreview = finalText.replace(/@\[([^\]]+)\]\([^)]+\)/g, '@$1').slice(0, 120);
+      const commentPreview = commentToPlainText(finalText).replace(/\s*\n\s*/g, ' ').slice(0, 120);
       const participantNotifPromises = [...participantIds]
         .filter(uid => !excluded.has(uid))
         .map(uid => notificationMutation.create({
@@ -994,10 +940,18 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           actionLabel: taskLabel,
         }));
       await Promise.allSettled(participantNotifPromises);
+      return true;
     } catch (err: any) {
+      if (saved) {
+        // The comment exists; only the follower update failed. Clearing the
+        // composer is right — keeping the text invites a duplicate.
+        console.error('[Tasks] komenti u ruajt, ndjekësit jo:', err);
+        return true;
+      }
       // Comment failed to save — keep the text so the user can retry, and SAY so.
       console.error('[Tasks] komenti nuk u ruajt:', err);
       toast({ title: 'Komenti nuk u ruajt', description: err?.message, variant: 'destructive' });
+      return false;
     }
   };
 
@@ -1082,53 +1036,11 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
 
 
-  const renderCommentWithMentions = (content: string, isOwn = false) => {
-    // Split on mentions OR URLs (so we can detect image URLs and render them inline).
-    const tokenRe = /(@\[[^\]]+\]\([^)]+\)|@\S+|https?:\/\/[^\s]+)/g;
-    const parts = content.split(tokenRe);
-    const isImageUrl = (url: string) => /\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(url) || /firebasestorage\.googleapis\.com|firebasestorage\.app/i.test(url);
-    // On the sender's own (purple) bubble, text-primary is invisible — use a
-    // light-on-purple treatment instead so the @mention stays readable.
-    const mentionCls = isOwn
-      ? 'text-primary-foreground font-semibold bg-white/25 px-1 rounded'
-      : 'text-primary font-medium bg-primary/10 px-1 rounded';
-    return parts.map((part, i) => {
-      if (!part) return null;
-      if (part.startsWith('@')) {
-        // New format: @[DisplayName](userId)
-        const newFmt = part.match(/^@\[([^\]]+)\]\(([^)]+)\)$/);
-        if (newFmt) {
-          return (
-            <span key={i} className={mentionCls}>
-              @{newFmt[1]}
-            </span>
-          );
-        }
-        // Legacy format: @userId — resolve name via lookup
-        const uid = part.slice(1);
-        const displayName = getUserDisplayName(uid);
-        return (
-          <span key={i} className={mentionCls}>
-            @{displayName}
-          </span>
-        );
-      }
-      if (/^https?:\/\//.test(part)) {
-        if (isImageUrl(part)) {
-          return (
-            <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="block my-1">
-              <img src={part} alt="attachment" className="max-w-[260px] max-h-[260px] rounded-lg border border-border/40 object-cover" loading="lazy" />
-            </a>
-          );
-        }
-        return (
-          <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="underline break-all">
-            {part}
-          </a>
-        );
-      }
-      return <React.Fragment key={i}>{part}</React.Fragment>;
-    });
+  // Old comments stored a mention as a bare `@uid`. Show a name only when the id
+  // is a known person — otherwise it is just text someone typed ("@ekipi").
+  const resolveLegacyMention = (value: string) => {
+    const known = allMentionable.some(m => m.userId === value) || !!userProfiles?.some(p => p.userId === value);
+    return known ? getUserDisplayName(value) : null;
   };
 
   // Derive the total from each entry's start/end (source of truth) rather than the
@@ -2651,36 +2563,24 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                             </span>
                           )}
                           {editingCommentId === comment.id ? (
-                            <div className="w-full flex flex-col gap-1.5">
-                              <Textarea
-                                ref={editCommentRef}
-                                value={editingCommentText}
-                                onChange={e => setEditingCommentText(e.target.value)}
-                                rows={3}
-                                autoFocus
-                                onFocus={e => {
-                                  // Put the caret at the end instead of selecting nothing at the top.
-                                  const len = e.currentTarget.value.length;
-                                  e.currentTarget.setSelectionRange(len, len);
-                                }}
-                                onKeyDown={e => {
-                                  if (e.key === 'Escape') { setEditingCommentId(null); setEditingCommentText(''); }
-                                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void saveEditComment(); }
-                                }}
-                                className="text-base sm:text-sm w-full min-h-[96px] resize-none overflow-y-auto leading-relaxed"
-                              />
-                              <div className={`flex gap-2 ${isCurrentUser ? 'justify-end' : 'justify-start'}`}>
-                                <Button size="sm" className="h-7 px-3" onClick={saveEditComment} disabled={!editingCommentText.trim()}>Ruaj</Button>
-                                <Button size="sm" variant="ghost" className="h-7 px-3" onClick={() => { setEditingCommentId(null); setEditingCommentText(''); }}>Anulo</Button>
-                              </div>
-                            </div>
+                            <CommentEditor
+                              className="w-full"
+                              initialValue={comment.content}
+                              mentionables={mentionCandidates}
+                              onSubmit={text => saveEditComment(comment.id, text)}
+                              onCancel={() => setEditingCommentId(null)}
+                              onUploadImage={handleCommentImageUpload}
+                              submitLabel="Ruaj"
+                              autoFocus
+                              toolbarOpen
+                            />
                           ) : (
                             <>
                               <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed
                                 ${isCurrentUser
                                   ? 'bg-primary text-primary-foreground rounded-tr-sm'
                                   : 'bg-muted text-foreground rounded-tl-sm'}`}>
-                                {renderCommentWithMentions(comment.content, isCurrentUser)}
+                                <CommentBody content={comment.content} onPrimary={isCurrentUser} resolveLegacyMention={resolveLegacyMention} />
                                 {(comment as any).edited && <span className="opacity-60 text-[10px] ml-1">(edituar)</span>}
                               </div>
                               {/* Reaction chips — one pill per emoji with its count; click to toggle your own. */}
@@ -2753,83 +2653,18 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             )}
 
             {/* Comment Input */}
-            <div className="relative">
-              <div
-                className="flex items-center gap-2 bg-muted/40 border border-border/50 rounded-xl px-3 py-2 focus-within:border-primary/50 focus-within:bg-background transition-colors"
-                onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
-                onDrop={async (e) => {
-                  const files = Array.from(e.dataTransfer?.files || []);
-                  const imgs = files.filter(f => f.type.startsWith('image/'));
-                  if (imgs.length === 0) return;
-                  e.preventDefault();
-                  for (const f of imgs) await handleCommentImageUpload(f);
-                }}
-              >
-                <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-[10px] font-bold text-primary-foreground flex-shrink-0">
-                  {user?.displayName?.slice(0, 2).toUpperCase() || user?.email?.slice(0, 2).toUpperCase() || 'U'}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => commentFileInputRef.current?.click()}
-                  disabled={commentImageUploading}
-                  title={commentImageUploading ? 'Po ngarkohet…' : 'Shto imazh'}
-                  className="flex-shrink-0 w-6 h-6 rounded hover:bg-muted flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-50"
-                >
-                  {commentImageUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
-                </button>
-                <input
-                  ref={commentFileInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/gif,image/webp"
-                  className="hidden"
-                  onChange={async (e) => {
-                    const f = e.target.files?.[0];
-                    e.target.value = '';
-                    if (f) await handleCommentImageUpload(f);
-                  }}
-                />
-                <Textarea
-                  ref={commentInputRef}
-                  rows={1}
-                  placeholder="Shto koment... @emri për të përmendur"
-                  value={commentText}
-                  onChange={handleCommentChange}
-                  onPaste={async (e) => {
-                    const items = e.clipboardData?.items;
-                    if (!items) return;
-                    for (let i = 0; i < items.length; i++) {
-                      const it = items[i];
-                      if (it.kind === 'file' && it.type.startsWith('image/')) {
-                        const f = it.getAsFile();
-                        if (!f) continue;
-                        e.preventDefault();
-                        await handleCommentImageUpload(f);
-                        return;
-                      }
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    // Enter submits; Shift+Enter inserts a newline. Never submit
-                    // while the @mention list is open (Enter picks a suggestion).
-                    if (e.key === 'Enter' && !e.shiftKey && !showMentionSuggestions) {
-                      e.preventDefault();
-                      handleAddCommentSubmit();
-                    }
-                    if (e.key === 'Escape') {
-                      setShowMentionSuggestions(false);
-                    }
-                  }}
-                  className="border-0 bg-transparent focus-visible:ring-0 text-sm p-0 min-h-0 resize-none leading-snug max-h-40 overflow-y-auto"
-                />
-                {commentText.trim() && (
-                  <button
-                    onClick={handleAddCommentSubmit}
-                    className="flex-shrink-0 w-7 h-7 rounded-lg bg-primary flex items-center justify-center hover:bg-primary/90 transition-colors"
-                  >
-                    <Send className="w-3.5 h-3.5 text-primary-foreground" />
-                  </button>
-                )}
-              </div>
+            <div>
+              <CommentEditor
+                placeholder="Shto koment… @emri për të përmendur"
+                mentionables={mentionCandidates}
+                onSubmit={handleAddCommentSubmit}
+                onUploadImage={handleCommentImageUpload}
+                avatar={
+                  <div className="w-6 h-6 mt-px rounded-full bg-primary flex items-center justify-center text-[10px] font-bold text-primary-foreground flex-shrink-0">
+                    {user?.displayName?.slice(0, 2).toUpperCase() || user?.email?.slice(0, 2).toUpperCase() || 'U'}
+                  </div>
+                }
+              />
               {/* Client visibility is OPT-IN per comment: comments are internal
                   by default; checking this stamps customerId, which is what the
                   portal's query (and the rules) key client access on. */}
@@ -2844,25 +2679,6 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                   Dukshëm për klientin në portal
                   {commentVisibleToClient && <span className="font-semibold text-amber-600">— klienti do ta lexojë</span>}
                 </label>
-              )}
-              {showMentionSuggestions && mentionSuggestions.length > 0 && (
-                <div className="absolute bottom-full left-0 right-0 mb-1 bg-popover border rounded-lg shadow-lg z-50">
-                  <div className="p-1">
-                    <p className="text-xs text-muted-foreground px-2 py-1">Përmend dikë</p>
-                    {mentionSuggestions.map(member => (
-                      <button
-                        key={member.id}
-                        className="w-full text-left px-2 py-1.5 text-sm hover:bg-accent rounded flex items-center gap-2"
-                        onClick={() => insertMention(member.userId)}
-                      >
-                        <div className="w-5 h-5 rounded-full bg-primary/20 flex items-center justify-center text-xs font-medium">
-                          {getUserDisplayName(member.userId).slice(0, 2).toUpperCase()}
-                        </div>
-                        <span className="truncate">{getUserDisplayName(member.userId)}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
               )}
             </div>
           </div>

@@ -1016,6 +1016,14 @@ action and "actions with confirmation" are open).
 - **A failed notification must never fail the action that raised it.** Use
   `Promise.allSettled` / per-call `.catch` — the task, comment or report is already
   saved by then, and surfacing an error made users submit duplicates.
+- **`expense-daily-reminder`** (17:00 local from the VPS, NOT in run-all): one
+  `expense_daily_reminder` notification per finance person (Admin/Manager/Owner via
+  `managerIdsForBusiness`) per working day — "A ke shpenzime për të shtuar sot?" with
+  the count already booked and a button to `/app/expenses?new=1` (opens the form).
+  Idempotent per team/day via `teamSettings.expenseReminderLastDate` (stamped BEFORE
+  the sends), deduped per person across teams, per-team toggle
+  `cronSettings.expense_daily_reminder` (Cilësimet → Automatizime), suspended tenants
+  skipped, manual runs scoped to the caller's tenant.
 - Cron reads over `notifications` must be scoped and capped (`businessId` +
   `limit`). Index requirements live in `firestore.indexes.json`; the retention sweep
   needs `(isRead, createdAt)` and without it nothing was ever purged.

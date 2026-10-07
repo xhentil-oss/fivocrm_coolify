@@ -83,6 +83,17 @@ const ExpensesView: React.FC = () => {
   const projectMutation = useMutation<Project>('projects');
   const notificationMutation = useMutation<any>('notifications');
 
+  // `/app/expenses?new=1` — the daily reminder's "Shto shpenzim" button lands
+  // straight in the form, not on a list the person then has to click through.
+  useEffect(() => {
+    if (searchParams.get('new') !== '1') return;
+    setIsCreateDialogOpen(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete('new');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   useEffect(() => {
     const editId = searchParams.get('edit');
     if (!editId || !rawExpenses) return;

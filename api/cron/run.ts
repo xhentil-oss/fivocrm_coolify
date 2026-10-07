@@ -273,7 +273,7 @@ function startOfRecurrenceDay(x: Date): number {
  * Returns a cached per-run reader: one `teamSettings` read per team, not one
  * per document, because a job iterates thousands of rows across a few teams.
  */
-type CronToggleKey = 'task_alerts' | 'task_reminders' | 'invoice_reminders' | 'whmcs_sync' | 'recurring_tasks';
+type CronToggleKey = 'task_alerts' | 'task_reminders' | 'invoice_reminders' | 'whmcs_sync' | 'recurring_tasks' | 'expense_daily_reminder';
 function cronToggleReader(key: CronToggleKey) {
   const cache = new Map<string, boolean>();
   return async (teamId: string | null | undefined): Promise<boolean> => {
@@ -3238,6 +3238,105 @@ async function runLeadWhatsappAutoReminders(opts?: { businessId?: string | null 
 //
 // Idempotent per tenant per day per stage via `dailyReportMisses/{businessId}_{date}`:
 // re-running the job (or running it twice by accident) notifies nobody twice.
+// ── JOB: expense-daily-reminder ───────────────────────────────────────────────
+// Every WORKING day at 17:00 local (VPS `scheduleDailyInZone`, NOT in run-all —
+// it is a wall-clock promise to a person) the finance people of each tenant get
+// one notification: "any expenses to add today?" with a button that opens the
+// expense form. The owner asked for it because a day's receipts that are not
+// entered the same day are entered never, and Financat then under-count costs.
+//
+// Laws: recipients are the tenant's Admin/Manager/Owner rows (`managerIdsForBusiness`
+// — the people the rules let settle money), never every member; one notification
+// per PERSON per day even when they sit on several teams; idempotent per team/day
+// via `teamSettings.expenseReminderLastDate` (a restart or a manual re-run cannot
+// nag twice); weekends skipped; the per-team toggle `cronSettings.expense_daily_reminder`
+// (Cilësimet → Automatizime) switches it off; suspended tenants skipped; a manual
+// run is scoped to the caller's tenant like every job that notifies.
+async function runExpenseDailyReminder(opts?: { businessId?: string | null; date?: string }) {
+  const now = new Date();
+  const z = zonedParts(now);
+  const date = opts?.date || `${z.year}-${String(z.month).padStart(2, '0')}-${String(z.day).padStart(2, '0')}`;
+  const [dy, dm, dd] = date.split('-').map(Number);
+  if (!dy || !dm || !dd) return { date, skipped: 'bad-date' as const, teams: 0, notified: 0 };
+  const dayStart = zonedDate(dy, dm, dd, 0, 0, 0, 0);
+  const dayEnd = zonedDate(dy, dm, dd, 23, 59, 59, 999);
+  const weekday = zonedParts(dayStart).weekday;
+  if (weekday === 0 || weekday === 6) {
+    console.log(`[expense-daily-reminder] ${date} is a weekend — skipped`);
+    return { date, skipped: 'weekend' as const, teams: 0, notified: 0 };
+  }
+
+  const enabledFor = cronToggleReader('expense_daily_reminder');
+  const suspended = await loadSuspendedBusinessIds();
+  const teamsSnap = opts?.businessId
+    ? await db.collection('teams').where('businessId', '==', opts.businessId).get()
+    : await db.collection('teams').get();
+
+  let teams = 0, notified = 0, alreadySent = 0, disabled = 0, noRecipients = 0;
+  const notifiedToday = new Set<string>(); // one nag per person per day, across teams
+  const todayCountByBusiness = new Map<string, number>();
+  const ops: Promise<any>[] = [];
+
+  for (const teamDoc of teamsSnap.docs) {
+    const team = teamDoc.data() as any;
+    const businessId: string | null = team.businessId || null;
+    if (!businessId || suspended.has(businessId)) continue;
+    if (!(await enabledFor(teamDoc.id))) { disabled++; continue; }
+
+    const settingsRef = db.collection('teamSettings').doc(teamDoc.id);
+    const settingsSnap = await settingsRef.get();
+    if ((settingsSnap.data() as any)?.expenseReminderLastDate === date) { alreadySent++; continue; }
+    teams++;
+
+    // How many rows the tenant already booked today — the message says so, because
+    // "nothing yet" and "3 already in, anything else?" are different nudges.
+    let todayCount = todayCountByBusiness.get(businessId);
+    if (todayCount === undefined) {
+      try {
+        const todaySnap = await db.collection('expenses')
+          .where('businessId', '==', businessId)
+          .where('date', '>=', admin.firestore.Timestamp.fromDate(dayStart))
+          .where('date', '<=', admin.firestore.Timestamp.fromDate(dayEnd))
+          .limit(50).get();
+        todayCount = todaySnap.size;
+      } catch (err) {
+        console.warn('[expense-daily-reminder] today-count read failed — continuing without it:', (err as Error)?.message);
+        todayCount = -1;
+      }
+      todayCountByBusiness.set(businessId, todayCount);
+    }
+
+    const recipients = (await managerIdsForBusiness(businessId, teamDoc.id, { cap: 12 }))
+      .filter(uid => !notifiedToday.has(uid));
+    // Stamp FIRST: a crash between the stamp and the sends costs one missed nag,
+    // the opposite order costs a double one.
+    ops.push(settingsRef.set({ expenseReminderLastDate: date, updatedAt: admin.firestore.Timestamp.now() }, { merge: true }));
+    if (recipients.length === 0) { noRecipients++; continue; }
+
+    const message = todayCount === 0
+      ? 'Sot nuk është regjistruar asnjë shpenzim. A ke fatura, blerje ose pagesa për të shtuar? Regjistroji tani, që Financat të jenë të sakta.'
+      : todayCount > 0
+        ? `Sot u regjistruan ${todayCount} shpenzim${todayCount === 1 ? '' : 'e'}. Ka ndonjë tjetër për të shtuar para se të mbyllet dita?`
+        : 'A ke shpenzime për të shtuar sot (fatura, blerje, pagesa)? Regjistroji tani, që Financat të jenë të sakta.';
+    for (const uid of recipients) {
+      notifiedToday.add(uid);
+      notified++;
+      ops.push(notifyUser({
+        userId: uid,
+        type: 'expense_daily_reminder',
+        title: '🧾 Shpenzimet e sotme',
+        message,
+        actionUrl: '/app/expenses?new=1',
+        actionLabel: 'Shto shpenzim',
+        businessId,
+        teamId: teamDoc.id,
+      }));
+    }
+  }
+  await settleAll(ops, 'expense-daily-reminder');
+  return { date, teams, notified, alreadySent, disabled, noRecipients, scopedTo: opts?.businessId ?? null };
+}
+
 async function runDailyReportCheck(opts?: { stage?: 'remind' | 'escalate'; businessId?: string; date?: string }) {
   const stage = opts?.stage === 'escalate' ? 'escalate' : 'remind';
   const now = new Date();
@@ -6827,7 +6926,7 @@ const SCOPED_JOBS = new Set<string>([
   'expire-invitations', 'lead-follow-up-reminders', 'whatsapp-broadcasts',
   'whatsapp-automations', 'email-campaigns', 'purchase-campaigns', 'campaign-steps',
   'lead-sla-stale-alerts', 'conversation-sla', 'lead-wa-auto-reminders',
-  'overdue-reminders', 'notification-digest', 'daily-report-check',
+  'overdue-reminders', 'notification-digest', 'daily-report-check', 'expense-daily-reminder',
   'inquiry-materials-reminders',
   'project-spend-rollup', // `full=1` (whole platform) is refused below
   'client-profitability-report', 'lead-cadence-steps',
@@ -7201,6 +7300,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         result = await runProjectSpendRollup({ full: req.query.full === '1', businessId: manualScope });
         break;
+      case 'expense-daily-reminder': {
+        // 17:00 local from the VPS (NOT in run-all — it notifies people). A manual
+        // run is scoped to the caller's own tenant, super-admin excepted.
+        const scopeId = await manualScopeId(req, isManual);
+        if (scopeId === MANUAL_SCOPE_UNRESOLVED) return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — ekzekutimi manual u ndal.' });
+        result = await runExpenseDailyReminder({ businessId: scopeId });
+        break;
+      }
       case 'client-profitability-report': {
         // Day 2 of the month from the VPS (NOT in run-all — it notifies people). A
         // manual run is scoped to the caller's own tenant, super-admin excepted.

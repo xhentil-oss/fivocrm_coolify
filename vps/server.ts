@@ -1805,6 +1805,10 @@ function startCronSchedulers(): void {
   scheduleDailyInZone(CRON_LOCAL_TZ, 17, 35, () => {
     void triggerCronJob('daily-report-check', { stage: 'remind' });
   });
+  // ── "Any expenses to add today?" to the finance people, 17:00 local ──
+  // Wall-clock promise, so scheduleDailyInZone; the job skips weekends and is
+  // idempotent per team/day (teamSettings.expenseReminderLastDate). NOT in run-all.
+  scheduleDailyInZone(CRON_LOCAL_TZ, 17, 0, () => { void triggerCronJob('expense-daily-reminder'); });
   scheduleDailyInZone(CRON_LOCAL_TZ, 18, 35, () => {
     void triggerCronJob('daily-report-check', { stage: 'escalate' });
   });

@@ -438,6 +438,22 @@ html.plt-capacitor body {
   color: hsl(var(--color-muted-foreground));
 }
 
+/* Comment composer (CommentEditor) — chat-dense spacing + @mention pills */
+.tiptap.comment-editor p { margin: 0; }
+.tiptap.comment-editor ul,
+.tiptap.comment-editor ol { padding-left: 1.25rem; margin: 0.15rem 0; }
+.tiptap.comment-editor ul[data-type="taskList"] { padding-left: 0; }
+.tiptap.comment-editor blockquote { margin: 0.25rem 0; }
+.tiptap.comment-editor pre { padding: 0.5rem 0.65rem; margin: 0.25rem 0; }
+.tiptap .comment-mention {
+  color: hsl(var(--color-primary));
+  background: hsl(var(--color-primary) / 0.1);
+  border-radius: 0.25rem;
+  padding: 0 0.2rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 /* ── Print: the price-calculator quote panel (components/calculator/PriceSummary) ──
    `window.print()` prints the live page; everything except the panel marked
    `data-print-root` is hidden, and the internal-costs block never reaches paper. */

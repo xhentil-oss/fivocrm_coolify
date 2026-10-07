@@ -25,6 +25,7 @@ import { compareTasksByDue } from '../../lib/taskSort';
 import { useCommentFocus, COMMENT_FLASH_CLASS } from '../../hooks/useCommentFocus';
 import { taskDeepLink, projectCommentDeepLink } from '../../lib/deepLinks';
 import { currencySymbol } from '../../lib/utils';
+import CommentBody from '../../components/comments/CommentBody';
 
 interface ProjectComment {
   id: string;
@@ -535,7 +536,7 @@ const PortalProjectDetailView: React.FC = () => {
                                       ${isOwn
                                         ? 'bg-primary text-primary-foreground rounded-tr-sm'
                                         : 'bg-muted text-foreground rounded-tl-sm'}`}>
-                                      {comment.content}
+                                      <CommentBody content={comment.content} onPrimary={isOwn} />
                                     </div>
                                     <span className="text-[10px] text-muted-foreground px-1">
                                       {createdAt.toLocaleString('sq-AL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}

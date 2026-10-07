@@ -19,6 +19,11 @@ Rules:
 <!-- Add tasks here only when there are real next steps. -->
 
 <todo>
+Aktivizo kujtesen ditore te shpenzimeve ne VPS (git pull + pm2 restart)
+Puna `expense-daily-reminder` (17:00 lokale, dite pune) u shtua me 7 Tetor: njoftim "A ke shpenzime per te shtuar sot?" te Admin/Manager me buton qe hap formularin (`/app/expenses?new=1`), toggle te Cilesimet -> Automatizime. Logjika eshte ne Vercel (push-uar), por ORARI jeton ne vps/server.ts: ne VPS `cd /root/fivocrm && git pull && pm2 restart server`, pastaj `pm2 logs server --out --lines 200 --nostream | grep -i scheduler`. Prove: Cilesimet -> Automatizime -> karta "Kujtese ditore per shpenzimet" -> "Ekzekuto Tani" duhet te sjelle nje njoftim te zilja (nje here ne dite; rifillimi s'e dyfishon).
+</todo>
+
+<todo>
 Pas auditit te financave 30 Shtator: dergo faturat e shtatorit dhe kontrollo rolet
 Gjithcka teknike u mbyll me 2 Tetor: shkaku i faturave/pagave te munguara ishte VPS-ja e vdekur 14 Shtator -> 2 Tetor (npm start i harruar mbante porten 3001; pm2 binte cdo 2 s) - u rregullua, uptime i verifikuar; 13 pagat e shtatorit dhe 22 faturat AUTO-2026-09-* u krijuan me scripts/audit-recurring-expenses.mjs / audit-retainer-billing.mjs --generate. Mbeten per pronarin: (1) Faturat -> filtro shtatorin -> kontrollo 22 faturat "Ne pritje" dhe dergoji me "Dergo" (nuk u derguan automatikisht); (2) nga 30 Shtatori "Paguar/Pjeserisht/Anuluar", kestet dhe kategoria "Paga" jane vetem Admin/Manager/pronar - ngri ne Manager ata qe i bejne; (3) me 25 Tetor verifiko qe 22 retainer-et u faturuan vete (paneli Faturimi i projektit tregon "Kontrolli i fundit"). Strukturore, e pabere: run-all mbetet 27 pune ne nje thirrje 60s.
 </todo>
