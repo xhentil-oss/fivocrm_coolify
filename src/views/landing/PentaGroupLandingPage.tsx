@@ -198,8 +198,11 @@ export default function PentaGroupLandingPage() {
             </FadeIn>
             <FadeIn delay={200}>
               <p className="mt-8 text-lg sm:text-xl text-zinc-300 max-w-2xl leading-relaxed">
-                Një ekip i plotë marketingu për {CLIENT}: video profesionale të makinave, reklama në Meta dhe Google, menaxhim i rrjeteve, influencerë dhe strategji —{' '}
-                <strong className="text-white">nga 120.000 Lekë / muaj.</strong>
+                Një ekip i plotë marketingu për {CLIENT}: video profesionale të makinave, reklama në Meta dhe Google, menaxhim i të gjitha rrjeteve sociale dhe strategji marketingu —{' '}
+                <strong className="text-white">duke nisur nga 120.000 Lekë / muaj.</strong>
+              </p>
+              <p className="mt-4 text-base sm:text-lg text-zinc-400 max-w-2xl leading-relaxed">
+                Si edhe mundësi për fushata me influencerë të ndryshëm, me buxhet të dedikuar.
               </p>
             </FadeIn>
             <FadeIn delay={300}>
