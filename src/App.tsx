@@ -124,6 +124,7 @@ const BakeryLandingPage = lazyRetry(() => import('./views/landing/BakeryLandingP
 const ShopProduktLandingPage = lazyRetry(() => import('./views/landing/ShopProduktLandingPage'));
 const EngineeringLandingPage = lazyRetry(() => import('./views/landing/EngineeringLandingPage'));
 const RentACarSoftwareLandingPage = lazyRetry(() => import('./views/landing/RentACarSoftwareLandingPage'));
+const PentaGroupLandingPage = lazyRetry(() => import('./views/landing/PentaGroupLandingPage'));
 const PriceCalculatorView = lazyRetry(() => import('./views/PriceCalculatorView'));
 const LandingPagesView = lazyRetry(() => import('./views/LandingPagesView'));
 const PrivacyPolicyView = lazyRetry(() => import('./views/PrivacyPolicyView'));
@@ -311,6 +312,7 @@ function AppContent() {
       <Route path="/shop-produkte" element={<Suspense fallback={<LazyFallback />}><ShopProduktLandingPage /></Suspense>} />
       <Route path="/engineering" element={<Suspense fallback={<LazyFallback />}><EngineeringLandingPage /></Suspense>} />
       <Route path="/rent-a-car" element={<Suspense fallback={<LazyFallback />}><RentACarSoftwareLandingPage /></Suspense>} />
+      <Route path="/penta-group" element={<Suspense fallback={<LazyFallback />}><PentaGroupLandingPage /></Suspense>} />
       {/* Public invoice payment — the token in the link is the authorization */}
       <Route path="/pay/:invoiceId" element={<Suspense fallback={<LazyFallback />}><PublicPayView /></Suspense>} />
       <Route path="/privacy" element={<Suspense fallback={<LazyFallback />}><PrivacyPolicyView /></Suspense>} />

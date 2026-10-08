@@ -248,6 +248,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     gradient: 'from-cyan-600 to-teal-700',
     status: 'active',
   },
+  {
+    id: 'penta-group',
+    title: 'Penta Group — Shitje Makinash',
+    description: 'Ofertë e personalizuar për Penta Group (auto sallon): 20 postime + 6 video/muaj, 3 fushata Meta Ads + 1 Google Ads, menaxhim IG/FB/TikTok, konsulencë dhe influencerë. Penta Drive 120.000 Lekë/muaj, Penta Drive + SEO 145.000 Lekë/muaj.',
+    path: '/penta-group',
+    category: 'Ofertë Klienti',
+    icon: Car,
+    color: 'text-red-600',
+    gradient: 'from-red-600 to-zinc-900',
+    status: 'active',
+  },
 ];
 
 const CATEGORIES = ['Të gjitha', ...Array.from(new Set(LANDING_PAGES.map((p) => p.category)))];
