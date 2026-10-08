@@ -19,9 +19,9 @@ const config: CapacitorConfig = {
   plugins: {
     FirebaseAuthentication: {
       // We keep the Firebase JS SDK as the source of truth: the native plugin
-      // only returns the Google credential, then we sign in via signInWithCredential.
+      // only returns the Google / Apple credential, then we sign in via signInWithCredential.
       skipNativeAuth: true,
-      providers: ['google.com'],
+      providers: ['google.com', 'apple.com'],
     },
     SplashScreen: {
       launchAutoHide: true,

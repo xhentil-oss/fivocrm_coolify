@@ -14,7 +14,8 @@
  *   2. Adds the Info.plist keys the app actually needs: camera + microphone
  *      (video calls, voice notes), photo library, remote-notification background
  *      mode, the Google Sign-In callback URL scheme, export-compliance flag.
- *   3. Writes App.entitlements (push) and wires CODE_SIGN_ENTITLEMENTS.
+ *   3. Writes App.entitlements (push + Sign in with Apple) and wires
+ *      CODE_SIGN_ENTITLEMENTS.
  *   4. Writes PrivacyInfo.xcprivacy (Apple requires the required-reason API
  *      declarations) and adds it to the target's Resources.
  *   5. Bundles GoogleService-Info.plist when present, and copies its
@@ -100,7 +101,7 @@ function patchInfoPlist() {
   }
 }
 
-// ── 3. Entitlements (push notifications) ─────────────────────────────────────
+// ── 3. Entitlements (push notifications + Sign in with Apple) ────────────────
 const ENTITLEMENTS_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -109,6 +110,12 @@ const ENTITLEMENTS_XML = `<?xml version="1.0" encoding="UTF-8"?>
 	     profile, so the same file works for local device builds and TestFlight. -->
 	<key>aps-environment</key>
 	<string>development</string>
+	<!-- Needs the "Sign In with Apple" capability on the App ID
+	     (developer.apple.com → Identifiers → com.fivocrm.app), or signing fails. -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
 </dict>
 </plist>
 `;
@@ -116,7 +123,20 @@ const ENTITLEMENTS_XML = `<?xml version="1.0" encoding="UTF-8"?>
 function writeEntitlements() {
   if (!fs.existsSync(ENTITLEMENTS)) {
     fs.writeFileSync(ENTITLEMENTS, ENTITLEMENTS_XML);
-    done.push('App.entitlements: created (aps-environment)');
+    done.push('App.entitlements: created (aps-environment, applesignin)');
+    return;
+  }
+  // A project generated before Sign in with Apple existed keeps its file — add the key.
+  const current = fs.readFileSync(ENTITLEMENTS, 'utf8');
+  if (!current.includes('com.apple.developer.applesignin')) {
+    fs.writeFileSync(
+      ENTITLEMENTS,
+      current.replace(
+        /<\/dict>\s*<\/plist>/,
+        '\t<key>com.apple.developer.applesignin</key>\n\t<array>\n\t\t<string>Default</string>\n\t</array>\n</dict>\n</plist>',
+      ),
+    );
+    done.push('App.entitlements: added com.apple.developer.applesignin');
   }
 }
 

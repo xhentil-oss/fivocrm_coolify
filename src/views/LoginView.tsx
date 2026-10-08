@@ -7,6 +7,10 @@ import { Label } from '../components/ui/label';
 import { Card } from '../components/ui/card';
 import { Loader2 } from 'lucide-react';
 import { safeRedirectPath } from '../lib/safeNavigation';
+import { Capacitor } from '@capacitor/core';
+
+// Sign in with Apple is offered in the iOS app only (App Store guideline 4.8).
+const SHOW_APPLE_SIGN_IN = Capacitor.getPlatform() === 'ios';
 
 const LoginView: React.FC = () => {
   const navigate = useNavigate();
@@ -14,7 +18,7 @@ const LoginView: React.FC = () => {
   // Only a same-origin in-app path survives (`//evil.com`, `/\evil.com` and absolute
   // URLs fall back to `/`) — see lib/safeNavigation.
   const redirectTo = safeRedirectPath(searchParams.get('redirect'));
-  const { signInWithGoogle, signInWithEmail, signUpWithEmail } = useAuth();
+  const { signInWithGoogle, signInWithApple, signInWithEmail, signUpWithEmail } = useAuth();
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -30,6 +34,20 @@ const LoginView: React.FC = () => {
       navigate(redirectTo);
     } catch (err: any) {
       setError(err.message || 'Gabim gjatë hyrjes me Google');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAppleSignIn = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await signInWithApple();
+      try { sessionStorage.removeItem('role_preview'); } catch { /* ignore */ }
+      navigate(redirectTo);
+    } catch (err: any) {
+      setError(err.message || 'Gabim gjatë hyrjes me Apple');
     } finally {
       setLoading(false);
     }
@@ -119,6 +137,29 @@ const LoginView: React.FC = () => {
             </>
           )}
         </Button>
+
+        {/* Sign in with Apple — Apple's HIG: black button, white logo, same size as Google */}
+        {SHOW_APPLE_SIGN_IN && (
+          <Button
+            className="w-full h-12 flex items-center justify-center gap-3 bg-black text-white hover:bg-black/90"
+            onClick={handleAppleSignIn}
+            disabled={loading}
+          >
+            {loading ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <>
+                <svg className="h-5 w-5" viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M16.37 12.6c-.02-2.27 1.86-3.36 1.94-3.41-1.06-1.55-2.7-1.76-3.28-1.78-1.4-.14-2.73.82-3.44.82-.71 0-1.8-.8-2.96-.78-1.52.02-2.93.89-3.71 2.25-1.58 2.75-.4 6.81 1.14 9.04.75 1.09 1.65 2.31 2.82 2.27 1.13-.05 1.56-.73 2.93-.73 1.37 0 1.75.73 2.95.71 1.22-.02 1.99-1.11 2.73-2.2.86-1.26 1.22-2.49 1.24-2.55-.03-.01-2.37-.91-2.4-3.62zM14.12 5.93c.62-.76 1.04-1.8.93-2.85-.9.04-1.99.6-2.63 1.35-.58.67-1.08 1.74-.95 2.77 1 .08 2.03-.51 2.65-1.27z"
+                  />
+                </svg>
+                Vazhdo me Apple
+              </>
+            )}
+          </Button>
+        )}
 
         {/* Divider */}
         <div className="relative">

@@ -155,13 +155,25 @@ external checkout. Three options:
 Option 1 is the recommendation; say the word and it is a small change in
 `BillingView` + the plan CTAs.
 
-### 4.2 Sign in with Apple (guideline 4.8)
-The app offers Google sign-in **and** email/password, which normally satisfies 4.8.
-Reviewers do sometimes still ask for Apple sign-in when a third-party login is
-prominent. Adding it later is small — the plugin already supports it
-(`@capacitor-firebase/authentication` → `signInWithApple`) and Firebase Auth has an
-Apple provider — but it also needs the *Sign in with Apple* capability and an Apple
-Services ID.
+### 4.2 Sign in with Apple (guideline 4.8) — shipped 8 Oct 2026
+"Vazhdo me Apple" is on the login screen **in the iOS app only**
+(`SHOW_APPLE_SIGN_IN` in `LoginView`, `signInWithApple()` in `AuthContext`): the
+native sheet returns an identity token + nonce, and Firebase JS signs in with
+`OAuthProvider('apple.com').credential({ idToken, rawNonce })` — same
+`skipNativeAuth` pattern as Google. `apple.com` is in the plugin's `providers`, and
+`ios-configure.cjs` writes the `com.apple.developer.applesignin` entitlement (also
+into an existing `App.entitlements`).
+
+Prerequisites (accounts, not code):
+- App ID `com.fivocrm.app` → capability **Sign In with Apple** ticked, or signing
+  fails on the entitlement.
+- Firebase → Authentication → Sign-in method → **Apple** enabled. For the native iOS
+  flow the Services ID / private key fields are NOT needed (they are for web/Android).
+
+Known limit: a user who picks **Hide My Email** signs in as
+`…@privaterelay.appleid.com`, which matches no staff invite or customer — they land
+as a new (portal) identity. Staff should share their real email or use Google/email.
+The web has no Apple button (needs a Services ID + return URL).
 
 ### 4.3 Everything else the reviewer will need
 - A **demo account** (staff login + a portal client login) in the review notes —

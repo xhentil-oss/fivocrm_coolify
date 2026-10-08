@@ -4,6 +4,7 @@ import {
   signInWithPopup,
   signInWithCredential,
   GoogleAuthProvider,
+  OAuthProvider,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
@@ -30,6 +31,7 @@ interface AuthContextType {
   loading: boolean;
   isAnonymous: boolean;
   signInWithGoogle: () => Promise<void>;
+  signInWithApple: () => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<void>;
   signUpWithEmail: (email: string, password: string) => Promise<void>;
   login: () => Promise<void>;
@@ -106,6 +108,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // iOS only for now: App Store guideline 4.8 requires it next to Google sign-in.
+  // The web flow would need an Apple Services ID + return URL, which we have not set up.
+  const signInWithApple = async () => {
+    try {
+      // The native sheet returns an identity token bound to a nonce; Firebase JS
+      // verifies the pair, exactly like the Google path above.
+      const { FirebaseAuthentication } = await import('@capacitor-firebase/authentication');
+      const result = await FirebaseAuthentication.signInWithApple({ skipNativeAuth: true });
+      const idToken = result.credential?.idToken;
+      if (!idToken) throw new Error('No Apple ID token returned');
+      const credential = new OAuthProvider('apple.com').credential({
+        idToken,
+        rawNonce: result.credential?.nonce,
+      });
+      await signInWithCredential(auth, credential);
+    } catch (error: any) {
+      if (!isSignInCancellation(error)) {
+        console.error('Apple sign-in error:', error);
+        throw error;
+      }
+    }
+  };
+
   const signInWithEmail = async (email: string, password: string) => {
     try {
       await signInWithEmailAndPassword(auth, email, password);
@@ -146,6 +171,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loading,
     isAnonymous: user?.isAnonymous ?? false,
     signInWithGoogle,
+    signInWithApple,
     signInWithEmail,
     signUpWithEmail,
     login: signInWithGoogle,
