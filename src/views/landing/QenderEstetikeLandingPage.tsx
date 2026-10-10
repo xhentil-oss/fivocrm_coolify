@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   Sparkles, Eye, UserPlus, Repeat, CalendarCheck, CheckCircle2, ArrowRight, ChevronDown, Phone,
   ArrowUpRight, Megaphone, Search, Clapperboard, LayoutGrid, BarChart3, Target,
-  HeartHandshake, AlertCircle, Camera, Calculator, ShieldCheck, FlaskConical, Zap, Film,
+  HeartHandshake, AlertCircle, Camera, ShieldCheck, FlaskConical, Zap, Film,
 } from 'lucide-react';
 import ClientLogos from './ClientLogos';
 import LandingMobileMenu from './LandingMobileMenu';
@@ -188,19 +188,7 @@ export default function QenderEstetikeLandingPage() {
   const [formSent, setFormSent] = useState(false);
   const [formError, setFormError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  // Llogaritësi: buxheti i reklamave dhe vlera mesatare e një klienti.
-  const [adBudget, setAdBudget] = useState(45000);
-  const [treatmentValue, setTreatmentValue] = useState(12000);
   const pkg = PACKAGES.find(p => p.id === pkgId) || PACKAGES[0];
-
-  // Supozime të matura për tregun shqiptar të estetikës (ilustruese, jo garanci).
-  const COST_PER_CONTACT = 450;   // Lekë për kontakt nga Meta
-  const BOOKING_RATE = 0.25;      // 1 në 4 kontakte rezervon
-  const VISITS_PER_CLIENT = 1.5;  // seanca mesatare në 3 muajt e parë
-  const contacts = adBudget / COST_PER_CONTACT;
-  const bookings = contacts * BOOKING_RATE;
-  const revenue = bookings * treatmentValue * VISITS_PER_CLIENT;
-  const totalCost = adBudget + pkg.price;
 
   const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
   const choose = (id: string) => { setPkgId(id); scrollTo('contact'); };
@@ -230,7 +218,6 @@ export default function QenderEstetikeLandingPage() {
   const NAV = [
     { href: '#hinka', label: 'Hinka' },
     { href: '#perfshihet', label: 'Çfarë përfshihet' },
-    { href: '#llogaritesi', label: 'Llogaritësi' },
     { href: '#paketat', label: 'Paketat' },
     { href: '#faq', label: 'Pyetjet' },
   ];
@@ -412,58 +399,6 @@ export default function QenderEstetikeLandingPage() {
               </div>
             </FadeIn>
           </div>
-        </div>
-      </section>
-
-      {/* ═══ LLOGARITËSI ═══ */}
-      <section id="llogaritesi" className="py-24 bg-gradient-to-b from-rose-50/70 to-white">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-          <FadeIn><div className="text-center mb-12"><p className="text-sm font-semibold uppercase tracking-widest text-rose-600 mb-3">Llogaritësi</p><h2 className="text-3xl sm:text-4xl font-bold">Sa mund t'ju sjellë hinka në muaj?</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Lëvizni dy vlerat dhe shihni rrugën e plotë: nga buxheti te kontaktet, nga kontaktet te takimet.</p></div></FadeIn>
-          <FadeIn delay={100}>
-            <div className="rounded-3xl bg-white border border-rose-100 shadow-xl shadow-rose-500/5 p-6 sm:p-10 grid md:grid-cols-2 gap-10">
-              <div className="space-y-8">
-                <div>
-                  <div className="flex items-baseline justify-between mb-2"><label htmlFor="budget" className="font-semibold text-sm">Buxheti i reklamave në muaj</label><span className="font-bold text-rose-600">{money(adBudget)} Lekë</span></div>
-                  <input id="budget" type="range" min={20000} max={150000} step={5000} value={adBudget} onChange={e => setAdBudget(Number(e.target.value))} className="w-full accent-rose-500" />
-                </div>
-                <div>
-                  <div className="flex items-baseline justify-between mb-2"><label htmlFor="value" className="font-semibold text-sm">Vlera mesatare e një trajtimi</label><span className="font-bold text-rose-600">{money(treatmentValue)} Lekë</span></div>
-                  <input id="value" type="range" min={3000} max={50000} step={1000} value={treatmentValue} onChange={e => setTreatmentValue(Number(e.target.value))} className="w-full accent-rose-500" />
-                </div>
-                <div>
-                  <p className="font-semibold text-sm mb-2">Paketa</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {PACKAGES.map(p => (
-                      <button type="button" key={p.id} onClick={() => setPkgId(p.id)} className={`text-left px-4 py-3 rounded-xl border transition-colors ${pkgId === p.id ? 'bg-rose-50 border-rose-400' : 'border-stone-200 hover:border-rose-200'}`}>
-                        <p className="font-semibold text-sm">{p.name}</p><p className="text-xs text-stone-500">{money(p.price)} Lekë / muaj</p>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <p className="text-xs text-stone-400 leading-relaxed">Supozime: rreth {money(COST_PER_CONTACT)} Lekë për kontakt, 1 në 4 kontakte rezervon, {String(VISITS_PER_CLIENT).replace('.', ',')} seanca për klient në tre muajt e parë. Llogaritje ilustruese, jo garanci — numrat e vërtetë i shihni në raportin e muajit të parë.</p>
-              </div>
-              <div className="flex flex-col justify-center">
-                <div className="space-y-3">
-                  {[
-                    { icon: UserPlus, l: 'Kontakte të reja', v: `≈ ${money(contacts)}` },
-                    { icon: CalendarCheck, l: 'Takime të rezervuara', v: `≈ ${money(bookings)}` },
-                    { icon: Calculator, l: 'Investimi gjithsej (reklama + paketa)', v: `${money(totalCost)} Lekë` },
-                  ].map((r, i) => (
-                    <div key={i} className="flex items-center justify-between rounded-xl bg-stone-50 px-5 py-4">
-                      <span className="flex items-center gap-3 text-sm text-stone-600"><r.icon className="w-4 h-4 text-rose-500" />{r.l}</span>
-                      <span className="font-bold">{r.v}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-5 rounded-2xl bg-gradient-to-br from-rose-500 to-fuchsia-600 text-white p-6">
-                  <p className="text-sm text-rose-100">Të ardhura të mundshme nga klientët e rinj</p>
-                  <p className="text-4xl font-extrabold mt-1">≈ {money(revenue)} Lekë</p>
-                  <p className="text-sm text-rose-100 mt-2">{revenue > totalCost ? `≈ ${(revenue / totalCost).toFixed(1).replace('.', ',')} herë sa investimi` : 'Rrisni vlerën e trajtimit ose buxhetin për ta mbuluar investimin'}</p>
-                </div>
-                <button onClick={() => scrollTo('contact')} className="mt-5 w-full py-4 rounded-xl font-bold text-white bg-stone-900 hover:bg-stone-800 transition-colors flex items-center justify-center gap-2">Dua këtë plan për qendrën time<ArrowRight className="w-5 h-5" /></button>
-              </div>
-            </div>
-          </FadeIn>
         </div>
       </section>
 
