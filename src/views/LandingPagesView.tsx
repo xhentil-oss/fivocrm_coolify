@@ -262,7 +262,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
   {
     id: 'qender-estetike',
     title: 'Qendër Estetike — Hinka e Klientëve',
-    description: 'Paketë klienti për qendra estetike, e ndërtuar mbi hinkën e shitjes: menaxhim reklamash Meta + Google, gjenerim kontaktesh, rimarketing dhe krijim kontenti, me llogaritës kthimi. Bërthama 65.000 Lekë/muaj, Bërthama + Kontent 115.000 Lekë/muaj.',
+    description: 'Paketë klienti për qendra estetike, e ndërtuar mbi hinkën e shitjes: menaxhim reklamash Meta + Google, gjenerim kontaktesh, rimarketing, A/B testing dhe kontent (nga 15 postime/muaj, foto, video), me llogaritës kthimi dhe 12 elemente shtesë. Esenca 80.000, Shkëlqimi 120.000, Prestigji 170.000 Lekë/muaj.',
     path: '/qender-estetike',
     category: 'Ofertë Klienti',
     icon: Sparkles,

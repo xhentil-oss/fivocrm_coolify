@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import {
   Sparkles, Eye, UserPlus, Repeat, CalendarCheck, CheckCircle2, ArrowRight, ChevronDown, Phone,
   ArrowUpRight, Megaphone, Search, Clapperboard, LayoutGrid, BarChart3, MessageCircle, Target,
-  HeartHandshake, AlertCircle, Camera, Calculator, ShieldCheck,
+  HeartHandshake, AlertCircle, Camera, Calculator, ShieldCheck, FlaskConical, Zap, Film, Star,
+  Plus, Check, MapPin,
 } from 'lucide-react';
 import ClientLogos from './ClientLogos';
 import LandingMobileMenu from './LandingMobileMenu';
@@ -26,8 +27,9 @@ function FadeIn({ children, className = '', delay = 0 }: { children: React.React
 
 /* ═══════════════════════════════════════════════
    Paketë klienti — Qendër estetike
-   Bërthama: menaxhim reklamash + gjenerim kontaktesh + rimarketing.
-   Shtresa e dytë: krijim kontenti.
+   Bërthama e çdo pakete: menaxhim reklamash + gjenerim kontaktesh +
+   rimarketing + A/B testing; mbi të, kontent (nga 15 postime/muaj), foto, video.
+   Tre nivele + elemente shtesë që klienti i zgjedh vetë.
    ═══════════════════════════════════════════════ */
 
 // Pse ndjekësit nuk kthehen në klientë — dhimbja që hap bisedën.
@@ -72,31 +74,85 @@ const CORE = [
   { icon: Search, qty: '1', unit: 'fushatë', title: 'Reklama në Google', desc: 'Për ata që e kërkojnë trajtimin sot. Thirrje direkte dhe drejtim për në qendër nga vetë reklama.' },
   { icon: UserPlus, qty: '∞', unit: 'pa kufi', title: 'Gjenerim kontaktesh', desc: 'Formularë, WhatsApp dhe thirrje — çdo kontakt hyn në FivoCRM me emrin, trajtimin dhe burimin e reklamës.' },
   { icon: Repeat, qty: '2', unit: 'audienca', title: 'Rimarketing', desc: 'Rikthejmë ata që u interesuan pa rezervuar dhe klientët që i ka ardhur koha për seancën e radhës.' },
+  { icon: FlaskConical, qty: '2+', unit: 'variante / fushatë', title: 'A/B testing', desc: 'Çdo fushatë nis me të paktën dy versione — imazh, tekst, ofertë. Paratë shkojnë te versioni që sjell takime, jo te ai që na pëlqen më shumë.' },
+  { icon: Zap, qty: '5', unit: 'minuta', title: 'Përgjigje e shpejtë', desc: 'Mesazhe të gatshme për WhatsApp dhe Instagram, dhe matja e kohës së përgjigjes së stafit — sepse kush përgjigjet i pari, e merr klientin.' },
   { icon: Target, qty: '1', unit: 'faqe', title: 'Faqe rezervimi', desc: 'Një faqe e thjeshtë dhe e shpejtë ku reklama çon drejt e te rezervimi i konsultës.' },
   { icon: BarChart3, qty: '1', unit: 'raport / muaj', title: 'Raport i qartë', desc: 'Sa kontakte erdhën, sa rezervuan dhe sa kushtoi secili — me rekomandimet për muajin tjetër.' },
 ];
 const CONTENT = [
-  { icon: Clapperboard, qty: '8', unit: 'reels / muaj', title: 'Video të shkurtra', desc: 'Trajtimi hap pas hapi, rezultati, ekipi dhe pyetjet më të shpeshta — xhirim dhe montazh i plotë.' },
-  { icon: LayoutGrid, qty: '12', unit: 'postime / muaj', title: 'Postime dhe karusele', desc: 'Dizajn, tekst dhe hashtag sipas planit mujor, në gjuhën dhe stilin e qendrës suaj.' },
-  { icon: Camera, qty: '1', unit: 'ditë xhirimi / muaj', title: 'Xhirim në qendër', desc: 'Një ditë në muaj me fotograf dhe videograf: ambienti, aparaturat, ekipi dhe klientët që pranojnë.' },
-  { icon: MessageCircle, qty: '2', unit: 'platforma', title: 'Menaxhim i Instagram-it dhe Facebook-ut', desc: 'Publikim, përgjigje komenteve dhe stories të përjavshme që e mbajnë profilin gjallë.' },
+  { icon: LayoutGrid, qty: '15–30', unit: 'postime / muaj', title: 'Postime dhe karusele', desc: 'Dizajn, tekst dhe hashtag sipas planit mujor, në gjuhën dhe stilin e qendrës suaj. Çdo paketë nis nga 15 postime.' },
+  { icon: Clapperboard, qty: '4–12', unit: 'reels / muaj', title: 'Video të shkurtra', desc: 'Trajtimi hap pas hapi, rezultati, ekipi dhe pyetjet më të shpeshta — xhirim dhe montazh i plotë.' },
+  { icon: Camera, qty: '15–40', unit: 'foto / muaj', title: 'Fotografi profesionale', desc: 'Ambienti, aparaturat, ekipi dhe detajet e trajtimeve — të përpunuara me një stil të njëjtë që e bën profilin të njohshëm.' },
+  { icon: Film, qty: '1', unit: 'video / muaj', title: 'Video promovuese', desc: 'Në paketën Prestigji: një film i shkurtër 60–90 sekonda për qendrën ose trajtimin kryesor, për reklama dhe website.' },
 ];
 
 interface Pkg { id: string; name: string; price: number; tagline: string; badge?: string; items: string[] }
 const PACKAGES: Pkg[] = [
   {
-    id: 'berthama', name: 'Bërthama', price: 65000,
-    tagline: 'Për qendrat që kanë kontent dhe duan që ai të sjellë klientë.',
-    items: ['3 fushata Meta + 1 fushatë Google', 'Gjenerim kontaktesh: formular, WhatsApp, thirrje', 'Rimarketing për të interesuarit dhe klientët', 'Faqe rezervimi për reklamat', 'Çdo kontakt në FivoCRM, me burimin e tij', 'Raport mujor me koston për takim'],
+    id: 'esenca', name: 'Esenca', price: 80000,
+    tagline: 'Hinka e plotë dhe kontenti bazë që e ushqen çdo muaj.',
+    items: [
+      '3 fushata Meta + 1 fushatë Google',
+      'Gjenerim kontaktesh: formular, WhatsApp, thirrje',
+      'Rimarketing për 2 audienca',
+      'A/B testing: 2 variante për çdo fushatë',
+      '15 postime + 4 reels në muaj',
+      '1 seancë fotografike në muaj (15 foto)',
+      'Menaxhim i Instagram-it dhe Facebook-ut',
+      'Faqe rezervimi + çdo kontakt në FivoCRM',
+      'Raport mujor me koston për takim',
+    ],
   },
   {
-    id: 'berthama-kontent', name: 'Bërthama + Kontent', price: 115000, badge: 'Rekomandohet',
-    tagline: 'Sistemi i plotë: ne krijojmë kontentin që i ushqen reklamat.',
-    items: ['Gjithçka te Bërthama', '8 reels + 12 postime në muaj', '1 ditë xhirimi në qendër çdo muaj', 'Menaxhim i Instagram-it dhe Facebook-ut', 'Video "para dhe pas" dhe dëshmi klientësh', 'Plan mujor kontenti për miratim'],
+    id: 'shkelqimi', name: 'Shkëlqimi', price: 120000, badge: 'Rekomandohet',
+    tagline: 'Më shumë kontent, më shumë teste, më shumë takime.',
+    items: [
+      'Gjithçka te Esenca',
+      '20 postime + 8 reels në muaj',
+      '1 ditë xhirimi foto + video në qendër (25 foto)',
+      'A/B testing i avancuar: kreativë, tekste, audienca dhe faqja e rezervimit',
+      'Rimarketing për 4 audienca — një për çdo trajtim kryesor',
+      '1 video dëshmie klienteje në muaj',
+      'Stories çdo javë',
+      'Mesazhe të gatshme për stafin + matja e kohës së përgjigjes',
+      'Raport çdo dy javë',
+    ],
+  },
+  {
+    id: 'prestigji', name: 'Prestigji', price: 170000,
+    tagline: 'Për qendrat që duan të jenë emri i parë në qytet.',
+    items: [
+      'Gjithçka te Shkëlqimi',
+      '30 postime + 12 reels në muaj',
+      '2 ditë xhirimi në muaj (40 foto)',
+      '1 video promovuese profesionale 60–90 sek. në muaj',
+      'Menaxhim i TikTok-ut',
+      'Fushatë shtesë Google: YouTube / Performance Max',
+      'Google Business Profile + SEO lokale',
+      'Organizim i 1 bashkëpunimi me influencere në muaj',
+      'Takim strategjie çdo muaj + raport javor',
+    ],
   },
 ];
 // Vlera e shërbimeve nëse merren veçmas (Lekë / muaj).
-const STANDALONE_VALUE: Record<string, number> = { berthama: 80000, 'berthama-kontent': 150000 };
+const STANDALONE_VALUE: Record<string, number> = { esenca: 100000, shkelqimi: 155000, prestigji: 225000 };
+
+// Elemente shtesë — mbi çdo paketë, sipas nevojës.
+interface Addon { id: string; icon: React.ElementType; name: string; price: string; desc: string }
+const ADDONS: Addon[] = [
+  { id: 'posts', icon: LayoutGrid, name: '+5 postime', price: '10.000 Lekë / muaj', desc: 'Për muajt me oferta, festa ose trajtime të reja.' },
+  { id: 'reel', icon: Clapperboard, name: 'Reel shtesë', price: '6.000 Lekë / copë', desc: 'Xhirim, montazh, titra dhe muzikë.' },
+  { id: 'photo', icon: Camera, name: 'Seancë fotografike shtesë', price: '15.000 Lekë', desc: '15 foto të përpunuara: ekipi, ambienti, trajtimet.' },
+  { id: 'shoot', icon: Film, name: 'Ditë shtesë xhirimi', price: '25.000 Lekë', desc: 'Foto + video për një fushatë të veçantë ose një lançim.' },
+  { id: 'promo', icon: Film, name: 'Video promovuese profesionale', price: '35.000 Lekë', desc: 'Film 60–90 sekonda me skenar, xhirim dhe montazh.' },
+  { id: 'testimonial', icon: MessageCircle, name: 'Video dëshmie klienteje', price: '12.000 Lekë', desc: 'Klientja tregon përvojën e saj — reklama më bindëse.' },
+  { id: 'abtest', icon: FlaskConical, name: 'Test i faqes së rezervimit', price: '12.000 Lekë / muaj', desc: 'Dy versione të faqes, të testuara me trafik real.' },
+  { id: 'campaign', icon: Megaphone, name: 'Fushatë shtesë reklamash', price: '10.000 Lekë / muaj', desc: 'Për një trajtim të ri, një degë ose një sezon.' },
+  { id: 'tiktok', icon: Clapperboard, name: 'Menaxhim i TikTok-ut', price: '15.000 Lekë / muaj', desc: 'Publikim i përshtatur për TikTok dhe rrymat e tij.' },
+  { id: 'influencer', icon: Star, name: 'Bashkëpunim me influencere', price: '15.000 Lekë', desc: 'Përzgjedhje, negocim dhe brief. Pagesa e influenceres veçmas.' },
+  { id: 'gbp', icon: MapPin, name: 'Google Business Profile', price: '10.000 Lekë / muaj', desc: 'Profili në hartë, foto, postime dhe vlerësime.' },
+  { id: 'website', icon: Target, name: 'Website për qendrën', price: 'nga 60.000 Lekë', desc: 'Faqe e plotë me trajtimet, çmimet dhe rezervimin.' },
+];
 
 const REELS = [
   'Trajtimi i javës, hap pas hapi, me zërin e specialistes',
@@ -109,11 +165,12 @@ const REELS = [
   'Oferta e muajit, e shpjeguar në 15 sekonda',
 ];
 const POSTS = [
-  { n: 4, label: 'Trajtime & rezultate', desc: 'çfarë bëni dhe çfarë arrin klienti' },
-  { n: 3, label: 'Edukim', desc: 'kujdesi për lëkurën, këshilla para dhe pas trajtimit' },
-  { n: 3, label: 'Besim', desc: 'dëshmi, certifikata, aparaturat dhe ekipi' },
+  { n: 5, label: 'Trajtime & rezultate', desc: 'çfarë bëni dhe çfarë arrin klienti' },
+  { n: 4, label: 'Edukim', desc: 'kujdesi për lëkurën, këshilla para dhe pas trajtimit' },
+  { n: 4, label: 'Besim', desc: 'dëshmi, certifikata, aparaturat dhe ekipi' },
   { n: 2, label: 'Oferta', desc: 'promocioni i muajit dhe paketat sezonale' },
 ];
+const POSTS_TOTAL = POSTS.reduce((sum, p) => sum + p.n, 0);
 
 const TIMELINE = [
   { week: 'Java 1', title: 'Njohja & strategjia', desc: 'Takim në qendër, trajtimet që sjellin më shumë fitim, auditimi i profileve dhe qasja në llogaritë e reklamave.' },
@@ -132,7 +189,8 @@ const FAQ = [
   { q: 'A përfshihet buxheti i reklamave në çmim?', a: 'Jo. Çmimi mbulon menaxhimin, strategjinë dhe kontentin. Buxheti i reklamave paguhet direkt te Meta dhe Google nga llogaria juaj. Për një qendër estetike rekomandojmë të nisni me 30.000–60.000 Lekë në muaj.' },
   { q: 'Kur vijnë kontaktet e para?', a: 'Fushatat ndizen brenda javës së tretë dhe kontaktet e para vijnë zakonisht që në ditët e para. Hinka arrin ritmin e saj pas 6–8 javësh, kur rimarketingu ka mbledhur mjaftueshëm audiencë.' },
   { q: 'Kush u përgjigjet mesazheve dhe thirrjeve?', a: 'Kontaktet hyjnë në FivoCRM dhe në WhatsApp-in tuaj, në kohë reale. Rezervimin e bën stafi juaj — ne ju japim mesazhet e gatshme dhe ju tregojmë sa shpejt u përgjigjet secili, sepse shpejtësia vendos takimin.' },
-  { q: 'A mund të nis me Bërthamën dhe të shtoj kontentin më vonë?', a: 'Po. Mund të kaloni te Bërthama + Kontent në çdo muaj; diferenca faturohet nga muaji pasardhës.' },
+  { q: 'A mund të nis me Esencën dhe të kaloj më lart më vonë?', a: 'Po. Mund të kaloni te Shkëlqimi ose Prestigji në çdo muaj; diferenca faturohet nga muaji pasardhës. Elementet shtesë mund t\'i shtoni ose t\'i hiqni çdo muaj.' },
+  { q: 'Çfarë është A/B testing dhe pse ka rëndësi?', a: 'Për çdo fushatë përgatisim të paktën dy versione — p.sh. dy video ose dy oferta të ndryshme — dhe i shfaqim njëkohësisht. Pas disa ditësh buxheti kalon te versioni që sjell më shumë takime me kosto më të ulët. Kështu reklamat bëhen çdo muaj më efektive, jo më të shtrenjta.' },
   { q: 'Si i trajtoni fotot "para dhe pas"?', a: 'Vetëm me pëlqimin me shkrim të klientes dhe brenda rregullave të Meta-s për reklamat estetike. Pa premtime që nuk mund të mbahen — kjo mbron edhe llogarinë tuaj të reklamave.' },
   { q: 'Sa zgjat kontrata?', a: 'Minimumi 3 muaj, sepse hinka ka nevojë për kohë që të mësojë kush rezervon. Pagesa bëhet në fillim të çdo muaji, me faturë.' },
 ];
@@ -143,11 +201,14 @@ const money = (n: number) => Math.round(n).toLocaleString('de-DE');
 
 export default function QenderEstetikeLandingPage() {
   const [openFaq, setOpenFaq] = useState<number | null>(null);
-  const [pkgId, setPkgId] = useState('berthama-kontent');
+  const [pkgId, setPkgId] = useState('shkelqimi');
   const [formData, setFormData] = useState({ name: '', company: '', email: '', phone: '', message: '' });
   const [formSent, setFormSent] = useState(false);
   const [formError, setFormError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [addonIds, setAddonIds] = useState<string[]>([]);
+  const toggleAddon = (id: string) => setAddonIds(ids => ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]);
+  const chosenAddons = ADDONS.filter(a => addonIds.includes(a.id));
   // Llogaritësi: buxheti i reklamave dhe vlera mesatare e një klienti.
   const [adBudget, setAdBudget] = useState(45000);
   const [treatmentValue, setTreatmentValue] = useState(12000);
@@ -172,8 +233,9 @@ export default function QenderEstetikeLandingPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...formData,
+          message: [formData.message, chosenAddons.length ? `Elemente shtesë: ${chosenAddons.map(a => `${a.name} (${a.price})`).join(', ')}` : ''].filter(Boolean).join('\n\n'),
           packageId: `qender-estetike-${pkg.id}`,
-          packageName: `${pkg.name} — ${money(pkg.price)} Lekë / muaj`,
+          packageName: `${pkg.name} — ${money(pkg.price)} Lekë / muaj${chosenAddons.length ? ` + ${chosenAddons.length} shtesa` : ''}`,
           estimatedValue: pkg.price,
           source: 'Qendër Estetike — Paketë Klienti',
           category: 'Marketing',
@@ -237,7 +299,7 @@ export default function QenderEstetikeLandingPage() {
             <FadeIn delay={200}>
               <p className="mt-8 text-lg sm:text-xl text-stone-300 max-w-2xl leading-relaxed">
                 Ndërtojmë për qendrën tuaj një hinkë klientësh: reklama që tërheqin vëmendjen, kontakte të reja çdo ditë dhe rimarketing që i kthen të interesuarit në klientë të rregullt —{' '}
-                <strong className="text-white">duke nisur nga 65.000 Lekë në muaj.</strong>
+                <strong className="text-white">duke nisur nga 80.000 Lekë në muaj.</strong>
               </p>
             </FadeIn>
             <FadeIn delay={300}>
@@ -248,7 +310,7 @@ export default function QenderEstetikeLandingPage() {
             </FadeIn>
             <FadeIn delay={400}>
               <div className="mt-14 grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-3xl">
-                {[{ n: '4', l: 'hapa të hinkës' }, { n: '4', l: 'fushata reklamash' }, { n: '8', l: 'reels në muaj' }, { n: '24/7', l: 'kontakte në CRM' }].map((s, i) => (
+                {[{ n: '4', l: 'hapa të hinkës' }, { n: '4', l: 'fushata reklamash' }, { n: '15+', l: 'postime në muaj' }, { n: 'A/B', l: 'testim i çdo reklame' }].map((s, i) => (
                   <div key={i} className="rounded-xl bg-white/5 border border-white/10 p-4">
                     <div className="text-3xl font-extrabold text-rose-300">{s.n}</div>
                     <div className="text-xs text-stone-400 mt-1">{s.l}</div>
@@ -314,10 +376,10 @@ export default function QenderEstetikeLandingPage() {
       {/* ═══ ÇFARË PËRFSHIHET ═══ */}
       <section id="perfshihet" className="py-24">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <FadeIn><div className="text-center mb-14"><p className="text-sm font-semibold uppercase tracking-widest text-rose-600 mb-3">Çfarë përfshihet</p><h2 className="text-3xl sm:text-4xl font-bold">Bërthama që sjell klientë</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Menaxhimi i reklamave, gjenerimi i kontakteve dhe rimarketingu — tre pjesët pa të cilat asnjë hinkë nuk punon.</p></div></FadeIn>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          <FadeIn><div className="text-center mb-14"><p className="text-sm font-semibold uppercase tracking-widest text-rose-600 mb-3">Çfarë përfshihet</p><h2 className="text-3xl sm:text-4xl font-bold">Bërthama që sjell klientë</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Menaxhimi i reklamave, gjenerimi i kontakteve, rimarketingu dhe testimi i vazhdueshëm — pjesët pa të cilat asnjë hinkë nuk punon. Të përfshira në çdo paketë.</p></div></FadeIn>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
             {CORE.map((s, i) => (
-              <FadeIn key={i} delay={(i % 3) * 100}>
+              <FadeIn key={i} delay={(i % 4) * 100}>
                 <div className="bg-white rounded-2xl p-6 border border-stone-100 shadow-sm hover:shadow-lg hover:border-rose-100 transition-all h-full">
                   <div className="flex items-center justify-between mb-5">
                     <div className="w-12 h-12 rounded-xl bg-rose-50 flex items-center justify-center"><s.icon className="w-6 h-6 text-rose-600" /></div>
@@ -330,7 +392,7 @@ export default function QenderEstetikeLandingPage() {
             ))}
           </div>
 
-          <FadeIn><div className="text-center mt-24 mb-14"><p className="text-sm font-semibold uppercase tracking-widest text-fuchsia-600 mb-3">+ Krijim kontenti</p><h2 className="text-3xl sm:text-4xl font-bold">Kontenti është karburanti i reklamave</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Reklama më e mirë është një video e vërtetë nga qendra juaj. Me shtresën e kontentit, ne e krijojmë atë çdo muaj — ju vetëm e miratoni.</p></div></FadeIn>
+          <FadeIn><div className="text-center mt-24 mb-14"><p className="text-sm font-semibold uppercase tracking-widest text-fuchsia-600 mb-3">+ Krijim kontenti</p><h2 className="text-3xl sm:text-4xl font-bold">Kontenti është karburanti i reklamave</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Reklama më e mirë është një video e vërtetë nga qendra juaj. Postimet, fotot dhe videot i krijojmë ne çdo muaj — duke nisur nga 15 postime — ju vetëm i miratoni.</p></div></FadeIn>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
             {CONTENT.map((s, i) => (
               <FadeIn key={i} delay={i * 100}>
@@ -349,7 +411,7 @@ export default function QenderEstetikeLandingPage() {
           <div className="grid lg:grid-cols-2 gap-10 mt-12">
             <FadeIn>
               <div className="rounded-3xl border border-stone-100 shadow-sm p-8 h-full">
-                <p className="flex items-center gap-2 text-xs font-bold text-fuchsia-600 uppercase tracking-wider mb-5"><Clapperboard className="w-4 h-4" />8 reels të një muaji (shembull)</p>
+                <p className="flex items-center gap-2 text-xs font-bold text-fuchsia-600 uppercase tracking-wider mb-5"><Clapperboard className="w-4 h-4" />8 reels të një muaji (shembull nga Shkëlqimi)</p>
                 <ol className="space-y-3.5">
                   {REELS.map((v, i) => (
                     <li key={i} className="flex items-start gap-4"><span className="w-7 h-7 rounded-full bg-fuchsia-50 text-fuchsia-600 text-xs font-bold flex items-center justify-center flex-shrink-0">{i + 1}</span><span className="text-stone-700 pt-0.5 text-sm">{v}</span></li>
@@ -359,12 +421,12 @@ export default function QenderEstetikeLandingPage() {
             </FadeIn>
             <FadeIn delay={150}>
               <div className="rounded-3xl border border-stone-100 shadow-sm p-8 h-full">
-                <p className="flex items-center gap-2 text-xs font-bold text-fuchsia-600 uppercase tracking-wider mb-5"><LayoutGrid className="w-4 h-4" />Si ndahen 12 postimet</p>
+                <p className="flex items-center gap-2 text-xs font-bold text-fuchsia-600 uppercase tracking-wider mb-5"><LayoutGrid className="w-4 h-4" />Si ndahen 15 postimet e Esencës</p>
                 <div className="space-y-5">
                   {POSTS.map((p, i) => (
                     <div key={i}>
                       <div className="flex items-baseline justify-between mb-1.5"><span className="font-semibold">{p.label}</span><span className="text-sm text-stone-500">{p.n} postime</span></div>
-                      <div className="h-2.5 rounded-full bg-stone-100 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-rose-500 to-fuchsia-500" style={{ width: `${(p.n / 12) * 100}%` }} /></div>
+                      <div className="h-2.5 rounded-full bg-stone-100 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-rose-500 to-fuchsia-500" style={{ width: `${(p.n / POSTS_TOTAL) * 100}%` }} /></div>
                       <p className="text-xs text-stone-500 mt-1.5">{p.desc}</p>
                     </div>
                   ))}
@@ -392,7 +454,7 @@ export default function QenderEstetikeLandingPage() {
                 </div>
                 <div>
                   <p className="font-semibold text-sm mb-2">Paketa</p>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-2">
                     {PACKAGES.map(p => (
                       <button type="button" key={p.id} onClick={() => setPkgId(p.id)} className={`text-left px-4 py-3 rounded-xl border transition-colors ${pkgId === p.id ? 'bg-rose-50 border-rose-400' : 'border-stone-200 hover:border-rose-200'}`}>
                         <p className="font-semibold text-sm">{p.name}</p><p className="text-xs text-stone-500">{money(p.price)} Lekë / muaj</p>
@@ -429,9 +491,9 @@ export default function QenderEstetikeLandingPage() {
 
       {/* ═══ PAKETAT ═══ */}
       <section id="paketat" className="py-24">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-          <FadeIn><div className="text-center mb-14"><p className="text-sm font-semibold uppercase tracking-widest text-rose-600 mb-3">Paketat & çmimet</p><h2 className="text-3xl sm:text-4xl font-bold">Dy mënyra për ta ndezur hinkën</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Rekomandojmë <strong>Bërthama + Kontent</strong>: reklamat punojnë aq mirë sa kontenti që u jepni. Kur e krijojmë ne, çdo video ndërtohet që të sjellë rezervime.</p></div></FadeIn>
-          <div className="grid md:grid-cols-2 gap-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <FadeIn><div className="text-center mb-14"><p className="text-sm font-semibold uppercase tracking-widest text-rose-600 mb-3">Paketat & çmimet</p><h2 className="text-3xl sm:text-4xl font-bold">Tre nivele, një hinkë e vetme</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Çdo paketë ka reklamat, kontaktet, rimarketingun, A/B testing dhe kontentin. Ndryshon sa kontent prodhojmë dhe sa thellë testojmë. Rekomandojmë <strong>Shkëlqimin</strong>: me dyfishin e videove dhe testim të avancuar, hinka mëson më shpejt cila reklamë sjell takime.</p></div></FadeIn>
+          <div className="grid lg:grid-cols-3 gap-8 max-w-md lg:max-w-none mx-auto">
             {PACKAGES.map((p, i) => {
               const featured = !!p.badge;
               const saving = STANDALONE_VALUE[p.id] - p.price;
@@ -444,7 +506,7 @@ export default function QenderEstetikeLandingPage() {
                       <h3 className="text-2xl font-bold">{p.name}</h3>
                       <p className="text-sm text-stone-500 mt-2 min-h-[40px]">{p.tagline}</p>
                       <div className="mt-6 flex items-baseline gap-2">
-                        <span className={`text-5xl font-extrabold ${featured ? 'text-rose-600' : 'text-stone-900'}`}>{money(p.price)}</span>
+                        <span className={`text-4xl xl:text-5xl font-extrabold ${featured ? 'text-rose-600' : 'text-stone-900'}`}>{money(p.price)}</span>
                         <span className="text-sm text-stone-500">Lekë / muaj</span>
                       </div>
                       <p className="mt-2 text-xs text-stone-500">Vlera veçmas: <span className="line-through">{money(STANDALONE_VALUE[p.id])} Lekë</span> · kurseni {money(saving)} Lekë në muaj</p>
@@ -458,7 +520,30 @@ export default function QenderEstetikeLandingPage() {
               );
             })}
           </div>
-          <p className="mt-8 text-center text-xs text-stone-400">Buxheti i reklamave paguhet veçmas, direkt te Meta dhe Google. Çmimet pa TVSH. Kontratë minimale 3 muaj.</p>
+          <p className="mt-8 text-center text-xs text-stone-400">Buxheti i reklamave dhe pagesa e influencerëve paguhen veçmas. Çmimet pa TVSH. Kontratë minimale 3 muaj.</p>
+
+          {/* ─── Elemente shtesë ─── */}
+          <FadeIn><div className="text-center mt-24 mb-12"><p className="text-sm font-semibold uppercase tracking-widest text-fuchsia-600 mb-3">Elemente shtesë</p><h2 className="text-3xl sm:text-4xl font-bold">Përshtateni paketën sipas qendrës suaj</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Shtoni vetëm atë që ju nevojitet, mbi çdo paketë. Elementet që shënoni dërgohen bashkë me kërkesën tuaj.</p></div></FadeIn>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {ADDONS.map((a, i) => {
+              const on = addonIds.includes(a.id);
+              return (
+                <FadeIn key={a.id} delay={(i % 4) * 80} className="h-full">
+                  <button type="button" onClick={() => toggleAddon(a.id)} aria-pressed={on} className={`w-full h-full text-left rounded-2xl p-5 border transition-all flex gap-4 ${on ? 'border-fuchsia-400 bg-fuchsia-50/70 shadow-md' : 'border-stone-200 bg-white hover:border-fuchsia-200'}`}>
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${on ? 'bg-fuchsia-600 text-white' : 'bg-fuchsia-50 text-fuchsia-600'}`}><a.icon className="w-5 h-5" /></div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2"><p className="font-semibold text-sm">{a.name}</p>{on ? <Check className="w-4 h-4 text-fuchsia-600 flex-shrink-0" /> : <Plus className="w-4 h-4 text-stone-300 flex-shrink-0" />}</div>
+                      <p className="text-fuchsia-600 font-bold text-sm mt-0.5">{a.price}</p>
+                      <p className="text-xs text-stone-500 mt-1 leading-relaxed">{a.desc}</p>
+                    </div>
+                  </button>
+                </FadeIn>
+              );
+            })}
+          </div>
+          {chosenAddons.length > 0 && (
+            <div className="mt-8 text-center"><button onClick={() => scrollTo('contact')} className="inline-flex items-center gap-2 px-7 py-3.5 rounded-xl font-bold text-white bg-gradient-to-r from-fuchsia-600 to-rose-500 hover:shadow-lg transition-all hover:-translate-y-0.5">Vazhdo me {pkg.name} + {chosenAddons.length} {chosenAddons.length === 1 ? 'element shtesë' : 'elemente shtesë'}<ArrowRight className="w-5 h-5" /></button></div>
+          )}
 
           <div className="grid md:grid-cols-3 gap-6 mt-16">
             {PROMISES.map((s, i) => (
@@ -518,7 +603,7 @@ export default function QenderEstetikeLandingPage() {
                 <h2 className="text-3xl sm:text-4xl font-bold leading-tight">Le ta mbushim kalendarin e qendrës suaj me <span className="text-rose-300">takime të vërteta</span></h2>
                 <p className="mt-5 text-stone-300 leading-relaxed text-lg">Zgjidhni paketën dhe na lini kontaktin. Brenda 24 orëve ju telefonojmë për një takim njohjeje — falas dhe pa asnjë detyrim.</p>
                 <div className="mt-8 space-y-4">
-                  {['Hinkë e plotë: vëmendje, kontakte, rimarketing', 'Çdo kontakt në FivoCRM, me burimin e reklamës', 'Raport mujor me koston për takim'].map((t, i) => (
+                  {['Hinkë e plotë: vëmendje, kontakte, rimarketing, A/B testing', 'Çdo kontakt në FivoCRM, me burimin e reklamës', 'Kontent çdo muaj: nga 15 postime, foto dhe video'].map((t, i) => (
                     <div key={i} className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-emerald-400" /><span className="text-stone-300">{t}</span></div>
                   ))}
                 </div>
@@ -532,7 +617,7 @@ export default function QenderEstetikeLandingPage() {
                   <h3 className="text-xl font-bold mb-2">Rezervo takimin e njohjes</h3>
                   <div>
                     <p className="text-sm font-medium text-stone-300 mb-2">Paketa</p>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-3 gap-2">
                       {PACKAGES.map(p => (
                         <button type="button" key={p.id} onClick={() => setPkgId(p.id)} className={`text-left px-4 py-3 rounded-xl border transition-colors ${pkgId === p.id ? 'bg-rose-500/25 border-rose-400' : 'bg-white/5 border-white/15 hover:border-white/30'}`}>
                           <p className="font-semibold text-sm">{p.name}</p>
@@ -541,6 +626,12 @@ export default function QenderEstetikeLandingPage() {
                       ))}
                     </div>
                   </div>
+                  {chosenAddons.length > 0 && (
+                    <div className="rounded-xl bg-white/5 border border-white/15 px-4 py-3">
+                      <p className="text-xs text-stone-400 mb-2">Elemente shtesë të zgjedhura</p>
+                      <div className="flex flex-wrap gap-2">{chosenAddons.map(a => <button type="button" key={a.id} onClick={() => toggleAddon(a.id)} className="text-xs px-2.5 py-1 rounded-full bg-fuchsia-500/25 border border-fuchsia-400/40 hover:bg-fuchsia-500/40">{a.name} ×</button>)}</div>
+                    </div>
+                  )}
                   <div className="grid sm:grid-cols-2 gap-4">
                     <div><label className="block text-sm font-medium text-stone-300 mb-1.5">Emri i plotë *</label><input type="text" required value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-rose-400" placeholder="Emër Mbiemër" /></div>
                     <div><label className="block text-sm font-medium text-stone-300 mb-1.5">Emri i qendrës</label><input type="text" value={formData.company} onChange={e => setFormData(p => ({ ...p, company: e.target.value }))} className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-rose-400" placeholder="Qendra Estetike ..." /></div>
