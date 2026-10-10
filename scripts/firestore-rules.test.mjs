@@ -435,12 +435,19 @@ test('10f. group channels: admin edits, member leaves / denormalises, outsider-m
   await assertFails(updateDoc(doc(eve, 'channels', 'grp2'), { lastMessageAt: new Date() }));
   // admin: full control
   await assertSucceeds(updateDoc(doc(zoe, 'channels', 'grp2'), { name: 'Renamed', members: ['alice', 'zoe', 'bob', 'eve'] }));
+  // leaving must remove EXACTLY yourself — "new lists don't contain me" alone let a
+  // departing member wipe the whole roster (or take others down with them)
+  await assertFails(updateDoc(doc(alice, 'channels', 'grp2'), { members: [], admins: [] }));
+  await assertFails(updateDoc(doc(alice, 'channels', 'grp2'), { members: ['zoe', 'eve'], admins: ['zoe'] }));
   // member leaves (removes ONLY themselves)
   await assertSucceeds(updateDoc(doc(alice, 'channels', 'grp2'), { members: ['zoe', 'bob', 'eve'], admins: ['zoe'] }));
-  // group creation must include the creator as member + admin
-  await assertFails(setDoc(doc(alice, 'channels', 'grp-bad'), { businessId: MY_BIZ, teamId: MY_TEAM, isGroup: true, name: 'x', members: ['zoe'], admins: ['zoe'], createdByUserId: 'alice' }));
-  await assertSucceeds(setDoc(doc(alice, 'channels', 'grp-ok'), { businessId: MY_BIZ, teamId: MY_TEAM, isGroup: true, name: 'x', members: ['alice', 'zoe'], admins: ['alice'], createdByUserId: 'alice' }));
-  await assertSucceeds(deleteDoc(doc(alice, 'channels', 'grp-ok')));
+  // group creation must include the creator as member + admin, and the doc id must
+  // be an auto-id (20 chars): a hand-chosen id could re-create a legacy fixed
+  // channelId and "prove" membership over other tenants' old messages
+  await assertFails(setDoc(doc(alice, 'channels', 'grpbadAAAAAAAAAAAAAA'), { businessId: MY_BIZ, teamId: MY_TEAM, isGroup: true, name: 'x', members: ['zoe'], admins: ['zoe'], createdByUserId: 'alice' }));
+  await assertFails(setDoc(doc(alice, 'channels', 'general'), { businessId: MY_BIZ, teamId: MY_TEAM, isGroup: true, name: 'x', members: ['alice', 'zoe'], admins: ['alice'], createdByUserId: 'alice' }));
+  await assertSucceeds(setDoc(doc(alice, 'channels', 'grpokAAAAAAAAAAAAAAA'), { businessId: MY_BIZ, teamId: MY_TEAM, isGroup: true, name: 'x', members: ['alice', 'zoe'], admins: ['alice'], createdByUserId: 'alice' }));
+  await assertSucceeds(deleteDoc(doc(alice, 'channels', 'grpokAAAAAAAAAAAAAAA')));
 });
 
 // 10g. Posting into a group requires membership; legacy channels and client threads unchanged.
@@ -2524,17 +2531,96 @@ test('64. marketing / workspace / typing rows are created inside the writer\'s b
 // ── H6. chatScheduledMessages: the cron sends them unchecked, so the target is checked here ──
 test('65. a scheduled message cannot target another tenant, and its routing cannot be re-aimed', async () => {
   const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
-  const base = { senderId: 'alice', content: 'later', attachmentUrl: null, scheduledAt: new Date(Date.now() + 3600e3).toISOString(), sent: false, createdByUserId: 'alice' };
+  const base = { senderId: 'alice', businessId: MY_BIZ, content: 'later', attachmentUrl: null, scheduledAt: new Date(Date.now() + 3600e3).toISOString(), sent: false, createdByUserId: 'alice' };
   await assertFails(setDoc(doc(alice, 'chatScheduledMessages', 'sch-victim'), { ...base, channelId: null, directUserId: 'vstaff' }));
   await assertFails(setDoc(doc(alice, 'chatScheduledMessages', 'sch-victim-ch'), { ...base, channelId: 'client-custVictim', directUserId: null }));
   await assertFails(setDoc(doc(alice, 'chatScheduledMessages', 'sch-as-zoe'), { ...base, senderId: 'zoe', channelId: null, directUserId: 'zoe' }));
+  // businessId is REQUIRED and must be the caller's own tenant — the cron stamps
+  // the message/notification and scopes suspended/manual runs by it.
+  await assertFails(setDoc(doc(alice, 'chatScheduledMessages', 'sch-no-biz'), { senderId: 'alice', content: 'x', scheduledAt: base.scheduledAt, sent: false, createdByUserId: 'alice', channelId: null, directUserId: 'zoe' }));
+  await assertFails(setDoc(doc(alice, 'chatScheduledMessages', 'sch-foreign-biz'), { ...base, businessId: VICTIM_BIZ, channelId: null, directUserId: 'zoe' }));
   await assertSucceeds(setDoc(doc(alice, 'chatScheduledMessages', 'sch-ok'), { ...base, channelId: null, directUserId: 'zoe' }));
   await assertSucceeds(setDoc(doc(alice, 'chatScheduledMessages', 'sch-ok-client'), { ...base, channelId: 'client-cust1', directUserId: null }));
+  // A GROUP target needs membership (grp2 members after 10f: zoe, bob, eve — alice
+  // and finn are NOT in it; the cron would fan the message out to the group).
+  const finn = staffOf('finn', MY_BIZ, MY_TEAM, ['member'], 'finn@mine.com');
+  await assertFails(setDoc(doc(finn, 'chatScheduledMessages', 'sch-grp-finn'), { ...base, senderId: 'finn', createdByUserId: 'finn', channelId: 'grp2', directUserId: null }));
+  await assertFails(setDoc(doc(alice, 'chatScheduledMessages', 'sch-grp-alice'), { ...base, channelId: 'grp2', directUserId: null }));
+  const zoeDb = staffOf('zoe', MY_BIZ, MY_TEAM, ['member'], 'zoe@mine.com');
+  await assertSucceeds(setDoc(doc(zoeDb, 'chatScheduledMessages', 'sch-grp-zoe'), { ...base, senderId: 'zoe', createdByUserId: 'zoe', channelId: 'grp2', directUserId: null }));
+  // Another tenant's group doc id is just as unreachable (membership check).
+  await assertFails(setDoc(doc(alice, 'chatScheduledMessages', 'sch-grp-victim'), { ...base, channelId: 'chVictim', directUserId: null }));
   await assertFails(updateDoc(doc(alice, 'chatScheduledMessages', 'sch-ok'), { directUserId: 'vstaff' }));
   await assertFails(updateDoc(doc(alice, 'chatScheduledMessages', 'sch-ok'), { channelId: 'client-custVictim' }));
   await assertFails(updateDoc(doc(alice, 'chatScheduledMessages', 'sch-ok'), { senderId: 'zoe' }));
   await assertSucceeds(updateDoc(doc(alice, 'chatScheduledMessages', 'sch-ok'), { content: 'edited', sent: true, sentAt: new Date() }));
   await assertFails(getDoc(doc(staffOf('zoe', MY_BIZ, MY_TEAM, ['member']), 'chatScheduledMessages', 'sch-ok')));
+});
+
+// ── Chat hardening (audit Oct 2026): DM read-marks, readAt receipt, readBy binding,
+//    dmThreads preview, typing indicators, whatsappMessages re-pointing ──
+test('65b. collaborative message updates: DM isRead is receiver-only; readAt is not forgeable; readBy needs group membership', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'messages', 'dm-65b'), { businessId: MY_BIZ, teamId: MY_TEAM, senderId: 'zoe', receiverId: 'alice', content: 'hi', isRead: false });
+    await setDoc(doc(db, 'messages', 'cm-staff-65b'), { businessId: MY_BIZ, teamId: MY_TEAM, channelId: 'client-cust1', senderType: 'staff', senderId: 'zoe', content: 'pershendetje', isRead: true });
+    await setDoc(doc(db, 'messages', 'cm-client-65b'), { businessId: MY_BIZ, teamId: MY_TEAM, channelId: 'client-cust1', senderType: 'client', senderId: 'carol', content: 'oferta?', isRead: false });
+  });
+  // A colleague who is NOT the receiver cannot flip a DM read (silent badge kill).
+  const finn = staffOf('finn', MY_BIZ, MY_TEAM, ['member'], 'finn@mine.com');
+  await assertFails(updateDoc(doc(finn, 'messages', 'dm-65b'), { isRead: true }));
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  await assertSucceeds(updateDoc(doc(alice, 'messages', 'dm-65b'), { isRead: true }));
+  // Staff mark a CLIENT row read with the receipt — that is the staff read receipt.
+  await assertSucceeds(updateDoc(doc(alice, 'messages', 'cm-client-65b'), { isRead: true, readAt: new Date() }));
+  // Nobody on staff (the sender included) stamps `readAt` on a STAFF→client row:
+  // that is the client's "✓✓ Parë" receipt, written by the portal alone.
+  const zoe = staffOf('zoe', MY_BIZ, MY_TEAM, ['member'], 'zoe@mine.com');
+  await assertFails(updateDoc(doc(zoe, 'messages', 'cm-staff-65b'), { readAt: new Date() }));
+  await assertFails(updateDoc(doc(alice, 'messages', 'cm-staff-65b'), { readAt: new Date() }));
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+  await assertSucceeds(updateDoc(doc(carol, 'messages', 'cm-staff-65b'), { readAt: new Date() }));
+  // readBy (group read set): member writes it, a non-member colleague does not.
+  const bob = staffOf('bob', MY_BIZ, MY_TEAM, ['member'], 'bob@mine.com');
+  await assertSucceeds(updateDoc(doc(bob, 'messages', 'gm-zoe'), { readBy: ['bob'] }));
+  await assertFails(updateDoc(doc(finn, 'messages', 'gm-zoe'), { readBy: ['finn'] }));
+});
+
+test('65c. dmThreads update: preview only, senderId is your own, businessId pinned', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  const id = 'alice__zoe';
+  // (thread seeded in 10h with businessId MY_BIZ)
+  await assertSucceeds(setDoc(doc(alice, 'dmThreads', id), { lastMessage: { content: 'ok', senderId: 'alice', createdAt: new Date() }, updatedAt: new Date() }, { merge: true }));
+  // Impersonating the peer in the list preview is refused.
+  await assertFails(setDoc(doc(alice, 'dmThreads', id), { lastMessage: { content: 'u pranua, paguaj ketu', senderId: 'zoe', createdAt: new Date() }, updatedAt: new Date() }, { merge: true }));
+  await assertFails(updateDoc(doc(alice, 'dmThreads', id), { businessId: VICTIM_BIZ }));
+  await assertFails(updateDoc(doc(alice, 'dmThreads', id), { foo: 1 }));
+});
+
+test('65d. typing indicators: a colleague cannot rewrite someone else\'s indicator', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  const zoe = staffOf('zoe', MY_BIZ, MY_TEAM, ['member'], 'zoe@mine.com');
+  // ti1 belongs to zoe (seeded in 10e).
+  await assertFails(updateDoc(doc(alice, 'typingIndicators', 'ti1'), { timestamp: new Date() }));
+  await assertSucceeds(updateDoc(doc(zoe, 'typingIndicators', 'ti1'), { timestamp: new Date() }));
+  // A colleague may still DELETE a stale one (cleanup path).
+  await assertSucceeds(deleteDoc(doc(alice, 'typingIndicators', 'ti1')));
+});
+
+test('65e. whatsappMessages/whatsappThreads: teamId and businessId cannot be re-pointed', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  // waMsgMine seeded in 49a with teamId MY_TEAM + businessId MY_BIZ.
+  await assertFails(updateDoc(doc(alice, 'whatsappMessages', 'waMsgMine'), { teamId: VICTIM_TEAM }));
+  await assertFails(updateDoc(doc(alice, 'whatsappMessages', 'waMsgMine'), { businessId: VICTIM_BIZ }));
+  await assertSucceeds(updateDoc(doc(alice, 'whatsappMessages', 'waMsgMine'), { status: 'read' }));
+  // Create may not stamp a foreign businessId next to your own teamId.
+  await assertFails(setDoc(doc(alice, 'whatsappMessages', 'waMsgForge'), { teamId: MY_TEAM, businessId: VICTIM_BIZ, phone: '35569', direction: 'outbound', message: 'x' }));
+  await assertSucceeds(setDoc(doc(alice, 'whatsappMessages', 'waMsgOk'), { teamId: MY_TEAM, businessId: MY_BIZ, phone: '35569', direction: 'outbound', message: 'x' }));
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'whatsappThreads', `${MY_TEAM}_35569`), { teamId: MY_TEAM, businessId: MY_BIZ, status: 'open' });
+  });
+  await assertFails(updateDoc(doc(alice, 'whatsappThreads', `${MY_TEAM}_35569`), { teamId: VICTIM_TEAM }));
+  await assertSucceeds(updateDoc(doc(alice, 'whatsappThreads', `${MY_TEAM}_35569`), { status: 'closed' }));
 });
 
 // ── M2. teamSettings: staff-only, and the secret deny-list mirrors api/_tenantConfig.ts ──

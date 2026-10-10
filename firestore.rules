@@ -1306,7 +1306,12 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       // A group is born with its creator as member AND admin — otherwise nobody
       // could ever manage it under the admin-only update rule below.
-      allow create: if canCreateBusinessDoc() && (
+      // Only AUTO-ID docs (20 chars, what addDoc mints): a hand-chosen id could
+      // re-create a LEGACY fixed-channel id (`general`, …) and "prove" membership
+      // over messages other tenants wrote under that id via isGroupChannelMember.
+      allow create: if canCreateBusinessDoc()
+        && (isSuperAdmin() || docId.size() == 20)
+        && (
         request.resource.data.get('isGroup', false) != true
         || (request.resource.data.get('admins', []).hasAny([request.auth.uid])
             && request.resource.data.get('members', []).hasAny([request.auth.uid]))
@@ -1326,10 +1331,13 @@ service cloud.firestore {
             || (isGroupMemberOf(resource)
                 && request.resource.data.diff(resource.data).affectedKeys()
                   .hasOnly(['lastMessageAt', 'lastMessagePreview', 'lastMessageSenderId', 'updatedAt']))
+            // LEAVE = the old lists minus exactly yourself. "New lists must not
+            // contain me" alone let a departing member write `members: []` and
+            // kick the whole roster (admins included) in one update.
             || (isGroupMemberOf(resource)
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'admins', 'updatedAt'])
-                && !request.resource.data.get('members', []).hasAny([request.auth.uid])
-                && !request.resource.data.get('admins', []).hasAny([request.auth.uid]))
+                && request.resource.data.get('members', []) == resource.data.get('members', []).removeAll([request.auth.uid])
+                && request.resource.data.get('admins', []) == resource.data.get('admins', []).removeAll([request.auth.uid]))
             || isSuperAdmin()
           )
       );
@@ -1357,9 +1365,19 @@ service cloud.firestore {
         && (!(request.resource.data.get('businessId', '') is string)
             || request.resource.data.get('businessId', '') == ''
             || isBusinessMember(request.resource.data.businessId));
+      // Only the denormalised preview may change; the tenant key may be filled in
+      // but never re-pointed; and a participant may not put the OTHER participant's
+      // name on a preview THEY wrote (impersonation in the recipient's list).
       allow update: if isAuth()
         && resource.data.get('participants', []).hasAny([request.auth.uid])
-        && request.resource.data.get('participants', []) == resource.data.get('participants', []);
+        && request.resource.data.get('participants', []) == resource.data.get('participants', [])
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['lastMessage', 'updatedAt', 'businessId', 'participants'])
+        && (!(resource.data.get('businessId', '') is string)
+            || resource.data.get('businessId', '') == ''
+            || request.resource.data.get('businessId', '') == resource.data.get('businessId', ''))
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMessage'])
+            || request.resource.data.get('lastMessage', {}).get('senderId', '') == request.auth.uid);
       allow delete: if false;
     }
 
@@ -1436,7 +1454,13 @@ service cloud.firestore {
         && request.resource.data.get('createdByUserId', request.auth.uid) == request.auth.uid
         && (
           (request.resource.data.get('senderType', '') == 'client'
-            && canAccessClientChannel(request.resource.data.get('channelId', '')))
+            && canAccessClientChannel(request.resource.data.get('channelId', ''))
+            // The stamped tenant, when present, must be the client's own — a foreign
+            // businessId landed the row in ANOTHER tenant's unread sweeps and GDPR export.
+            && (!(request.resource.data.get('businessId', '') is string)
+                || request.resource.data.get('businessId', '') == ''
+                || isPortalClientOfBusiness(request.resource.data.businessId)
+                || isBusinessMember(request.resource.data.businessId)))
           || (request.resource.data.get('senderType', '') != 'client'
               && (isSuperAdmin() || canCreateBusinessDoc())
               && (!(request.resource.data.get('receiverId', '') is string)
@@ -1465,16 +1489,46 @@ service cloud.firestore {
       // can already access the message — the same tenant/participant/channel test
       // as `read`. Was unconditional, letting any signed-in user mutate any message
       // cross-tenant by doc id.
+      // `readAt`/`readBy` are OUT of the sender's whitelist: `readAt` is the
+      // reader's "✓✓ Parë" receipt and `readBy` the group members' read set — a
+      // sender stamping either on their own message forges a receipt. `isRead`
+      // stays: the soft delete writes it so a deleted row leaves the unread window.
       allow update: if isAuth() && (
         (resource.data.senderId == request.auth.uid
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
                'content', 'editedAt', 'editHistory', 'isDeleted', 'deletedAt', 'attachmentUrl',
                'attachmentName', 'attachmentType', 'mentions', 'reactions', 'isPinned', 'pinnedAt',
-               'pinnedBy', 'isRead', 'readAt', 'readBy', 'updatedAt']))
+               'pinnedBy', 'isRead', 'updatedAt']))
         ||
         (
           request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['isRead', 'readAt', 'readBy', 'updatedAt', 'reactions', 'isPinned', 'pinnedAt', 'pinnedBy'])
+          // A DM's collaborative writes belong to its RECEIVER alone. Any business
+          // member could otherwise flip `isRead` on a colleague's DMs from the
+          // console — silently killing their unread badge and the mark pass.
+          && (resource.data.get('channelId', '') != ''
+              || !(resource.data.get('receiverId', '') is string)
+              || resource.data.get('receiverId', '') == ''
+              || resource.data.receiverId == request.auth.uid
+              || isSuperAdmin())
+          // `readAt` is the "Parë" receipt: writable on a CLIENT's own row (the
+          // staff read receipt) or by the portal client themselves on a staff row
+          // — never stamped onto a staff→client row by other staff (forgery the
+          // UI alone used to prevent).
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['readAt'])
+              || resource.data.get('senderType', '') == 'client'
+              || (isClientChannelId(resource.data.get('channelId', ''))
+                  && isPortalClientDoc(resource.data.get('channelId', '').split('-')[1]))
+              || isSuperAdmin())
+          // `readBy` (group read set): the writer must be a member of the channel
+          // the row claims, AND a `channels` doc minted over a foreign/legacy
+          // channelId must not grant writes on another tenant's rows — the channel
+          // doc's tenant has to match the message's (when the message carries one).
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['readBy'])
+              || (isGroupChannelMember(resource.data.get('channelId', ''))
+                  && (resource.data.get('businessId', '') == ''
+                      || get(/databases/$(database)/documents/channels/$(resource.data.channelId)).data.get('businessId', '') == resource.data.get('businessId', '')))
+              || isSuperAdmin())
           && (
             isBusinessMember(resource.data.businessId)
             || resource.data.receiverId == request.auth.uid
@@ -2334,11 +2388,13 @@ service cloud.firestore {
       allow create: if isAuth()
         && request.resource.data.get('userId', '') == request.auth.uid
         && isBusinessMember(request.resource.data.get('businessId', ''));
+      // Update is OWN-ONLY: the business-member branch let any colleague rewrite
+      // someone else's indicator (forge/sustain "po shkruan…" indefinitely).
+      // Colleagues may still DELETE a stale one (cleanup).
       allow update: if isAuth()
         && keepsBusinessId()
-        && request.resource.data.get('userId', '') == resource.data.get('userId', '')
-        && (resource.data.get('userId', '') == request.auth.uid
-            || isBusinessMember(resource.data.get('businessId', '')));
+        && resource.data.get('userId', '') == request.auth.uid
+        && request.resource.data.get('userId', '') == resource.data.get('userId', '');
       allow delete: if isAuth() && (
         resource.data.get('userId', '') == request.auth.uid
         || isBusinessMember(resource.data.get('businessId', ''))
@@ -2387,21 +2443,28 @@ service cloud.firestore {
     // reach, and the routing keys can never be re-pointed after the fact (a row
     // scheduled into my own DM and then re-aimed at a victim would have been sent
     // by the cron with nobody looking).
-    // NOTE: this collection is not in useFirestore's teamScopedCollections, so
-    // ChatView does not stamp businessId today; it is validated when present.
     match /chatScheduledMessages/{docId} {
       allow read: if isAuth() && resource.data.senderId == request.auth.uid;
+      // businessId is REQUIRED and must be the caller's own tenant: the cron sends
+      // with the Admin SDK and scopes its suspended-tenant guard, its manual-run
+      // scope and the message/notification tenant stamp by this field — an absent
+      // or foreign businessId made every one of those a no-op. A GROUP channelId
+      // is membership-checked here too (and re-checked by the cron): a row minted
+      // into a private group — or another tenant's group — the sender is not a
+      // member of used to be sent with nobody looking.
       allow create: if isAuth()
         && request.resource.data.get('senderId', '') == request.auth.uid
         && request.resource.data.get('createdByUserId', request.auth.uid) == request.auth.uid
-        && (!(request.resource.data.get('businessId', '') is string)
-            || request.resource.data.get('businessId', '') == ''
-            || isBusinessMember(request.resource.data.businessId))
+        && isBusinessMember(request.resource.data.get('businessId', ''))
         && (!(request.resource.data.get('directUserId', '') is string)
             || request.resource.data.get('directUserId', '') == ''
             || isUserInMyTenant(request.resource.data.directUserId))
         && (!isClientChannelId(request.resource.data.get('channelId', ''))
-            || canWriteClientChannel(request.resource.data.channelId));
+            || canWriteClientChannel(request.resource.data.channelId))
+        && (!(request.resource.data.get('channelId', '') is string)
+            || request.resource.data.get('channelId', '') == ''
+            || isClientChannelId(request.resource.data.channelId)
+            || isGroupChannelMember(request.resource.data.channelId));
       allow update: if isAuth() && resource.data.senderId == request.auth.uid
         && !request.resource.data.diff(resource.data).affectedKeys()
              .hasAny(['senderId', 'channelId', 'directUserId', 'businessId', 'teamId', 'createdByUserId']);
@@ -2481,8 +2544,18 @@ service cloud.firestore {
       // legacy rows carry only teamId and stay readable through the team clause).
       allow read: if isTeamMember(resource.data.get('teamId', ''))
         || isBusinessMember(resource.data.get('businessId', ''));
-      allow create: if isTeamMember(request.resource.data.teamId);
-      allow update, delete: if isTeamMember(resource.data.teamId);
+      // `businessId`, when stamped by the client, must be the writer's own tenant;
+      // updates PIN teamId + businessId — an update checked only against the OLD
+      // teamId could re-point the row into another tenant's WA inbox (forged
+      // "customer" messages delivered inside the victim's CRM).
+      allow create: if isTeamMember(request.resource.data.teamId)
+        && (!(request.resource.data.get('businessId', '') is string)
+            || request.resource.data.get('businessId', '') == ''
+            || isBusinessMember(request.resource.data.businessId));
+      allow update: if isTeamMember(resource.data.teamId)
+        && request.resource.data.get('teamId', '') == resource.data.get('teamId', '')
+        && request.resource.data.get('businessId', '') == resource.data.get('businessId', '');
+      allow delete: if isTeamMember(resource.data.teamId);
     }
 
     // Per-tenant daily counters written by the inbound WhatsApp handler (auto-created
@@ -2535,8 +2608,16 @@ service cloud.firestore {
       // assignment, internal notes, status (open/pending/closed).  Keyed
       // {teamId}_{phone}.  Client-writable (unlike whatsappConversations).
       allow read: if isTeamMember(resource.data.teamId);
-      allow create: if isTeamMember(request.resource.data.teamId);
-      allow update, delete: if isTeamMember(resource.data.teamId);
+      // Same pinning as whatsappMessages: a re-pointed teamId planted forged
+      // thread notes/status in another tenant's WA inbox.
+      allow create: if isTeamMember(request.resource.data.teamId)
+        && (!(request.resource.data.get('businessId', '') is string)
+            || request.resource.data.get('businessId', '') == ''
+            || isBusinessMember(request.resource.data.businessId));
+      allow update: if isTeamMember(resource.data.teamId)
+        && request.resource.data.get('teamId', '') == resource.data.get('teamId', '')
+        && request.resource.data.get('businessId', '') == resource.data.get('businessId', '');
+      allow delete: if isTeamMember(resource.data.teamId);
     }
 
     // ── Marketing (WhatsApp / e-mail templates, broadcasts, campaigns, drips) ──

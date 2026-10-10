@@ -13,6 +13,8 @@
 // Scheduled every 5 minutes from vps/server.ts — NOT in run-all.
 import admin, { adminDb as db } from './_firebaseAdmin.js';
 import { notifyUser } from './_push.js';
+import { safeSenderAddress } from './_emailIdentity.js';
+import nodemailer from 'nodemailer';
 
 const MAX_PER_RUN = 100;
 /** Mirrors MAX_FANOUT in api/_send-notification-email.ts. */
@@ -20,6 +22,36 @@ const MAX_GROUP_FANOUT = 200;
 
 /** dmThreads doc id — mirrored from ChatView (`dmThreadId`). */
 const dmThreadId = (a: string, b: string) => [a, b].sort().join('__');
+
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
+
+/**
+ * Email fallback for a scheduled client-thread message when the customer has no
+ * portal login — parity with the live send, which posts `notify-client` through
+ * /api/send-invoice-email. The template mirrors that endpoint's.
+ */
+async function emailClientFallback(args: { to: string; name: string; senderName: string; preview: string }): Promise<boolean> {
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
+  if (!smtpUser || !process.env.SMTP_PASS) return false;
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'mail.fivoo.net',
+    port: Number(process.env.SMTP_PORT) || 465,
+    secure: true,
+    auth: { user: smtpUser, pass: process.env.SMTP_PASS },
+  });
+  const appUrl = process.env.VITE_APP_URL || 'https://app.fivoo.net';
+  const name = escapeHtml(args.name || args.to.split('@')[0]);
+  const from = escapeHtml(args.senderName.slice(0, 80) || 'Ekipi');
+  const preview = escapeHtml(args.preview.slice(0, 200) || 'Keni një mesazh të ri.');
+  await transporter.sendMail({
+    from: `"FivoCRM" <${smtpUser}>`,
+    to: args.to,
+    subject: `Mesazh i ri nga ${from}`.replace(/[\n\r]/g, '').slice(0, 180),
+    html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;background:#f9fafb;border-radius:8px;"><h2 style="color:#2563eb;margin-top:0;">Mesazh i ri</h2><p style="color:#374151;">Përshëndetje, <strong>${name}</strong>!</p><p style="color:#374151;"><strong>${from}</strong> ju ka dërguar një mesazh:</p><blockquote style="border-left:3px solid #2563eb;padding:10px 14px;background:#eff6ff;border-radius:4px;margin:16px 0;color:#1e40af;font-style:italic;">${preview}</blockquote><a href="${appUrl}/portal/chat" style="display:inline-block;background:#2563eb;color:#fff;padding:11px 24px;border-radius:6px;text-decoration:none;font-weight:bold;margin-top:8px;">Hap portalin</a><p style="color:#9ca3af;font-size:11px;margin-top:28px;border-top:1px solid #e5e7eb;padding-top:12px;">FivoCRM &mdash; Platforma juaj e biznesit</p></div>`,
+  });
+  return true;
+}
 
 async function displayNameFor(uid: string): Promise<string> {
   try {
@@ -89,6 +121,35 @@ export async function runChatScheduled(opts?: { businessId?: string | null }) {
       const content = String(s.content || '📎 Bashkëngjitje');
       const attachmentUrl = typeof s.attachmentUrl === 'string' && s.attachmentUrl ? s.attachmentUrl : null;
       const isClient = !!channelId && channelId.startsWith('client-');
+
+      // Resolve a GROUP target BEFORE writing anything, and prove the sender's
+      // membership — defence in depth with the create rule: a row minted before
+      // the rule (or into a since-deleted group, or with a foreign businessId next
+      // to another tenant's channelId) must never be sent with nobody looking.
+      let chSnap: FirebaseFirestore.DocumentSnapshot | null = null;
+      let chData: any = null;
+      let chMembers: string[] = [];
+      if (channelId && !isClient) {
+        chSnap = await db.collection('channels').doc(channelId).get();
+        chData = chSnap.exists ? (chSnap.data() as any) : null;
+        chMembers = Array.isArray(chData?.members) ? chData.members.filter((m: any) => typeof m === 'string') : [];
+        if (chData?.isGroup && !chMembers.includes(senderId)) {
+          block('not-a-member');
+          await d.ref.update({ error: 'not-a-member' }).catch(() => {});
+          continue;
+        }
+        if (chData?.businessId && s.businessId && chData.businessId !== s.businessId) {
+          block('cross-tenant');
+          await d.ref.update({ error: 'cross-tenant' }).catch(() => {});
+          continue;
+        }
+      }
+      // Tenant stamp: the channel's own businessId wins (groups), then the row's.
+      const msgBusinessId = (chData?.businessId as string | undefined) || s.businessId || null;
+      const msgTeamId = (chData?.teamId as string | undefined) || s.teamId || null;
+      const mentionUids: string[] = (Array.isArray(s.mentions) ? s.mentions : [])
+        .filter((u: any) => typeof u === 'string' && u && u !== senderId);
+
       const msgRef = db.collection('messages').doc();
       await msgRef.set({
         content,
@@ -99,8 +160,9 @@ export async function runChatScheduled(opts?: { businessId?: string | null }) {
         ...(attachmentUrl ? { attachmentUrl } : {}),
         ...(channelId ? { channelId } : { receiverId: directUserId }),
         ...(isClient ? { senderType: 'staff' } : {}),
-        businessId: s.businessId || null,
-        teamId: s.teamId || null,
+        ...(mentionUids.length > 0 && channelId && !isClient ? { mentions: mentionUids } : {}),
+        businessId: msgBusinessId,
+        teamId: msgTeamId,
         scheduledFromId: d.id,
         createdAt: now,
         updatedAt: now,
@@ -119,13 +181,15 @@ export async function runChatScheduled(opts?: { businessId?: string | null }) {
           actionUrl: `/app/chat?directUserId=${senderId}`,
           conversationKey: `dm:${senderId}`,
           messageId: msgRef.id,
-          businessId: s.businessId || null,
-          teamId: s.teamId || null,
+          businessId: msgBusinessId,
+          teamId: msgTeamId,
           actorUserId: senderId,
         }));
+        // businessId only when the row carries one — a `businessId: null` in this
+        // merge used to OVERWRITE the correct tenant key a prior live DM stamped.
         ops.push(db.collection('dmThreads').doc(dmThreadId(senderId, directUserId)).set({
           participants: [senderId, directUserId].sort(),
-          businessId: s.businessId || null,
+          ...(msgBusinessId ? { businessId: msgBusinessId } : {}),
           lastMessage: { content: content.slice(0, 140), senderId, createdAt: now, attachment: !!attachmentUrl },
           updatedAt: now,
         }, { merge: true }));
@@ -138,6 +202,7 @@ export async function runChatScheduled(opts?: { businessId?: string | null }) {
         const pa = custId
           ? await db.collection('clientPortalAccess').where('customerId', '==', custId).limit(5).get()
           : null;
+        const custBusinessId = cust?.exists ? ((cust.data() as any)?.businessId || null) : null;
         const portalUid = pa?.docs.map(x => x.data() as any).find(a => a.userId && a.status !== 'Inactive')?.userId;
         if (portalUid) {
           ops.push(notifyUser({
@@ -149,32 +214,46 @@ export async function runChatScheduled(opts?: { businessId?: string | null }) {
             linkTo: channelId,
             conversationKey: `ch:${channelId}`,
             messageId: msgRef.id,
-            businessId: s.businessId || null,
-            teamId: s.teamId || null,
+            businessId: custBusinessId || msgBusinessId,
+            teamId: msgTeamId,
             customerId: custId || null,
             actorUserId: senderId,
           }));
         } else {
-          block('client-without-portal');
+          // Parity with the live send: a customer with no portal login still gets
+          // the direct email (the live path posts `notify-client`); "scheduled it,
+          // nobody got anything" used to be just a tally.
+          const custEmail = cust?.exists ? String((cust.data() as any)?.email || '').trim() : '';
+          const paEmail = pa?.docs.map(x => x.data() as any).find(a => typeof a.email === 'string' && a.email)?.email || '';
+          const to = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(custEmail) ? custEmail
+            : (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(paEmail) ? paEmail : '');
+          if (to) {
+            ops.push(emailClientFallback({ to, name: custName, senderName, preview: content.slice(0, 200) })
+              .then(ok => { if (!ok) block('client-email-unconfigured'); }));
+          } else {
+            block('client-without-portal');
+          }
         }
       } else if (channelId) {
-        const ch = await db.collection('channels').doc(channelId).get();
-        const chData = ch.exists ? (ch.data() as any) : null;
-        const members: string[] = Array.isArray(chData?.members) ? chData.members.filter((m: any) => typeof m === 'string') : [];
-        if (chData?.isGroup) {
-          ops.push(ch.ref.update({ lastMessageAt: now, lastMessagePreview: content.slice(0, 140), lastMessageSenderId: senderId }));
+        if (chData?.isGroup && chSnap) {
+          ops.push(chSnap.ref.update({ lastMessageAt: now, lastMessagePreview: content.slice(0, 140), lastMessageSenderId: senderId }));
         }
-        const targets = members.filter(uid => uid !== senderId).slice(0, MAX_GROUP_FANOUT);
+        // An @mention scheduled in a group keeps its `mention` row (live-send
+        // parity) — the rest of the members get the plain channel_message.
+        const mentionTargets = new Set(mentionUids.filter(uid => chMembers.includes(uid)));
+        const targets = chMembers.filter(uid => uid !== senderId).slice(0, MAX_GROUP_FANOUT);
         targets.forEach(uid => ops.push(notifyUser({
           userId: uid,
-          type: 'channel_message',
-          title: `${senderName} · ${chData?.name || 'Kanali'}`,
+          type: mentionTargets.has(uid) ? 'mention' : 'channel_message',
+          title: mentionTargets.has(uid)
+            ? `${senderName} ju përmendi`
+            : `${senderName} · ${chData?.name || 'Kanali'}`,
           message: preview,
           linkTo: channelId,
           conversationKey: `ch:${channelId}`,
           messageId: msgRef.id,
-          businessId: chData?.businessId || s.businessId || null,
-          teamId: chData?.teamId || s.teamId || null,
+          businessId: msgBusinessId,
+          teamId: msgTeamId,
           actorUserId: senderId,
         })));
       }

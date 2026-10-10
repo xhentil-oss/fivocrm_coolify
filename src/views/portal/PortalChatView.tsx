@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { addDoc, collection, doc, updateDoc, writeBatch, Timestamp } from 'firebase/firestore';
+import { addDoc, collection, doc, updateDoc, writeBatch, Timestamp, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { usePortalTenant } from '../../hooks/usePortalTenant';
-import { useCollection, useMutation, useDocument } from '../../hooks/useFirestore';
+import { useCollection, useDocument } from '../../hooks/useFirestore';
 import { useFileUpload } from '../../hooks/useFileUpload';
 import { safeExternalUrl } from '../../lib/safeUrl';
 import { useAuth } from '../../contexts/AuthContext';
@@ -181,7 +181,6 @@ const PortalChatView: React.FC = () => {
     skipBusinessFilter: true, // scoped explicitly above (portal users have no active business)
   });
 
-  const messageMutation = useMutation<ChatMessage>('messages');
   // No notifications mutation: a portal client cannot write into `notifications`
   // (the rules deny it). Staff are notified server-side via /api/notify-staff.
   // The one write the rules DO allow is marking my own notification as read
@@ -497,20 +496,18 @@ const PortalChatView: React.FC = () => {
 
   const isOwnMessage = (senderId: string) => senderId === user?.uid;
 
-  // Toggle emoji reaction
+  // Toggle emoji reaction — atomic per-emoji array update, same as the staff
+  // ChatView: rebuilding the whole `reactions` object from a snapshot made a
+  // client and a staff member reacting near-simultaneously clobber each other.
   const handleReaction = async (msgId: string, emoji: string) => {
     if (!user) return;
     const msg = rawMessages?.find(m => m.id === msgId);
     if (!msg) return;
-    const reactions = { ...((msg as any).reactions || {}) };
-    const users = reactions[emoji] ? [...reactions[emoji]] : [];
-    const idx = users.indexOf(user.uid);
-    if (idx >= 0) users.splice(idx, 1);
-    else users.push(user.uid);
-    if (users.length === 0) delete reactions[emoji];
-    else reactions[emoji] = users;
+    const already = Array.isArray((msg as any).reactions?.[emoji]) && (msg as any).reactions[emoji].includes(user.uid);
     try {
-      await messageMutation.update(msgId, { reactions } as any);
+      await updateDoc(doc(db, 'messages', msgId), {
+        [`reactions.${emoji}`]: already ? arrayRemove(user.uid) : arrayUnion(user.uid),
+      } as any);
     } catch { /* silent */ }
     setShowEmojiPicker(null);
   };

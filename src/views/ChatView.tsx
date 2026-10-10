@@ -37,14 +37,14 @@ import { useFileUpload } from '../hooks/useFileUpload';
 import { getTimestampMs } from '../lib/utils';
 import { safeExternalUrl } from '../lib/safeUrl';
 import { useUnreadChat } from '../hooks/useUnreadChat';
-import { isDmForMe, isUnreadClientMessage, groupFullyReadAfter, unionById } from '../lib/chat/unread';
+import { isDmForMe, isUnreadClientMessage, isUnreadGroupMessageForMe, groupFullyReadAfter, unionById } from '../lib/chat/unread';
 import { useNotificationPrefs, useConversationPresence } from '../hooks/useNotificationPrefs';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { NAZMIJE_BLOCK_LABELS, NAZMIJE_UID, mentionsNazmije, resolveNazmijeSettings } from '../lib/nazmije/core';
 import { askNazmije, NazmijeApiError } from '../lib/nazmije/client';
 import { channelConversationKey, dmConversationKey } from '../lib/notificationPrefs';
 import { auth, db } from '../lib/firebase';
-import { writeBatch, doc, updateDoc, setDoc, deleteDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { writeBatch, doc, updateDoc, setDoc, deleteDoc, arrayUnion, arrayRemove, runTransaction } from 'firebase/firestore';
 import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, ClientRequest, Team, Task, Channel } from '../types';
 import UnifiedChatList, { type UnifiedConv } from '../components/UnifiedChatList';
 
@@ -1342,7 +1342,10 @@ const ChatView: React.FC = () => {
 
   const pendingScheduledForCurrent = useMemo(() => {
     if (!scheduledMessages) return [];
-    return scheduledMessages.filter((s: any) => !s.sent && (
+    // A row with `error` stays VISIBLE (as "dështoi") even when the failed sender
+    // left its claim in place — a broken "Do të dërgohet pas 1 orë" promise used
+    // to vanish from the banner with no trace anywhere.
+    return scheduledMessages.filter((s: any) => (!s.sent || s.error) && (
       (chatMode === 'channel' && s.channelId === activeChannel) ||
       (chatMode === 'direct' && s.directUserId === activeDirectUserId)
     ));
@@ -1364,6 +1367,14 @@ const ChatView: React.FC = () => {
         attachmentUrl: attachmentUrl || null,
         scheduledAt: new Date(whenMs).toISOString(),
         sent: false,
+        // Tenant keys are REQUIRED (rules): the cron stamps them onto the message,
+        // the dmThread and the notification, scopes manual runs and skips suspended
+        // tenants by them — rows without them escaped every one of those guards.
+        businessId: getGlobalBusinessId() || null,
+        teamId: getGlobalTeamId() || null,
+        // Mentions are resolved NOW (the cron has no profile map): it notifies
+        // these uids with a `mention` row instead of a plain channel_message.
+        mentions: extractMentions(content),
       });
       setMessageText('');
       setAttachmentUrl('');
@@ -1377,6 +1388,9 @@ const ChatView: React.FC = () => {
       console.error('[ChatView] schedule failed', err);
       toast({ title: 'Gabim', description: err.message || 'Programimi dështoi', variant: 'destructive' });
     }
+  // extractMentions is declared later in the file (stable useCallback) — adding it
+  // to the deps would be a TDZ reference during render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, messageText, attachmentUrl, scheduledMutation, chatMode, activeChannel, activeDirectUserId, toast]);
 
   const handleCancelScheduled = useCallback(async (id: string) => {
@@ -1410,39 +1424,50 @@ const ChatView: React.FC = () => {
     }
   }, [user, userProfiles, userProfileMutation, toast]);
 
-  // Poll scheduled messages every 30s; send and remove when due.
+  // Poll scheduled messages every 30s; send when due — through the LIVE send path,
+  // with a transactional claim. The old poll (a) claimed with a plain `update`,
+  // which also succeeded when the cron or a second tab had already claimed from a
+  // lagging snapshot (double send), and (b) created only the message document —
+  // no notification, no dmThreads head, no lastMessage denorm — so whenever a chat
+  // tab was open at the hour (i.e. whenever the browser won the claim race), a
+  // scheduled message notified NOBODY. A failure AFTER the claim left `sent: true`
+  // and the row vanished from every surface: now it is un-claimed with `error`, so
+  // the banner shows it and the cron retries it.
   useEffect(() => {
     if (!user || !scheduledMessages) return;
     const fire = async () => {
       const now = Date.now();
       for (const s of (scheduledMessages || [])) {
-        if (!s || s.sent || firedScheduledRef.current.has(s.id)) continue;
+        if (!s || s.sent || s.error || firedScheduledRef.current.has(s.id)) continue;
         const t = s.scheduledAt ? new Date(s.scheduledAt).getTime() : 0;
         if (!t || t > now) continue;
         firedScheduledRef.current.add(s.id);
+        let claimed = false;
         try {
-          // Claim first: a second tab/device polling the same row sees `sent: true`
-          // and skips it. The old order (create, then remove) let both send.
-          await scheduledMutation.update(s.id, { sent: true, sentAt: new Date() });
-          const isClientTarget = typeof s.channelId === 'string' && s.channelId.startsWith('client-');
-          const base: any = {
-            content: s.content || '📎 Bashkëngjitje',
-            senderId: user.uid,
-            // Staff→client rows are read by the CLIENT via `readAt`; `isRead` is the
-            // staff-side flag and would otherwise sit in the unread window forever.
-            isRead: isClientTarget,
-            ...(isClientTarget ? { senderType: 'staff' as const } : {}),
-          };
-          if (s.attachmentUrl) base.attachmentUrl = s.attachmentUrl;
-          if (s.channelId) {
-            await messageMutation.create({ ...base, channelId: s.channelId });
-          } else if (s.directUserId) {
-            await messageMutation.create({ ...base, receiverId: s.directUserId });
-          }
+          await runTransaction(db, async (tx) => {
+            const ref = doc(db, 'chatScheduledMessages', s.id);
+            const fresh = await tx.get(ref);
+            if (!fresh.exists() || (fresh.data() as any)?.sent) throw new Error('claimed-elsewhere');
+            tx.update(ref, { sent: true, sentAt: new Date() });
+          });
+          claimed = true;
+        } catch { /* claimed by the cron or another tab — nothing to do */ }
+        if (!claimed) continue;
+        try {
+          const ok = await handleSendMessageRef.current(null, {
+            content: s.content || '',
+            attachmentUrl: s.attachmentUrl || '',
+            targetMode: s.channelId ? 'channel' : 'direct',
+            targetChannel: s.channelId || '',
+            targetDirectUserId: s.directUserId || null,
+            fromScheduler: true,
+          });
+          if (!ok) throw new Error('Dërgimi dështoi');
           await scheduledMutation.remove(s.id);
           toast({ title: '📨 Mesazhi i programuar u dërgua' });
-        } catch (err) {
+        } catch (err: any) {
           console.error('[ChatView] scheduled send failed', err);
+          await scheduledMutation.update(s.id, { sent: false, error: String(err?.message || err || 'send-failed') }).catch(() => {});
           firedScheduledRef.current.delete(s.id);
         }
       }
@@ -1450,7 +1475,7 @@ const ChatView: React.FC = () => {
     fire();
     const id = setInterval(fire, 30000);
     return () => clearInterval(id);
-  }, [user, scheduledMessages, messageMutation, scheduledMutation, toast]);
+  }, [user, scheduledMessages, scheduledMutation, toast]);
 
   // ── #3 Message → Task ──
   const [taskFromMsgOpen, setTaskFromMsgOpen] = useState(false);
@@ -1640,7 +1665,10 @@ const ChatView: React.FC = () => {
     if (filteredMessages.length === 0) return;         // wait for the first load
     seededConvKeyRef.current = convKey;
     const unreadIds = filteredMessages
-      .filter(m => m.senderId !== user.uid && !m.isRead && !(m as any).deletedAt)
+      // Group unread is PER MEMBER (readBy): seeding on `isRead` put the divider
+      // above messages I had already read but a colleague had not.
+      .filter(m => m.senderId !== user.uid && !(m as any).deletedAt
+        && (isGroupChannel ? !(((m as any).readBy || []) as string[]).includes(user.uid) : !m.isRead))
       .map(m => m.id);
     sessionUnreadIdsRef.current = new Set(unreadIds);
     // Jump to the first unread message on open (mirrors the pin/reply jump: scroll
@@ -1656,7 +1684,7 @@ const ChatView: React.FC = () => {
         setTimeout(() => el.classList.remove('ring-2', 'ring-primary'), 1600);
       }, 350);
     }
-  }, [chatMode, activeChannel, activeDirectUserId, filteredMessages, user]);
+  }, [chatMode, activeChannel, activeDirectUserId, filteredMessages, user, isGroupChannel]);
 
   // IntersectionObserver — show jump-to-bottom when sentinel is out of view
   useEffect(() => {
@@ -2088,6 +2116,38 @@ const ChatView: React.FC = () => {
     bgReceivedDMs.forEach(m => prevBgDmIdsRef.current.add(m.id));
   }, [bgReceivedDMs, user, chatMode, activeDirectUserId, playBirdChirp, toast, getUserDisplayName, canAlert, canPlaySound]);
 
+  // Background chirp for GROUP and CLIENT messages. The NotificationsCenter chime
+  // is suppressed on /app/chat ("the chirp owns it"), but the chirps above cover
+  // only the ACTIVE thread and background DMs — an @mention, group or client
+  // message in a conversation you were NOT viewing made no sound anywhere while
+  // the chat page was open. Reuses the two always-on unread windows (no new
+  // listeners) and the shared predicates, so a row that counts is a row that rings.
+  const prevBgChIdsRef = useRef<Set<string>>(new Set());
+  const bgChInitialRef = useRef(true);
+  useEffect(() => {
+    if (!user) return;
+    const rows = unionById<ChatMessage>(allUnreadTeamMsgs, allUnreadClientMsgs);
+    if (bgChInitialRef.current) {
+      rows.forEach(m => prevBgChIdsRef.current.add(m.id));
+      if (allUnreadTeamMsgs || allUnreadClientMsgs) bgChInitialRef.current = false;
+      return;
+    }
+    const myGroupIds = new Set((myGroups || []).map(g => g.id));
+    const activeKey = chatMode === 'channel' ? activeChannel : '';
+    const fresh = rows.filter(m => {
+      if (prevBgChIdsRef.current.has(m.id)) return false;
+      if ((m as any).channelId === activeKey) return false; // the active-thread chirp owns it
+      const t = getTimestampMs(m.createdAt);
+      if (!t || t <= mountTimeRef.current.getTime()) return false;
+      return isUnreadClientMessage(m, user.uid) || isUnreadGroupMessageForMe(m, user.uid, myGroupIds);
+    });
+    if (fresh.length > 0) {
+      const type = fresh.some(m => (m as any).senderType === 'client') ? 'client_message' : 'channel_message';
+      if (canPlaySound(type)) playBirdChirp();
+    }
+    rows.forEach(m => prevBgChIdsRef.current.add(m.id));
+  }, [allUnreadTeamMsgs, allUnreadClientMsgs, myGroups, user, chatMode, activeChannel, canPlaySound, playBirdChirp]);
+
   const formatDate = (date: any) => {
     if (!date) return '';
     const d = date instanceof Date ? date : date.toDate ? date.toDate() : new Date(date);
@@ -2121,10 +2181,12 @@ const ChatView: React.FC = () => {
 
   // Unread count in currently open conversation (used for jump-to-bottom badge)
   const currentConvUnread = useMemo(() => {
-    if (chatMode === 'channel') return channelUnreadMap.get(activeChannel) || 0;
+    // A client thread's count lives in clientUnreadMap, not the group map — the
+    // badge read only the group map, so it was always 0 in client conversations.
+    if (chatMode === 'channel') return (channelUnreadMap.get(activeChannel) || 0) + (clientUnreadMap.get(activeChannel) || 0);
     if (chatMode === 'direct') return directUnreadMap.get(activeDirectUserId || '') || 0;
     return 0;
-  }, [chatMode, activeChannel, activeDirectUserId, channelUnreadMap, directUnreadMap]);
+  }, [chatMode, activeChannel, activeDirectUserId, channelUnreadMap, clientUnreadMap, directUnreadMap]);
 
   // Message Handlers
   const { upload: uploadAttachment, uploading: attachmentUploading } = useFileUpload();
@@ -2186,7 +2248,9 @@ const ChatView: React.FC = () => {
     }
   };
 
-  const handleSendMessage = async (e?: React.FormEvent | null, override?: { content?: string; attachmentUrl?: string; targetMode?: 'channel' | 'direct'; targetChannel?: string; targetDirectUserId?: string | null }) => {
+  // Returns true only when the message document was actually created (or handed to
+  // Nazmije) — the scheduled-message poll decides claim/retry from it.
+  const handleSendMessage = async (e?: React.FormEvent | null, override?: { content?: string; attachmentUrl?: string; targetMode?: 'channel' | 'direct'; targetChannel?: string; targetDirectUserId?: string | null; fromScheduler?: boolean }): Promise<boolean> => {
     if (e && typeof (e as any).preventDefault === 'function') (e as any).preventDefault();
     // Target conversation — snapshotted by attachment/voice senders before their
     // upload await, so a mid-upload conversation switch doesn't misroute the message.
@@ -2195,18 +2259,21 @@ const ChatView: React.FC = () => {
     const targetDirectUserId = override?.targetDirectUserId ?? activeDirectUserId;
     const effectiveText = override?.content ?? messageText;
     const effectiveAttachment = (override?.attachmentUrl ?? attachmentUrl).trim();
-    if ((!effectiveText.trim() && !effectiveAttachment) || !user || isSending) return;
+    // A scheduled fire must not inherit the composer's reply context or clear the
+    // user's half-typed draft — it is not a composer action.
+    const fromScheduler = !!override?.fromScheduler;
+    if ((!effectiveText.trim() && !effectiveAttachment) || !user || (isSending && !fromScheduler)) return false;
     // Validate attachment URL — block javascript:/data: URIs, allow only https.
     if (effectiveAttachment) {
       try {
         const parsed = new URL(effectiveAttachment);
         if (parsed.protocol !== 'https:') {
           toast({ title: 'URL e pavlefshme', description: 'Lejohen vetëm lidhje https.', variant: 'destructive' });
-          return;
+          return false;
         }
       } catch {
         toast({ title: 'URL e pavlefshme', description: 'Ngjit një URL të plotë https.', variant: 'destructive' });
-        return;
+        return false;
       }
     }
 
@@ -2234,7 +2301,7 @@ const ChatView: React.FC = () => {
         attachmentUrl: effectiveAttachment || undefined,
         ...(mentions.length > 0 ? { mentions } as any : {}),
         ...(isClientChannel && targetMode === 'channel' ? { senderType: 'staff' as const } : {}),
-        ...(replyingTo ? {
+        ...(replyingTo && !fromScheduler ? {
           replyToId: replyingTo.id,
           replyToContent: (replyingTo.content || '').length > 100 ? (replyingTo.content || '').slice(0, 100) + '…' : (replyingTo.content || ''),
           replyToSender: getUserDisplayName(replyingTo.senderId),
@@ -2243,15 +2310,15 @@ const ChatView: React.FC = () => {
 
       if (targetMode === 'channel' && !targetChannel) {
         toast({ title: 'Zgjidh një kanal', description: 'Asnjë kanal aktiv për të dërguar.', variant: 'destructive' });
-        return;
+        return false;
       }
       if (targetMode === 'direct' && !targetDirectUserId) {
         toast({ title: 'Zgjidh një bisedë', description: 'Hap një DM për të dërguar.', variant: 'destructive' });
-        return;
+        return false;
       }
       if (targetMode !== 'channel' && targetMode !== 'direct') {
         toast({ title: 'Modaliteti nuk lejon dërgim', description: 'Përdor kanal ose DM për mesazhe me imazh.', variant: 'destructive' });
-        return;
+        return false;
       }
 
       if (targetMode === 'channel') {
@@ -2454,7 +2521,7 @@ const ChatView: React.FC = () => {
         // writes the person's row AND her reply (api/_nazmije.ts). Text only.
         if (!finalText.trim()) {
           toast({ title: nazmije.displayName, description: 'Më shkruaj me fjalë — bashkëngjitjet nuk i lexoj dot.' });
-          return;
+          return false;
         }
         try {
           const r = await askNazmije({ teamId: getGlobalTeamId(), text: finalText });
@@ -2462,7 +2529,7 @@ const ChatView: React.FC = () => {
         } catch (err) {
           const reason = err instanceof NazmijeApiError && err.blocked ? NAZMIJE_BLOCK_LABELS[err.blocked] : (err as Error)?.message;
           toast({ title: `${nazmije.displayName} nuk u përgjigj`, description: reason || 'Provo pas pak.', variant: 'destructive' });
-          return;
+          return false;
         }
       } else if (targetDirectUserId) {
         const createdDm = await messageMutation.create({ ...baseMessage, receiverId: targetDirectUserId } as Omit<ChatMessage, 'id'>);
@@ -2494,17 +2561,21 @@ const ChatView: React.FC = () => {
         } as any).catch(() => { /* non-blocking */ });
       }
 
-      setMessageText('');
-      setAttachmentUrl('');
-      setShowAttachmentInput(false);
-      setReplyingTo(null);
-      // Reset textarea height
-      if (chatTextareaRef.current) chatTextareaRef.current.style.height = 'auto';
-      const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${[user.uid, activeDirectUserId].sort().join('-')}`;
-      const ex = typingIndicators?.find((t: any) => t.userId === user.uid && t.channelId === channelOrDm);
-      if (ex) typingMutation.remove(ex.id).catch(() => {});
+      if (!fromScheduler) {
+        setMessageText('');
+        setAttachmentUrl('');
+        setShowAttachmentInput(false);
+        setReplyingTo(null);
+        // Reset textarea height
+        if (chatTextareaRef.current) chatTextareaRef.current.style.height = 'auto';
+        const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${[user.uid, activeDirectUserId].sort().join('-')}`;
+        const ex = typingIndicators?.find((t: any) => t.userId === user.uid && t.channelId === channelOrDm);
+        if (ex) typingMutation.remove(ex.id).catch(() => {});
+      }
+      return true;
     } catch (err) {
       toast({ title: 'Dërgimi dështoi', description: err instanceof Error ? err.message : 'Gabim', variant: 'destructive' });
+      return false;
     }
   };
 
@@ -2552,6 +2623,14 @@ const ChatView: React.FC = () => {
       toast({ title: 'Reaksioni dështoi', description: 'Provo përsëri.', variant: 'destructive' });
     }
   };
+  // Latest-instance refs for long-lived listeners (the window keydown handler and
+  // the 30s scheduled-message poll): a `[]`-deps effect otherwise captures the
+  // FIRST render's closure — whose `messages` is empty, so the 1–5 shortcuts could
+  // never see an existing reaction and a scheduled fire routed on stale state.
+  const handleReactionRef = useRef(handleReaction);
+  handleReactionRef.current = handleReaction;
+  const handleSendMessageRef = useRef(handleSendMessage);
+  handleSendMessageRef.current = handleSendMessage;
 
   // Pin / Unpin (per-channel/DM)
   const handleTogglePin = async (msg: ChatMessage) => {
@@ -2575,11 +2654,10 @@ const ChatView: React.FC = () => {
       const emoji = EMOJI_REACTIONS[n - 1];
       if (!emoji) return;
       e.preventDefault();
-      handleReaction(msgId, emoji);
+      handleReactionRef.current(msgId, emoji);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Voice notes — record, upload, send as audio attachment
@@ -2887,6 +2965,14 @@ const ChatView: React.FC = () => {
 
   useEffect(() => {
     if (chatMode !== 'channel' || !user || !activeChannel) return;
+    // A channel that is NEITHER a client thread NOR a (loaded) group gets no mark
+    // pass at all. Fixed channels are gone, so the only way to land here is the
+    // deep-link race: a push `?channel=<groupId>` on a cold load resolves the
+    // messages query BEFORE `allGroups` (which waits for the global businessId),
+    // and the old generic `isRead: true` branch then marked the whole group read
+    // for EVERY member — without touching `readBy`, and unrepairably, because
+    // markedAsReadRef already held the ids when the group finally loaded.
+    if (!isClientChannel && !isGroupChannel) return;
     // Snapshot the active channel — guard against rapid switches (mirror of the DM path)
     const snapshotChannel = activeChannel;
     // Union the open conversation's messages with the ALWAYS-ON background unread
@@ -2897,34 +2983,44 @@ const ChatView: React.FC = () => {
       .filter(m => (m as any).channelId === activeChannel);
     const rows = unionById<ChatMessage>(channelMessages, bg);
     const groupMembers = isGroupChannel ? (allGroups || []).find(g => g.id === snapshotChannel)?.members : undefined;
-    const patches: { id: string; patch: Record<string, unknown> }[] = [];
+    const patches: { id: string; patch: Record<string, unknown>; refKey?: string }[] = [];
     rows.forEach(m => {
-      if (m.senderId === user.uid || markedAsReadRef.current.has(m.id)) return;
       if (isGroupChannel) {
         // Per-member read (readBy). `isRead` is flipped ONLY once every other member
         // has read — it is what lets the row leave the shared `isRead == false`
         // window. It used to flip on the FIRST reader, so members B and C never saw
         // a badge for a message A had opened.
-        if (((m as any).readBy || []).includes(user.uid)) return;
-        const patch: Record<string, unknown> = { readBy: arrayUnion(user.uid) };
-        if (groupFullyReadAfter(m as any, user.uid, groupMembers)) patch.isRead = true;
-        patches.push({ id: m.id, patch });
-      } else if (isClientChannel) {
+        const readBy: string[] = (m as any).readBy || [];
+        const isSender = m.senderId === user.uid;
+        const fullyRead = groupFullyReadAfter(m as any, user.uid, groupMembers);
+        if (!isSender && !readBy.includes(user.uid) && !markedAsReadRef.current.has(m.id)) {
+          const patch: Record<string, unknown> = { readBy: arrayUnion(user.uid) };
+          if (fullyRead) patch.isRead = true;
+          patches.push({ id: m.id, patch });
+        } else if (fullyRead && !m.isRead && !markedAsReadRef.current.has(`flip:${m.id}`)) {
+          // REPAIR: two members reading simultaneously each snapshot `readBy`
+          // without the other, so neither write completed the flip — and nothing
+          // ever retried it, leaving a fully-read row squatting in the shared
+          // 200-row unread window forever. Any later viewer (the sender included)
+          // finishes the flip here.
+          patches.push({ id: m.id, patch: { isRead: true }, refKey: `flip:${m.id}` });
+        }
+        return;
+      }
+      if (m.senderId === user.uid || markedAsReadRef.current.has(m.id)) return;
+      if (isClientChannel) {
         if (m.isRead) return;
         // Only the CLIENT's messages get a staff read receipt. A colleague's message
         // to the client is flushed from the unread window (isRead) but never gets
         // `readAt` — that field is the client's receipt ("✓✓ Parë"), written by the
         // portal alone; staff opening the thread used to forge it.
         patches.push({ id: m.id, patch: isUnreadClientMessage(m, user.uid) ? { isRead: true, readAt: new Date() } : { isRead: true } });
-      } else {
-        if (m.isRead) return;
-        patches.push({ id: m.id, patch: { isRead: true } });
       }
     });
     if (patches.length === 0) return;
-    patches.forEach(p => markedAsReadRef.current.add(p.id));
+    patches.forEach(p => markedAsReadRef.current.add(p.refKey || p.id));
     if (activeChannel !== snapshotChannel || chatMode !== 'channel') {
-      patches.forEach(p => markedAsReadRef.current.delete(p.id));
+      patches.forEach(p => markedAsReadRef.current.delete(p.refKey || p.id));
       return;
     }
     commitReadMarks(patches, 'channel');
@@ -3207,6 +3303,38 @@ const ChatView: React.FC = () => {
                 onSelect: () => handleSelectChannel(cid),
               });
             });
+            // Client PROJECT threads (client-<cid>-project-<pid>, written by the
+            // portal). The unread model counts them under their FULL channelId, but
+            // the unified list only had rows for the parent `client-<cid>` — so a
+            // project-thread message raised the total badge with NO row to open or
+            // clear it (the project sub-rows were lost in the UnifiedChatList
+            // migration; the old sectioned sidebar that showed them is dead code).
+            const projectChannelIds = new Set<string>();
+            clientUnreadMap.forEach((_, ch) => { if (/-project-/.test(ch)) projectChannelIds.add(ch); });
+            (recentClientMsgs || []).forEach(m => {
+              const ch = (m as any).channelId;
+              if (typeof ch === 'string' && ch.startsWith('client-') && ch.includes('-project-')) projectChannelIds.add(ch);
+            });
+            projectChannelIds.forEach(ch => {
+              const match = ch.match(/^client-(.+?)-project-(.+)$/);
+              if (!match) return;
+              const cust = (customers || []).find(x => x.id === match[1]);
+              if (!cust) return; // not this tenant's
+              const proj = (projects || []).find(p => p.id === match[2]);
+              const lastMs = Math.max(0, ...(recentClientMsgs || [])
+                .filter(m => (m as any).channelId === ch)
+                .map(m => getTimestampMs(m.createdAt)));
+              convs.push({
+                key: 'cp-' + ch, type: 'client',
+                name: `${cust.name || 'Klient'} · ${proj?.name || 'Projekt'}`,
+                preview: '📁 Bisedë projekti',
+                time: lastMs,
+                unread: clientUnreadMap.get(ch) || 0,
+                initials: ((proj?.name || cust.name || 'P').slice(0, 2)).toUpperCase(),
+                isActive: chatMode === 'channel' && activeChannel === ch,
+                onSelect: () => handleSelectChannel(ch),
+              });
+            });
             // Staff DMs (existing convos + all active members so new DMs can start)
             const staffIds = new Set<string>(directConversations || []);
             (teamMembers || []).forEach(m => { if (m.userId && m.userId !== user?.uid && !(m as any).isBot) staffIds.add(m.userId); });
@@ -3229,6 +3357,7 @@ const ChatView: React.FC = () => {
     return convs;
   }, [myGroups, customers, portalAccess, teamMembers, directConversations, dmLastMessageMap, clientRecencyMap,
       channelUnreadMap, clientUnreadMap, directUnreadMap, chatMode, activeChannel, activeDirectUserId, user?.uid,
+      projects, recentClientMsgs,
       getUserDisplayName, getUserStatus, isOnline, handleSelectAi, handleSelectChannel, handleSelectDirectMessage]);
 
   if (chatMode !== 'ai' && isPending) {
@@ -4516,8 +4645,12 @@ const ChatView: React.FC = () => {
                   <div className="flex items-center gap-2 px-3 py-1.5 mb-2 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-900/40 text-xs">
                     <Clock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
                     <span className="text-amber-700 dark:text-amber-300 truncate flex-1">
-                      {pendingScheduledForCurrent.length} mesazh{pendingScheduledForCurrent.length === 1 ? '' : 'e'} i programuar
-                      {pendingScheduledForCurrent[0]?.scheduledAt && ` · ${new Date(pendingScheduledForCurrent[0].scheduledAt).toLocaleString('sq-AL', { dateStyle: 'short', timeStyle: 'short' })}`}
+                      {pendingScheduledForCurrent[0]?.error
+                        ? `Mesazhi i programuar dështoi — ${String(pendingScheduledForCurrent[0].error).slice(0, 60)}`
+                        : <>
+                            {pendingScheduledForCurrent.length} mesazh{pendingScheduledForCurrent.length === 1 ? '' : 'e'} i programuar
+                            {pendingScheduledForCurrent[0]?.scheduledAt && ` · ${new Date(pendingScheduledForCurrent[0].scheduledAt).toLocaleString('sq-AL', { dateStyle: 'short', timeStyle: 'short' })}`}
+                          </>}
                     </span>
                     <button
                       type="button"
