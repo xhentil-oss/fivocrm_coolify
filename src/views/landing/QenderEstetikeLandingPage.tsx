@@ -39,7 +39,7 @@ const PAINS = [
   { title: 'Përmbajtje pa histori', desc: 'Fotot e rastit nuk tregojnë as profesionalizmin, as rezultatin. Klienti nuk gjen arsye për t\'ju besuar.' },
 ];
 
-// Hinka e klientëve — katër hapat nga i panjohuri te klienti i rregullt.
+// Funeli i klientëve — katër hapat nga i panjohuri te klienti i rregullt.
 const FUNNEL = [
   {
     icon: Eye, step: '01', name: 'Vëmendja', width: 'w-full',
@@ -89,7 +89,7 @@ interface Pkg { id: string; name: string; price: number; tagline: string; badge?
 const PACKAGES: Pkg[] = [
   {
     id: 'esenca', name: 'Esenca', price: 80000,
-    tagline: 'Hinka e plotë, me përmbajtjen bazë që e ushqen çdo muaj.',
+    tagline: 'Funeli i plotë, me përmbajtjen bazë që e ushqen çdo muaj.',
     items: [
       '3 fushata Meta + 1 fushatë Google',
       'Gjenerim kontaktesh: formular, WhatsApp, thirrje',
@@ -157,7 +157,7 @@ const POSTS_TOTAL = POSTS.reduce((sum, p) => sum + p.n, 0);
 const TIMELINE = [
   { week: 'Java 1', title: 'Njohja dhe strategjia', desc: 'Takim në qendër, trajtimet që sjellin më shumë fitim, auditimi i profileve dhe qasja në llogaritë e reklamave.' },
   { week: 'Java 2', title: 'Përmbajtja dhe faqja', desc: 'Dita e parë e xhirimit, plani mujor për miratim dhe faqja e rezervimit, gati për përdorim.' },
-  { week: 'Java 3', title: 'Hinka vihet në punë', desc: 'Fushatat e vëmendjes, të kontakteve dhe të rimarketingut nisin njëkohësisht.' },
+  { week: 'Java 3', title: 'Funeli vihet në punë', desc: 'Fushatat e vëmendjes, të kontakteve dhe të rimarketingut nisin njëkohësisht.' },
   { week: 'Java 4', title: 'Matja e parë', desc: 'Optimizimi i parë sipas kostos për takim dhe raporti i parë me numra realë.' },
 ];
 
@@ -169,12 +169,12 @@ const PROMISES = [
 
 const FAQ = [
   { q: 'A përfshihet buxheti i reklamave në çmim?', a: 'Jo. Çmimi mbulon menaxhimin, strategjinë dhe përmbajtjen. Buxheti i reklamave paguhet drejtpërdrejt te Meta dhe Google nga llogaria juaj. Për një qendër estetike rekomandojmë të nisni me 30.000–60.000 Lekë në muaj.' },
-  { q: 'Kur vijnë kontaktet e para?', a: 'Fushatat nisin brenda javës së tretë dhe kontaktet e para vijnë zakonisht që në ditët e para. Hinka e gjen ritmin e saj pas 6–8 javësh, kur rimarketingu ka mbledhur audiencë të mjaftueshme.' },
+  { q: 'Kur vijnë kontaktet e para?', a: 'Fushatat nisin brenda javës së tretë dhe kontaktet e para vijnë zakonisht që në ditët e para. Funeli e gjen ritmin e tij pas 6–8 javësh, kur rimarketingu ka mbledhur audiencë të mjaftueshme.' },
   { q: 'Kush u përgjigjet mesazheve dhe thirrjeve?', a: 'Kontaktet mbërrijnë në FivoCRM dhe në WhatsApp-in tuaj në kohë reale. Rezervimin e bën stafi juaj; ne ju japim mesazhet e gatshme dhe ju tregojmë sa shpejt u përgjigjet secili, sepse shpejtësia vendos takimin.' },
   { q: 'A mund të nis me Esencën dhe të kaloj më lart më vonë?', a: 'Po. Mund të kaloni te Shkëlqimi ose Prestigji në çdo muaj; diferenca faturohet nga muaji pasardhës.' },
   { q: 'Çfarë është A/B testing dhe pse ka rëndësi?', a: 'Për çdo fushatë përgatisim të paktën dy versione — p.sh. dy video ose dy oferta të ndryshme, dhe i shfaqim njëkohësisht. Pas disa ditësh buxheti kalon te versioni që sjell më shumë takime me kosto më të ulët. Kështu reklamat bëhen çdo muaj më efektive, jo më të shtrenjta.' },
   { q: 'Si i trajtoni fotot "para dhe pas"?', a: 'Vetëm me pëlqimin me shkrim të klientes dhe brenda rregullave të Meta-s për reklamat estetike. Pa premtime që nuk mbahen: kjo mbron edhe llogarinë tuaj të reklamave.' },
-  { q: 'Sa zgjat kontrata?', a: 'Të paktën 3 muaj, sepse hinkës i duhet kohë të mësojë se kush rezervon. Pagesa bëhet në fillim të çdo muaji, me faturë.' },
+  { q: 'Sa zgjat kontrata?', a: 'Të paktën 3 muaj, sepse funelit i duhet kohë të mësojë se kush rezervon. Pagesa bëhet në fillim të çdo muaji, me faturë.' },
 ];
 
 const money = (n: number) => Math.round(n).toLocaleString('de-DE');
@@ -216,7 +216,7 @@ export default function QenderEstetikeLandingPage() {
   };
 
   const NAV = [
-    { href: '#hinka', label: 'Hinka' },
+    { href: '#funeli', label: 'Funeli' },
     { href: '#perfshihet', label: 'Çfarë përfshihet' },
     { href: '#paketat', label: 'Paketat' },
     { href: '#faq', label: 'Pyetjet' },
@@ -263,19 +263,19 @@ export default function QenderEstetikeLandingPage() {
             </FadeIn>
             <FadeIn delay={200}>
               <p className="mt-8 text-lg sm:text-xl text-stone-300 max-w-2xl leading-relaxed">
-                Ndërtojmë për qendrën tuaj një hinkë klientësh: reklama që tërheqin vëmendjen, kontakte të reja çdo ditë dhe rimarketing që i kthen të interesuarit në klientë të rregullt —{' '}
+                Ndërtojmë për qendrën tuaj një funel klientësh: reklama që tërheqin vëmendjen, kontakte të reja çdo ditë dhe rimarketing që i kthen të interesuarit në klientë të rregullt —{' '}
                 <strong className="text-white">duke nisur nga 80.000 Lekë në muaj.</strong>
               </p>
             </FadeIn>
             <FadeIn delay={300}>
               <div className="mt-10 flex flex-col sm:flex-row gap-4">
-                <button onClick={() => scrollTo('hinka')} className="group w-full sm:w-auto px-8 py-4 text-lg font-semibold text-white rounded-xl bg-gradient-to-r from-rose-500 to-rose-600 hover:shadow-xl hover:shadow-rose-500/25 transition-all hover:-translate-y-1 flex items-center justify-center gap-2">Si funksionon<ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" /></button>
+                <button onClick={() => scrollTo('funeli')} className="group w-full sm:w-auto px-8 py-4 text-lg font-semibold text-white rounded-xl bg-gradient-to-r from-rose-500 to-rose-600 hover:shadow-xl hover:shadow-rose-500/25 transition-all hover:-translate-y-1 flex items-center justify-center gap-2">Si funksionon<ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" /></button>
                 <button onClick={() => scrollTo('paketat')} className="w-full sm:w-auto px-8 py-4 text-lg font-semibold rounded-xl border border-white/20 hover:bg-white/10 transition-all flex items-center justify-center gap-2">Shiko paketat</button>
               </div>
             </FadeIn>
             <FadeIn delay={400}>
               <div className="mt-14 grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-3xl">
-                {[{ n: '4', l: 'hapat e hinkës' }, { n: '4', l: 'fushata reklamash' }, { n: '15+', l: 'postime në muaj' }, { n: 'A/B', l: 'testim i çdo reklame' }].map((s, i) => (
+                {[{ n: '4', l: 'hapat e funelit' }, { n: '4', l: 'fushata reklamash' }, { n: '15+', l: 'postime në muaj' }, { n: 'A/B', l: 'testim i çdo reklame' }].map((s, i) => (
                   <div key={i} className="rounded-xl bg-white/5 border border-white/10 p-4">
                     <div className="text-3xl font-extrabold text-rose-300">{s.n}</div>
                     <div className="text-xs text-stone-400 mt-1">{s.l}</div>
@@ -306,10 +306,10 @@ export default function QenderEstetikeLandingPage() {
         </div>
       </section>
 
-      {/* ═══ HINKA ═══ */}
-      <section id="hinka" className="py-24 bg-stone-950 text-white">
+      {/* ═══ FUNELI ═══ */}
+      <section id="funeli" className="py-24 bg-stone-950 text-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <FadeIn><div className="text-center mb-16"><p className="text-sm font-semibold uppercase tracking-widest text-rose-300 mb-3">Hinka e klientëve</p><h2 className="text-3xl sm:text-4xl font-bold">Katër hapa, nga i panjohuri te klientja besnike</h2><p className="mt-4 text-stone-400 max-w-2xl mx-auto">Çdo hap ka reklamën, mesazhin dhe matjen e vet. Kështu dimë saktësisht ku na rrëshqet klienti dhe ku duhet ndërhyrë.</p></div></FadeIn>
+          <FadeIn><div className="text-center mb-16"><p className="text-sm font-semibold uppercase tracking-widest text-rose-300 mb-3">Funeli i klientëve</p><h2 className="text-3xl sm:text-4xl font-bold">Katër hapa, nga i panjohuri te klientja besnike</h2><p className="mt-4 text-stone-400 max-w-2xl mx-auto">Çdo hap ka reklamën, mesazhin dhe matjen e vet. Kështu dimë saktësisht ku na rrëshqet klienti dhe ku duhet ndërhyrë.</p></div></FadeIn>
           <div className="space-y-4">
             {FUNNEL.map((f, i) => (
               <FadeIn key={i} delay={i * 120}>
@@ -341,7 +341,7 @@ export default function QenderEstetikeLandingPage() {
       {/* ═══ ÇFARË PËRFSHIHET ═══ */}
       <section id="perfshihet" className="py-24">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <FadeIn><div className="text-center mb-14"><p className="text-sm font-semibold uppercase tracking-widest text-rose-600 mb-3">Çfarë përfshihet</p><h2 className="text-3xl sm:text-4xl font-bold">Bërthama që sjell klientë</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Menaxhimi i reklamave, gjenerimi i kontakteve, rimarketingu dhe testimi i vazhdueshëm — pjesët pa të cilat asnjë hinkë nuk funksionon. Të gjitha përfshihen në çdo paketë.</p></div></FadeIn>
+          <FadeIn><div className="text-center mb-14"><p className="text-sm font-semibold uppercase tracking-widest text-rose-600 mb-3">Çfarë përfshihet</p><h2 className="text-3xl sm:text-4xl font-bold">Bërthama që sjell klientë</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Menaxhimi i reklamave, gjenerimi i kontakteve, rimarketingu dhe testimi i vazhdueshëm — pjesët pa të cilat asnjë funel nuk funksionon. Të gjitha përfshihen në çdo paketë.</p></div></FadeIn>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
             {CORE.map((s, i) => (
               <FadeIn key={i} delay={(i % 4) * 100}>
@@ -405,7 +405,7 @@ export default function QenderEstetikeLandingPage() {
       {/* ═══ PAKETAT ═══ */}
       <section id="paketat" className="py-24">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <FadeIn><div className="text-center mb-14"><p className="text-sm font-semibold uppercase tracking-widest text-rose-600 mb-3">Paketat & çmimet</p><h2 className="text-3xl sm:text-4xl font-bold">Tre nivele, një hinkë e vetme</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Çdo paketë përfshin reklamat, gjenerimin e kontakteve, rimarketingun, A/B testing dhe përmbajtjen. Ndryshojnë sasia e përmbajtjes dhe thellësia e testimit. Rekomandojmë <strong>Shkëlqimin</strong>: me dyfishin e videove dhe testim të avancuar, hinka mëson më shpejt cila reklamë sjell takime.</p></div></FadeIn>
+          <FadeIn><div className="text-center mb-14"><p className="text-sm font-semibold uppercase tracking-widest text-rose-600 mb-3">Paketat & çmimet</p><h2 className="text-3xl sm:text-4xl font-bold">Tre nivele, një funel i vetëm</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Çdo paketë përfshin reklamat, gjenerimin e kontakteve, rimarketingun, A/B testing dhe përmbajtjen. Ndryshojnë sasia e përmbajtjes dhe thellësia e testimit. Rekomandojmë <strong>Shkëlqimin</strong>: me dyfishin e videove dhe testim të avancuar, funeli mëson më shpejt cila reklamë sjell takime.</p></div></FadeIn>
           <div className="grid lg:grid-cols-3 gap-8 max-w-md lg:max-w-none mx-auto">
             {PACKAGES.map((p, i) => {
               const featured = !!p.badge;
@@ -451,7 +451,7 @@ export default function QenderEstetikeLandingPage() {
       {/* ═══ 30 DITËT E PARA ═══ */}
       <section className="py-24 bg-stone-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <FadeIn><div className="text-center mb-16"><p className="text-sm font-semibold uppercase tracking-widest text-rose-600 mb-3">30 ditët e para</p><h2 className="text-3xl sm:text-4xl font-bold">Hinka ndizet brenda javës së tretë</h2></div></FadeIn>
+          <FadeIn><div className="text-center mb-16"><p className="text-sm font-semibold uppercase tracking-widest text-rose-600 mb-3">30 ditët e para</p><h2 className="text-3xl sm:text-4xl font-bold">Funeli ndizet brenda javës së tretë</h2></div></FadeIn>
           <div className="grid md:grid-cols-4 gap-6 relative">
             <div className="hidden md:block absolute top-6 left-[12%] right-[12%] h-px bg-gradient-to-r from-rose-400/50 via-fuchsia-400/50 to-rose-400/50" />
             {TIMELINE.map((s, i) => (
@@ -493,7 +493,7 @@ export default function QenderEstetikeLandingPage() {
                 <h2 className="text-3xl sm:text-4xl font-bold leading-tight">Le ta mbushim kalendarin e qendrës suaj me <span className="text-rose-300">takime të vërteta</span></h2>
                 <p className="mt-5 text-stone-300 leading-relaxed text-lg">Zgjidhni paketën dhe na lini kontaktin. Brenda 24 orëve ju telefonojmë për një takim njohjeje — falas dhe pa asnjë detyrim.</p>
                 <div className="mt-8 space-y-4">
-                  {['Hinkë e plotë: vëmendje, kontakte, rimarketing, A/B testing', 'Çdo kontakt në FivoCRM, me burimin e reklamës', 'Përmbajtje e re çdo muaj: nga 15 postime, foto dhe video'].map((t, i) => (
+                  {['Funel i plotë: vëmendje, kontakte, rimarketing, A/B testing', 'Çdo kontakt në FivoCRM, me burimin e reklamës', 'Përmbajtje e re çdo muaj: nga 15 postime, foto dhe video'].map((t, i) => (
                     <div key={i} className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-emerald-400" /><span className="text-stone-300">{t}</span></div>
                   ))}
                 </div>
