@@ -259,6 +259,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     gradient: 'from-red-600 to-zinc-900',
     status: 'active',
   },
+  {
+    id: 'qender-estetike',
+    title: 'Qendër Estetike — Hinka e Klientëve',
+    description: 'Paketë klienti për qendra estetike, e ndërtuar mbi hinkën e shitjes: menaxhim reklamash Meta + Google, gjenerim kontaktesh, rimarketing dhe krijim kontenti, me llogaritës kthimi. Bërthama 65.000 Lekë/muaj, Bërthama + Kontent 115.000 Lekë/muaj.',
+    path: '/qender-estetike',
+    category: 'Ofertë Klienti',
+    icon: Sparkles,
+    color: 'text-rose-600',
+    gradient: 'from-rose-500 to-fuchsia-700',
+    status: 'active',
+  },
 ];
 
 const CATEGORIES = ['Të gjitha', ...Array.from(new Set(LANDING_PAGES.map((p) => p.category)))];
