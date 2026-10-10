@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   Sparkles, Eye, UserPlus, Repeat, CalendarCheck, CheckCircle2, ArrowRight, ChevronDown, Phone,
   ArrowUpRight, Megaphone, Search, Clapperboard, LayoutGrid, BarChart3, Target,
-  HeartHandshake, AlertCircle, Camera, ShieldCheck, FlaskConical, Zap, Film,
+  HeartHandshake, AlertCircle, Camera, FlaskConical, Zap, Film,
 } from 'lucide-react';
 import ClientLogos from './ClientLogos';
 import LandingMobileMenu from './LandingMobileMenu';
@@ -69,9 +69,9 @@ const FUNNEL = [
 
 // Çfarë përfshihet, me sasitë mujore.
 const CORE = [
-  { icon: Megaphone, qty: '3', unit: 'fushata', title: 'Menaxhimi i reklamave në Meta', desc: 'Facebook dhe Instagram: vëmendje, kontakte të reja dhe rimarketing, secila me buxhetin dhe matjen e vet.' },
+  { icon: Megaphone, qty: '∞', unit: 'fushata pa kufi', title: 'Menaxhimi i reklamave në Meta', desc: 'Facebook dhe Instagram: sa fushata t\'i duhen qendrës suaj — për vëmendje, kontakte të reja dhe rimarketing — secila me buxhetin dhe matjen e vet.' },
   { icon: Search, qty: '1', unit: 'fushatë', title: 'Reklama në Google', desc: 'Për ata që e kërkojnë trajtimin sot. Nga vetë reklama, klienti ju telefonon ose merr udhëzimet për të ardhur në qendër.' },
-  { icon: UserPlus, qty: '∞', unit: 'pa kufi', title: 'Gjenerim kontaktesh', desc: 'Formularë, WhatsApp dhe thirrje — çdo kontakt regjistrohet në FivoCRM me emrin, trajtimin dhe reklamën nga erdhi.' },
+  { icon: UserPlus, qty: '∞', unit: 'pa kufi', title: 'Gjenerim kontaktesh', desc: 'Formularë, WhatsApp dhe thirrje — çdo kontakt regjistrohet në CRM, nëse e keni, me emrin, trajtimin dhe reklamën nga erdhi.' },
   { icon: Repeat, qty: '2', unit: 'audienca', title: 'Rimarketing', desc: 'Rikthejmë ata që u interesuan pa rezervuar, si dhe klientët të cilëve u ka ardhur koha për seancën e radhës.' },
   { icon: FlaskConical, qty: '2+', unit: 'variante / fushatë', title: 'A/B testing', desc: 'Çdo fushatë nis me të paktën dy versione, me pamje, tekst ose ofertë të ndryshme. Buxheti kalon te versioni që sjell takime, jo te ai që na pëlqen më shumë.' },
   { icon: Zap, qty: '5', unit: 'minuta', title: 'Përgjigje e shpejtë', desc: 'Mesazhe të gatshme për WhatsApp dhe Instagram, dhe matja e kohës së përgjigjes së stafit, sepse klientin e fiton kush përgjigjet i pari.' },
@@ -91,14 +91,14 @@ const PACKAGES: Pkg[] = [
     id: 'esenca', name: 'Esenca', price: 80000,
     tagline: 'Funeli i plotë, me përmbajtjen bazë që e ushqen çdo muaj.',
     items: [
-      '3 fushata Meta + 1 fushatë Google',
+      'Fushata Meta pa kufi + 1 fushatë Google',
       'Gjenerim kontaktesh: formular, WhatsApp, thirrje',
       'Rimarketing për 2 audienca',
       'A/B testing: 2 variante për çdo fushatë',
       '15 postime + 4 reels në muaj',
       '1 seancë fotografike në muaj (15 foto)',
       'Menaxhim i Instagram-it dhe Facebook-ut',
-      'Faqe rezervimi + çdo kontakt në FivoCRM',
+      'Faqe rezervimi për reklamat',
       'Raport mujor me koston për takim',
     ],
   },
@@ -161,16 +161,10 @@ const TIMELINE = [
   { week: 'Java 4', title: 'Matja e parë', desc: 'Optimizimi i parë sipas kostos për takim dhe raporti i parë me numra realë.' },
 ];
 
-const PROMISES = [
-  { icon: ShieldCheck, title: 'Llogaritë janë tuajat', desc: 'Reklamat drejtohen nga llogaria juaj e biznesit. Nëse një ditë ndaheni nga ne, gjithçka mbetet e juaja.' },
-  { icon: BarChart3, title: 'Numra, jo fjalë', desc: 'Çdo muaj e dini sa kushtoi një kontakt dhe një takim. Asnjë "shikim" nuk paraqitet si rezultat.' },
-  { icon: CheckCircle2, title: 'Asgjë pa miratimin tuaj', desc: 'Planin e përmbajtjes dhe çdo video i miratoni ju, para se të publikohen.' },
-];
-
 const FAQ = [
   { q: 'A përfshihet buxheti i reklamave në çmim?', a: 'Jo. Çmimi mbulon menaxhimin, strategjinë dhe përmbajtjen. Buxheti i reklamave paguhet drejtpërdrejt te Meta dhe Google nga llogaria juaj. Për një qendër estetike rekomandojmë të nisni me 30.000–60.000 Lekë në muaj.' },
   { q: 'Kur vijnë kontaktet e para?', a: 'Fushatat nisin brenda javës së tretë dhe kontaktet e para vijnë zakonisht që në ditët e para. Funeli e gjen ritmin e tij pas 6–8 javësh, kur rimarketingu ka mbledhur audiencë të mjaftueshme.' },
-  { q: 'Kush u përgjigjet mesazheve dhe thirrjeve?', a: 'Kontaktet mbërrijnë në FivoCRM dhe në WhatsApp-in tuaj në kohë reale. Rezervimin e bën stafi juaj; ne ju japim mesazhet e gatshme dhe ju tregojmë sa shpejt u përgjigjet secili, sepse shpejtësia vendos takimin.' },
+  { q: 'Kush u përgjigjet mesazheve dhe thirrjeve?', a: 'Kontaktet mbërrijnë në WhatsApp-in tuaj në kohë reale, si dhe në CRM, nëse e keni. Rezervimin e bën stafi juaj; ne ju japim mesazhet e gatshme dhe ju tregojmë sa shpejt u përgjigjet secili, sepse shpejtësia vendos takimin.' },
   { q: 'A mund të nis me Esencën dhe të kaloj më lart më vonë?', a: 'Po. Mund të kaloni te Shkëlqimi ose Prestigji në çdo muaj; diferenca faturohet nga muaji pasardhës.' },
   { q: 'Çfarë është A/B testing dhe pse ka rëndësi?', a: 'Për çdo fushatë përgatisim të paktën dy versione — p.sh. dy video ose dy oferta të ndryshme, dhe i shfaqim njëkohësisht. Pas disa ditësh buxheti kalon te versioni që sjell më shumë takime me kosto më të ulët. Kështu reklamat bëhen çdo muaj më efektive, jo më të shtrenjta.' },
   { q: 'Si i trajtoni fotot "para dhe pas"?', a: 'Vetëm me pëlqimin me shkrim të klientes dhe brenda rregullave të Meta-s për reklamat estetike. Pa premtime që nuk mbahen: kjo mbron edhe llogarinë tuaj të reklamave.' },
@@ -275,7 +269,7 @@ export default function QenderEstetikeLandingPage() {
             </FadeIn>
             <FadeIn delay={400}>
               <div className="mt-14 grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-3xl">
-                {[{ n: '4', l: 'hapat e funelit' }, { n: '4', l: 'fushata reklamash' }, { n: '15+', l: 'postime në muaj' }, { n: 'A/B', l: 'testim i çdo reklame' }].map((s, i) => (
+                {[{ n: '4', l: 'hapat e funelit' }, { n: '∞', l: 'fushata në Meta' }, { n: '15+', l: 'postime në muaj' }, { n: 'A/B', l: 'testim i çdo reklame' }].map((s, i) => (
                   <div key={i} className="rounded-xl bg-white/5 border border-white/10 p-4">
                     <div className="text-3xl font-extrabold text-rose-300">{s.n}</div>
                     <div className="text-xs text-stone-400 mt-1">{s.l}</div>
@@ -290,7 +284,7 @@ export default function QenderEstetikeLandingPage() {
       {/* ═══ PROBLEMI ═══ */}
       <section className="py-24 bg-stone-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <FadeIn><div className="text-center mb-16"><p className="text-sm font-semibold uppercase tracking-widest text-rose-600 mb-3">Ku humbasin klientët</p><h2 className="text-3xl sm:text-4xl font-bold">Ndjekës keni. Pse kalendari nuk mbushet?</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Shumica e qendrave estetike nuk e kanë problemin te cilësia e punës. E kanë te rruga që bën një klient i ri, nga telefoni deri te shtrati i trajtimit.</p></div></FadeIn>
+          <FadeIn><div className="text-center mb-16"><p className="text-sm font-semibold uppercase tracking-widest text-rose-600 mb-3">Ku humbasin klientët</p><h2 className="text-3xl sm:text-4xl font-bold">Ndjekës keni. Pse kalendari nuk mbushet?</h2><p className="mt-4 text-stone-600 max-w-2xl mx-auto">Shumica e qendrave estetike nuk e kanë problemin te cilësia e punës. E kanë te rruga që bën një klient i ri, nga telefoni deri te klinika juaj.</p></div></FadeIn>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
             {PAINS.map((p, i) => (
               <FadeIn key={i} delay={i * 100}>
@@ -434,17 +428,6 @@ export default function QenderEstetikeLandingPage() {
             })}
           </div>
           <p className="mt-8 text-center text-xs text-stone-400">Buxheti i reklamave dhe pagesa e influencerëve paguhen veçmas. Çmimet pa TVSH. Kontratë minimale 3 muaj.</p>
-
-          <div className="grid md:grid-cols-3 gap-6 mt-16">
-            {PROMISES.map((s, i) => (
-              <FadeIn key={i} delay={i * 100}>
-                <div className="rounded-2xl bg-stone-50 p-6 h-full flex gap-4">
-                  <div className="w-11 h-11 rounded-xl bg-white flex items-center justify-center flex-shrink-0 shadow-sm"><s.icon className="w-5 h-5 text-rose-500" /></div>
-                  <div><h3 className="font-bold mb-1">{s.title}</h3><p className="text-sm text-stone-600 leading-relaxed">{s.desc}</p></div>
-                </div>
-              </FadeIn>
-            ))}
-          </div>
         </div>
       </section>
 
@@ -493,7 +476,7 @@ export default function QenderEstetikeLandingPage() {
                 <h2 className="text-3xl sm:text-4xl font-bold leading-tight">Le ta mbushim kalendarin e qendrës suaj me <span className="text-rose-300">takime të vërteta</span></h2>
                 <p className="mt-5 text-stone-300 leading-relaxed text-lg">Zgjidhni paketën dhe na lini kontaktin. Brenda 24 orëve ju telefonojmë për një takim njohjeje — falas dhe pa asnjë detyrim.</p>
                 <div className="mt-8 space-y-4">
-                  {['Funel i plotë: vëmendje, kontakte, rimarketing, A/B testing', 'Çdo kontakt në FivoCRM, me burimin e reklamës', 'Përmbajtje e re çdo muaj: nga 15 postime, foto dhe video'].map((t, i) => (
+                  {['Funel i plotë: vëmendje, kontakte, rimarketing, A/B testing', 'Fushata Meta pa kufi në çdo paketë', 'Përmbajtje e re çdo muaj: nga 15 postime, foto dhe video'].map((t, i) => (
                     <div key={i} className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-emerald-400" /><span className="text-stone-300">{t}</span></div>
                   ))}
                 </div>

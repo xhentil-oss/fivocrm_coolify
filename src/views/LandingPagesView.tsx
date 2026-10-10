@@ -262,7 +262,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
   {
     id: 'qender-estetike',
     title: 'Qendër Estetike — Funeli i Klientëve',
-    description: 'Paketë klienti për qendra estetike, e ndërtuar mbi funelin e shitjes: menaxhim reklamash Meta + Google, gjenerim kontaktesh, rimarketing, A/B testing dhe përmbajtje (nga 15 postime/muaj, foto, video). Esenca 80.000, Shkëlqimi 120.000, Prestigji 170.000 Lekë/muaj.',
+    description: 'Paketë klienti për qendra estetike, e ndërtuar mbi funelin e shitjes: fushata Meta pa kufi + Google, gjenerim kontaktesh, rimarketing, A/B testing dhe përmbajtje (nga 15 postime/muaj, foto, video). Esenca 80.000, Shkëlqimi 120.000, Prestigji 170.000 Lekë/muaj.',
     path: '/qender-estetike',
     category: 'Ofertë Klienti',
     icon: Sparkles,
