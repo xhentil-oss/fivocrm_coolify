@@ -12,6 +12,8 @@ import { recurringOccurrenceId } from '../lib/finance/recurringInvoices';
 import { normalizePlannedRoles, plannedFieldsPatch } from '../lib/finance/projectBudget';
 import { buildRateCard } from '../lib/finance/costRates';
 import { resolveFinanceSettings } from '../lib/finance/profitabilityCore';
+import { projectInvoiceLines } from '../lib/finance/projectInvoiceLines';
+import { cleanServiceMixInput, projectServiceMix, labelerFor } from '../lib/finance/serviceMix';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { useMemberCompensation } from '../hooks/useMemberCompensation';
 import PlannedRolesEditor from '../components/projects/PlannedRolesEditor';
@@ -39,6 +41,7 @@ import {
   RefreshCw,
   Archive,
   ArchiveRestore,
+  X,
 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -352,6 +355,9 @@ const ProjectsView: React.FC = () => {
     if (selectedServiceIdsStr) {
       try { selectedServiceIds = JSON.parse(selectedServiceIdsStr); } catch { selectedServiceIds = undefined; }
     }
+    // Explicit split across service lines (department P&L); empty = derived.
+    let serviceMix: Array<{ line: string; pct: number }> = [];
+    try { serviceMix = cleanServiceMixInput(JSON.parse((formData.get('serviceMix') as string) || '[]')); } catch { serviceMix = []; }
     // Staffing budget (hours per role), engagement end and recognition method —
     // see src/lib/finance/projectBudget.ts / revenueRecognition.ts.
     let plannedRoles: ReturnType<typeof normalizePlannedRoles> = [];
@@ -398,6 +404,7 @@ const ProjectsView: React.FC = () => {
       recurringEndDate: isRecurring ? recurringEndDate : undefined,
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
       serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
+      serviceMix: serviceMix.length > 0 ? serviceMix : undefined,
       endDate,
       recognitionMethod,
       targetMarginPct,
@@ -523,29 +530,21 @@ const ProjectsView: React.FC = () => {
           description: 'Kjo periudhë ishte faturuar tashmë — nuk u krijua faturë e dytë.',
         });
       } else {
-      // Create invoiceItems for selected services. When the project is priced by
-      // BUDGET (no services picked) we still write one line — otherwise the invoice
-      // carries a total with nothing itemised and the detail/PDF renders empty.
-      const pickedServices = (selectedServiceIds || [])
-        .map(id => services?.find(s => s.id === id))
-        .filter(Boolean) as typeof services;
-      if (pickedServices && pickedServices.length > 0) {
-        for (const service of pickedServices) {
-          await invoiceItemMutation.create({
-            invoiceId: occurrenceId,
-            serviceId: service.id,
-            quantity: 1,
-            unitPrice: service.price || 0,
-            totalPrice: service.price || 0,
-          } as any);
-        }
-      } else {
+      // One line per service, the invoice TOTAL split across them (explicit
+      // serviceMix, else catalogue price) so the lines add up to the invoice and
+      // the department P&L can put each service's share in its own department.
+      // Same function as the recurring cron (api/_projectInvoiceLines.ts).
+      for (const line of projectInvoiceLines({
+        total: billableTotal, projectName: name,
+        serviceIds: selectedServiceIds, serviceMix, services: services || [],
+      })) {
         await invoiceItemMutation.create({
           invoiceId: occurrenceId,
-          description: name,
+          ...(line.serviceId ? { serviceId: line.serviceId } : {}),
+          description: line.description,
           quantity: 1,
-          unitPrice: billableTotal,
-          totalPrice: billableTotal,
+          unitPrice: line.amount,
+          totalPrice: line.amount,
         } as any);
       }
 
@@ -585,29 +584,21 @@ const ProjectsView: React.FC = () => {
         dueDate,
       } as any);
 
-      // Create invoiceItems for selected services. When the project is priced by
-      // BUDGET (no services picked) we still write one line — otherwise the invoice
-      // carries a total with nothing itemised and the detail/PDF renders empty.
-      const pickedServices = (selectedServiceIds || [])
-        .map(id => services?.find(s => s.id === id))
-        .filter(Boolean) as typeof services;
-      if (pickedServices && pickedServices.length > 0) {
-        for (const service of pickedServices) {
-          await invoiceItemMutation.create({
-            invoiceId: (newInvoice as any).id,
-            serviceId: service.id,
-            quantity: 1,
-            unitPrice: service.price || 0,
-            totalPrice: service.price || 0,
-          } as any);
-        }
-      } else {
+      // One line per service, the invoice TOTAL split across them (explicit
+      // serviceMix, else catalogue price) so the lines add up to the invoice and
+      // the department P&L can put each service's share in its own department.
+      // Same function as the recurring cron (api/_projectInvoiceLines.ts).
+      for (const line of projectInvoiceLines({
+        total: billableTotal, projectName: name,
+        serviceIds: selectedServiceIds, serviceMix, services: services || [],
+      })) {
         await invoiceItemMutation.create({
           invoiceId: (newInvoice as any).id,
-          description: name,
+          ...(line.serviceId ? { serviceId: line.serviceId } : {}),
+          description: line.description,
           quantity: 1,
-          unitPrice: billableTotal,
-          totalPrice: billableTotal,
+          unitPrice: line.amount,
+          totalPrice: line.amount,
         } as any);
       }
     }
@@ -772,6 +763,11 @@ const ProjectsView: React.FC = () => {
     if (selectedServiceIdsStr) {
       try { selectedServiceIds = JSON.parse(selectedServiceIdsStr); } catch { selectedServiceIds = undefined; }
     }
+    // Explicit split across service lines (department P&L). Only sent by a form
+    // that showed the editor (canSeeBudget) — absent means "leave it as it is".
+    const serviceMixSent = formData.has('serviceMix');
+    let serviceMix: Array<{ line: string; pct: number }> = [];
+    try { serviceMix = cleanServiceMixInput(JSON.parse((formData.get('serviceMix') as string) || '[]')); } catch { serviceMix = []; }
     // Staffing budget (hours per role), engagement end and recognition method —
     // see src/lib/finance/projectBudget.ts / revenueRecognition.ts.
     let plannedRoles: ReturnType<typeof normalizePlannedRoles> = [];
@@ -909,6 +905,8 @@ const ProjectsView: React.FC = () => {
             : { isRecurring: false })),
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
       serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
+      // null CLEARS an emptied split; not sent at all (no editor shown) = untouched.
+      ...(serviceMixSent ? { serviceMix: serviceMix.length > 0 ? serviceMix : null } : {}),
       // Explicit null CLEARS (removeUndefined strips undefined — see formValue.ts).
       endDate: endDate ?? null,
       recognitionMethod: recognitionMethod ?? null,
@@ -1610,6 +1608,11 @@ const ProjectForm: React.FC<{
     initialData?.billingDayOfMonth ? String(initialData.billingDayOfMonth) : '',
   );
   const [serviceCategory, setServiceCategory] = useState<string>('__all__');
+  // Explicit split of the fee across service lines (SEO 40 / Ads 60) — what the
+  // department P&L and the invoice lines use. Empty = derived from the services.
+  const [serviceMixRows, setServiceMixRows] = useState<Array<{ line: string; pct: string }>>(
+    () => ((initialData as any)?.serviceMix || []).map((r: { line: string; pct: number }) => ({ line: r.line, pct: String(r.pct) })),
+  );
   const { getName } = useUserNames(teamMembers || []);
 
   // ── Staffing budget, engagement end, recognition (client profitability) ──
@@ -1656,6 +1659,23 @@ const ProjectForm: React.FC<{
       .reduce((sum, s) => sum + (s.price || 0), 0);
   }, [services, selectedServiceIds]);
 
+  // What the split would be WITHOUT explicit rows — shown as the placeholder, so
+  // the owner sees what "automatik" means before overriding it.
+  const derivedMix = React.useMemo(() => {
+    const ids = selectedServiceIds.length > 0 ? selectedServiceIds : ((initialData as any)?.serviceIds || []);
+    const dept = department !== '__none__' ? department : undefined;
+    return projectServiceMix(
+      { id: 'draft', serviceIds: ids, department: dept } as Project,
+      new Map((services || []).map(s => [s.id, s])),
+      labelerFor(services, []),
+    );
+  }, [selectedServiceIds, initialData, department, services]);
+  const serviceMixTotal = serviceMixRows.reduce((t, r) => t + (parseFloat(r.pct) || 0), 0);
+  const serviceMixLineOptions = React.useMemo(
+    () => [...new Set([...serviceCategories, ...serviceMixRows.map(r => r.line).filter(Boolean)])],
+    [serviceCategories, serviceMixRows],
+  );
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -1678,6 +1698,9 @@ const ProjectForm: React.FC<{
     if (billingDayOfMonth) formData.set('billingDayOfMonth', billingDayOfMonth);
     formData.set('memberUserIds', JSON.stringify(memberUserIds));
     formData.set('selectedServiceIds', JSON.stringify(selectedServiceIds));
+    if (canSeeBudget) {
+      formData.set('serviceMix', JSON.stringify(serviceMixRows.map(r => ({ line: r.line, pct: parseFloat(r.pct) }))));
+    }
     if (endDateInput) formData.set('endDate', endDateInput);
     if (billingType === 'one-time' && recognitionMethod !== '__auto__') formData.set('recognitionMethod', recognitionMethod);
     formData.set('plannedRoles', JSON.stringify(normalizePlannedRoles(plannedRoles)));
@@ -1958,6 +1981,81 @@ const ProjectForm: React.FC<{
           P.sh. Social, SEO, Web — përdoret te "Fitimi sipas departamentit" për të parë sa fiton nga secili.
         </p>
       </div>
+
+      {/* Split across service lines — one project, several departments */}
+      {canSeeBudget && serviceMixLineOptions.length > 0 && (
+        <div>
+          <Label>Ndarja sipas shërbimit</Label>
+          <p className="text-xs text-muted-foreground mb-2">
+            Kur projekti ka disa shërbime (p.sh. SEO + Ads), secili departament merr pjesën e vet
+            të të ardhurave dhe të kostove. Bosh = automatik
+            {derivedMix.length > 0 && (
+              <> ({derivedMix.map(m => `${m.line} ${Math.round(m.weight * 100)}%`).join(' · ')})</>
+            )}.
+          </p>
+          <div className="space-y-2">
+            {serviceMixRows.map((row, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Select
+                  value={row.line || undefined}
+                  onValueChange={(v) => setServiceMixRows(rows => rows.map((r, j) => (j === i ? { ...r, line: v } : r)))}
+                >
+                  <SelectTrigger className="flex-1" aria-label="Linja e shërbimit">
+                    <SelectValue placeholder="Zgjidh shërbimin" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {serviceMixLineOptions.map(c => (
+                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="relative w-24 shrink-0">
+                  <Input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    inputMode="decimal"
+                    aria-label="Përqindja"
+                    value={row.pct}
+                    onChange={(e) => setServiceMixRows(rows => rows.map((r, j) => (j === i ? { ...r, pct: e.target.value } : r)))}
+                    className="pr-6 text-base sm:text-sm"
+                  />
+                  <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">%</span>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Hiq rreshtin"
+                  onClick={() => setServiceMixRows(rows => rows.filter((_, j) => j !== i))}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setServiceMixRows(rows => (rows.length === 0 && derivedMix.length > 1
+                // Start from the automatic split, so the owner adjusts rather than retypes.
+                ? derivedMix.map(m => ({ line: m.line, pct: String(Math.round(m.weight * 100)) }))
+                : [...rows, { line: '', pct: '' }]))}
+            >
+              <Plus className="mr-1 h-3.5 w-3.5" /> Shto ndarje
+            </Button>
+            {serviceMixRows.length > 0 && (
+              <span className={`text-xs font-medium ${Math.round(serviceMixTotal) === 100 ? 'text-muted-foreground' : 'text-amber-600'}`}>
+                Totali {Math.round(serviceMixTotal * 100) / 100}%
+                {Math.round(serviceMixTotal) !== 100 && ' — do të përshtatet në 100%'}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Billing day — only meaningful for a MONTHLY recurring retainer */}
       {billingType === 'monthly' && (isRecurring || recurringFrequency === 'monthly') && (

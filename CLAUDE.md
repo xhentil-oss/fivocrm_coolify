@@ -611,6 +611,31 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
 - Adding a cost figure anywhere? → read hours through `allocateLabor`/`laborForEntries`,
   never `project.spent`/`laborCost` (those are the cron's denormalised, current-salary copies).
 
+### Department profit by SERVICE line (one project → several departments)
+
+- **`src/lib/finance/serviceMix.ts` is the only answer to "which department(s) does
+  this project / invoice feed"** (unit-tested, `serviceMix.test.ts`). A department is
+  a service line = `Service.category`. Project mix: `project.serviceMix` (explicit
+  %) → `serviceIds` × catalogue price → `project.department` whole. Invoice mix: its
+  own `invoiceItems` (as WEIGHTS — lines rarely sum to the total) → the project mix.
+- `computeDepartmentPnl` slices every project by its mix: revenue and direct cost by
+  weight, LABOUR by the logger's `teamMember.serviceLines` inside the project's lines
+  (`memberLaborSplit`; none/no overlap → the project mix), shared overhead by line
+  hours (labour-hours basis) else weight. Σ slices == project, so totals never move.
+  `attributeCollectedRevenue` splits cash with the same mix. Without `services` /
+  `invoiceItems` both are byte-identical to the old one-department result.
+- **Labels go through `labelerFor(services, projects)`** (case/space-insensitive,
+  catalogue spelling wins) in BOTH engines — Financat merges the two by label.
+- **A project invoice's lines come from `projectInvoiceLines()`**
+  (`src/lib/finance/projectInvoiceLines.ts`, import-free; `api/_projectInvoiceLines.ts`
+  is a byte-identical copy, test-enforced): the TOTAL split per service (explicit
+  `serviceMix` → price weights → one project-name line), summing to the total exactly.
+  Used by ProjectsView (first invoice) AND the Part 2 cron — never write a single
+  free-text line again, or the invoice can no longer be split by department.
+- The split is edited in the project form ("Ndarja sipas shërbimit", Admin/Manager —
+  `canSeeBudget`); `cleanServiceMixInput` cleans it, an emptied editor writes `null`,
+  a form without the editor leaves the field untouched.
+
 ### Finance audit 30 Sep 2026 — laws added (`workspace/FINANCE_AUDIT_2026_09_30.md`)
 
 - **Labour that lands on no row is overhead, never dropped.** `allocateLabor` splits

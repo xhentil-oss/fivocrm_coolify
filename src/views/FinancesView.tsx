@@ -14,7 +14,7 @@ import {
   ResponsiveContainer, ComposedChart, Area, Line, BarChart, Bar, XAxis, YAxis,
   Tooltip, CartesianGrid, ReferenceLine, LabelList,
 } from 'recharts';
-import type { Invoice, Expense, Customer, Project, TeamMember, Team, Subscription, Domain, TimeEntry, FinanceMonthClose } from '../types';
+import type { Invoice, InvoiceItem, Service, Expense, Customer, Project, TeamMember, Team, Subscription, Domain, TimeEntry, FinanceMonthClose } from '../types';
 import { hostingMonthlyRecurringRevenue, hostingRenewalsInWindow } from '../lib/hosting/finance';
 import { useModules } from '../hooks/useModules';
 import {
@@ -209,6 +209,10 @@ const FinancesView: React.FC = () => {
   // Logged hours — the base of every cost figure per client/project (laborAllocation.ts).
   const { data: timeEntries } = useCollection<TimeEntry>('timeEntries', { skipTeamFilter: true });
   const { data: monthCloses } = useCollection<FinanceMonthClose>('financeMonthCloses', { skipTeamFilter: true });
+  // The service catalogue + invoice lines split ONE project across departments
+  // (SEO + Ads on one engagement → each line to its own department; serviceMix.ts).
+  const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
+  const { data: invoiceItems } = useCollection<InvoiceItem>('invoiceItems', { skipTeamFilter: true });
   const tenantSettings = useTeamSettingsData();
   const { user } = useAuth();
   const closeMutation = useMutation<FinanceMonthClose>('financeMonthCloses');
@@ -582,16 +586,16 @@ const FinancesView: React.FC = () => {
   // The accrual columns (budget/invoiced) say what was EARNED; this says what
   // actually arrived, over the same window. See lib/finance/revenueAttribution.ts.
   const collected = useMemo(
-    () => attributeCollectedRevenue(invoices, projects, resolveCollectionWindow(periodOpts)),
-    [invoices, projects, periodOpts],
+    () => attributeCollectedRevenue(invoices, projects, resolveCollectionWindow(periodOpts), { services, invoiceItems }),
+    [invoices, projects, periodOpts, services, invoiceItems],
   );
 
   // ── Department (service-line) P&L — real profit per Social/SEO/Web… ──
   const [expandedDept, setExpandedDept] = useState<string | null>(null);
   const [showPnlHelp, setShowPnlHelp] = useState(false);
   const departmentPnl = useMemo(
-    () => computeDepartmentPnl(projects, teamMembers, expenses, { ...periodOpts, revenueBasis: pnlBasis, invoices, teams, labor, timeEntries }),
-    [projects, teamMembers, expenses, invoices, periodOpts, pnlBasis, teams, labor, timeEntries],
+    () => computeDepartmentPnl(projects, teamMembers, expenses, { ...periodOpts, revenueBasis: pnlBasis, invoices, teams, labor, timeEntries, services, invoiceItems }),
+    [projects, teamMembers, expenses, invoices, periodOpts, pnlBasis, teams, labor, timeEntries, services, invoiceItems],
   );
 
   /**
@@ -637,8 +641,9 @@ const FinancesView: React.FC = () => {
       revenueBasis: pnlBasis, invoices, teams,
       // Hours per month, so the chart's September is the table's September.
       timeEntries, settings: tenantSettings?.financeSettings, rateCard: tenantSettings?.rateCard,
+      services, invoiceItems,
     }),
-    [projects, teamMembers, expenses, invoices, pnlBasis, now, teams, timeEntries, tenantSettings?.financeSettings, tenantSettings?.rateCard],
+    [projects, teamMembers, expenses, invoices, pnlBasis, now, teams, timeEntries, tenantSettings?.financeSettings, tenantSettings?.rateCard, services, invoiceItems],
   );
 
   const customerNameById = useMemo(
@@ -1319,6 +1324,16 @@ const FinancesView: React.FC = () => {
                     </Notice>
                   </div>
                 )}
+                {departmentPnl.splitProjects > 0 && (
+                  <div className="mt-2">
+                    <Notice tone="neutral">
+                      <strong>{departmentPnl.splitProjects} {departmentPnl.splitProjects === 1 ? 'projekt' : 'projekte'}</strong> me
+                      disa shërbime u ndanë sipas shërbimit: secili departament merr pjesën e vet të
+                      të ardhurave (sipas shërbimeve të faturës ose të projektit), orët e njerëzve të vet
+                      dhe pjesën e vet të kostove. Pjesa shfaqet pas emrit të projektit (p.sh. «· 40%»).
+                    </Notice>
+                  </div>
+                )}
               </div>
 
               {departmentRows.rows.length === 0 ? (
@@ -1377,7 +1392,11 @@ const FinancesView: React.FC = () => {
                                   project's revenue and profit sit UNDER their own
                                   headers instead of one column to the left. */}
                               <ProjectLines
-                                lines={d.projects}
+                                // A project split across service lines shows here
+                                // with only this department's share, so say so.
+                                lines={d.projects.map(l => (l.share < 0.9995
+                                  ? { ...l, name: `${l.name} · ${Math.round(l.share * 100)}%` }
+                                  : l))}
                                 indent="pl-[26px]"
                                 basis={pnlBasis}
                                 emptyText="Pa projekte në këtë periudhë — vetëm arkëtime për punë të mëparshme."

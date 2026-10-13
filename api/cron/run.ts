@@ -46,6 +46,7 @@ import { costRateFor, resolveFinanceSettings, budgetAlertsDue, type FinanceSetti
 // catch it (tsconfig.api.json uses moduleResolution "node"), so the guard is
 // src/lib/apiImports.test.ts.
 import { formatMoney } from '../_money.js';
+import { projectInvoiceLines, type InvoiceLineService } from '../_projectInvoiceLines.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 // Constant-time compare: `===` on the secret leaks its length and the position
@@ -2046,7 +2047,34 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
     // businessId + customerId are mandatory: `invoiceItems` is business-isolated and
     // read by the portal via `isPortalClientFor(customerId)`. Without them the line
     // is unreadable by staff AND client — see the Part 1 copy above.
-    legacyOps.push(db.collection('invoiceItems').doc().set({ invoiceId: invoiceRef.id, description: `${project.name} – ${periodLabel}`, quantity: 1, unitPrice: budget, totalPrice: budget, teamId: project.teamId || null, businessId: project.businessId || null, customerId: project.customerId || null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
+    //
+    // One line PER SERVICE (budget split by the project's explicit serviceMix, else
+    // by catalogue price — `_projectInvoiceLines.ts`, byte-identical to the src
+    // copy ProjectsView uses). A single free-text line made every retainer invoice
+    // unsplittable, so the department P&L could not put the SEO part of an
+    // SEO + Ads invoice in SEO and the Ads part in Ads.
+    let lineServices: InvoiceLineService[] = [];
+    const soldIds: string[] = Array.isArray(project.serviceIds) ? project.serviceIds.filter((x: unknown) => typeof x === 'string' && x) : [];
+    if (soldIds.length > 0) {
+      try {
+        const snaps = await db.getAll(...soldIds.slice(0, 30).map(id => db.collection('services').doc(id)));
+        lineServices = snaps
+          // The ids come from this tenant's own project; a legacy service with no
+          // businessId is accepted, one stamped for ANOTHER tenant never is.
+          .filter(sn => sn.exists && (!(sn.data() as any)?.businessId || (sn.data() as any).businessId === project.businessId))
+          .map(sn => ({ id: sn.id, ...(sn.data() as any) }));
+      } catch (err) {
+        // A failed catalogue read must not lose the invoice line: fall back to one line.
+        console.warn('[recurring-invoices] services read failed for', projectDoc.id, err);
+      }
+    }
+    const lines = projectInvoiceLines({
+      total: budget, projectName: project.name || 'Projekt', periodLabel,
+      serviceIds: soldIds, serviceMix: project.serviceMix, services: lineServices,
+    });
+    for (const line of lines) {
+      legacyOps.push(db.collection('invoiceItems').doc().set({ invoiceId: invoiceRef.id, ...(line.serviceId ? { serviceId: line.serviceId } : {}), description: line.description, quantity: 1, unitPrice: line.amount, totalPrice: line.amount, teamId: project.teamId || null, businessId: project.businessId || null, customerId: project.customerId || null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
+    }
 
     if (transporter && smtpUser && project.customerId) {
       try {

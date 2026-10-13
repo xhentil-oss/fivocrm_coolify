@@ -541,6 +541,13 @@ export interface Project {
   lastCompletedAt?: Date; // used for bonus calculation instead of updatedAt
   /** Services attached to the project (used to price the auto-created invoice). */
   serviceIds?: string[];
+  /**
+   * Explicit split of the fee across service lines (`Service.category`), e.g.
+   * [{ line: 'SEO', pct: 40 }, { line: 'Ads', pct: 60 }]. Wins over the split
+   * derived from `serviceIds` × price; unset = derived, else `department`.
+   * Read only through `projectServiceMix()` (src/lib/finance/serviceMix.ts).
+   */
+  serviceMix?: Array<{ line: string; pct: number }>;
   // ── Recurring BILLING (see src/lib/finance/recurringBilling.ts) ──
   /** Pauses automatic invoicing without ending the series. */
   isRecurringPaused?: boolean;

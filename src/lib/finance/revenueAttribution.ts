@@ -1,5 +1,6 @@
-import type { Invoice, Project } from '../../types';
+import type { Invoice, InvoiceItem, Project, Service } from '../../types';
 import { getInvoiceCollectedBetween } from './financialAnalytics';
+import { labelerFor, invoiceServiceMix, projectServiceMix } from './serviceMix';
 
 // ── Collected cash, attributed to a department and a responsible person ──
 //
@@ -71,6 +72,13 @@ export function attributeCollectedRevenue(
   invoices: Invoice[] | undefined | null,
   projects: Project[] | undefined | null,
   window: CollectionWindow,
+  /**
+   * Service catalogue + invoice lines. With them an invoice's cash is split
+   * across departments by its own lines (SEO line → SEO, Ads line → Ads), the
+   * same split computeDepartmentPnl uses — otherwise the two columns of one
+   * department row would disagree. Without them: whole invoice → project.department.
+   */
+  lines: { services?: Service[] | null; invoiceItems?: InvoiceItem[] | null } = {},
 ): CollectedAttribution {
   const result: CollectedAttribution = {
     byDepartment: new Map(),
@@ -82,6 +90,14 @@ export function attributeCollectedRevenue(
   if (!invoices?.length) return result;
 
   const projectById = new Map((projects || []).map(p => [p.id, p]));
+  const servicesById = new Map((lines.services || []).map(s => [s.id, s]));
+  const label = labelerFor(lines.services, projects);
+  const itemsByInvoice = new Map<string, InvoiceItem[]>();
+  for (const it of lines.invoiceItems || []) {
+    if (!it.invoiceId) continue;
+    const list = itemsByInvoice.get(it.invoiceId);
+    if (list) list.push(it); else itemsByInvoice.set(it.invoiceId, [it]);
+  }
 
   for (const inv of invoices) {
     // Same collected basis as the headline number, so the columns reconcile.
@@ -98,8 +114,12 @@ export function attributeCollectedRevenue(
       continue;
     }
 
-    const dept = departmentOf(project);
-    result.byDepartment.set(dept, (result.byDepartment.get(dept) || 0) + collected);
+    const mix = invoiceServiceMix(
+      itemsByInvoice.get(inv.id), servicesById, label, projectServiceMix(project, servicesById, label),
+    );
+    for (const s of mix) {
+      result.byDepartment.set(s.line, (result.byDepartment.get(s.line) || 0) + collected * s.weight);
+    }
 
     // Same fallback as the ACCRUAL row this column is read next to
     // (`computeProjectPnl` → `responsibleUserId || createdByUserId`). Reading

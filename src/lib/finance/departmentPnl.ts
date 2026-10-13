@@ -21,7 +21,7 @@
 // Both are pooled honestly now and reported (`unallocatedDirect`,
 // `unmatchedDepartmentFixed`) rather than absorbed silently.
 
-import type { Project, TeamMember, Expense, Invoice } from '../../types';
+import type { Project, TeamMember, Expense, Invoice, Service, InvoiceItem } from '../../types';
 import { toAll } from '../utils';
 import { parseDate, monthsElapsedInYear, MONTH_LABELS_SQ, getInvoiceCollectedBetween } from './financialAnalytics';
 import { memberSalaryForMonth } from './salaryHistory';
@@ -39,6 +39,15 @@ import { allocateLabor, laborOutsideRows, proratePlanPayroll, type LaborAllocati
 import type { FinanceSettings } from './profitabilityCore';
 import type { RateCardRole } from './costRates';
 import { projectEarnedInPeriod } from './revenueRecognition';
+import {
+  labelerFor,
+  projectServiceMix,
+  invoiceServiceMix,
+  memberServiceLines,
+  memberLaborSplit,
+  normalizeMix,
+  type LineShare,
+} from './serviceMix';
 
 export interface DepartmentPnlOptions {
   mode?: 'all' | 'completed';
@@ -68,6 +77,15 @@ export interface DepartmentPnlOptions {
    */
   labor?: LaborAllocation | null;
   timeEntries?: import('../../types').TimeEntry[] | null;
+  /**
+   * The service catalogue + invoice lines, which let ONE project feed several
+   * departments (SEO + Ads on one engagement -> each line gets its own share of
+   * revenue, of the hours its own people logged, of direct cost and overhead).
+   * See serviceMix.ts. Omit both and every project sits whole in
+   * `project.department` — exactly the old result.
+   */
+  services?: Service[] | null;
+  invoiceItems?: InvoiceItem[] | null;
 }
 
 export interface DeptParticipant { userId: string; name: string; cost: number }
@@ -76,6 +94,10 @@ export interface DeptProjectLine {
   revenue: number; directCost: number; labor: number; overhead: number;
   cost: number; profit: number; margin: number | null;
   participants: DeptParticipant[];
+  /** Fraction of the project's revenue this department line carries (1 = the whole project). */
+  share: number;
+  /** Every department the project is split across (length 1 = not split). */
+  splitAcross: string[];
 }
 export interface DepartmentRow {
   department: string;
@@ -109,11 +131,12 @@ export interface DepartmentPnlResult {
   unallocatedOverhead: number;
   /** Hours model: labour NO row carries (no project / project outside the period), pooled into overhead. */
   laborOutsideRows: number;
+  /** Projects whose revenue/cost were split across more than one department. */
+  splitProjects: number;
   totals: { revenue: number; directCost: number; labor: number; overhead: number; cost: number; profit: number };
 }
 
 const CATEGORY_SALARY = 'Salary';
-const NO_DEPT = 'Pa departament';
 /** Label for recorded payroll that no active member can carry (see below). */
 export const PAYROLL_WITHOUT_MEMBER = 'Paga pa anëtar aktiv';
 
@@ -135,6 +158,7 @@ export function computeDepartmentPnl(
     allocationBasis: 'revenue',
     unallocatedOverhead: 0,
     laborOutsideRows: 0,
+    splitProjects: 0,
     totals: { revenue: 0, directCost: 0, labor: 0, overhead: 0, cost: 0, profit: 0 },
   };
   if (!projects) return empty;
@@ -158,12 +182,40 @@ export function computeDepartmentPnl(
   const useInvoiced = opts.revenueBasis === 'invoiced';
   const invWindow = opts.allTime ? { start: new Date(0), end: now } : { start: periodStart, end: periodEnd };
   const invoicedByProject = new Map<string, number>();
+
+  // ── Service lines: which department(s) each project — and each invoice — feeds ──
+  // Catalogue categories seed the labeler so their spelling wins over a project's
+  // free-text department ("seo" on a project joins the "SEO" service line).
+  const servicesById = new Map((opts.services || []).map(s => [s.id, s]));
+  const label = labelerFor(opts.services, projects);
+  const baseMixCache = new Map<string, LineShare[]>();
+  const baseMixOf = (p: Project): LineShare[] => {
+    let m = baseMixCache.get(p.id);
+    if (!m) { m = projectServiceMix(p, servicesById, label); baseMixCache.set(p.id, m); }
+    return m;
+  };
+  const itemsByInvoice = new Map<string, InvoiceItem[]>();
+  for (const it of opts.invoiceItems || []) {
+    if (!it.invoiceId) continue;
+    const list = itemsByInvoice.get(it.invoiceId);
+    if (list) list.push(it); else itemsByInvoice.set(it.invoiceId, [it]);
+  }
+  const projectByIdAll = new Map(projects.map(p => [p.id, p]));
+  /** Collected cash per project per line — each invoice split by its OWN lines. */
+  const invoicedLinesByProject = new Map<string, Map<string, number>>();
+
   if (useInvoiced) {
     for (const inv of opts.invoices || []) {
       const pid = inv.projectId;
       if (!pid) continue;
       const amt = getInvoiceCollectedBetween(inv, invWindow.start, invWindow.end);
       if (amt) invoicedByProject.set(pid, (invoicedByProject.get(pid) || 0) + amt);
+      const proj = projectByIdAll.get(pid);
+      if (!amt || !proj) continue;
+      const mix = invoiceServiceMix(itemsByInvoice.get(inv.id), servicesById, label, baseMixOf(proj));
+      const byLine = invoicedLinesByProject.get(pid) || new Map<string, number>();
+      for (const s of mix) byLine.set(s.line, (byLine.get(s.line) || 0) + amt * s.weight);
+      invoicedLinesByProject.set(pid, byLine);
     }
   }
 
@@ -266,9 +318,17 @@ export function computeDepartmentPnl(
     projectCountByMember.set(id, (projectCountByMember.get(id) || 0) + 1);
   }));
 
-  // ── Which department does a project belong to? (free-text on the project) ──
-  const deptOfProject = (p: Project): string => ((p as any).department || '').trim() || NO_DEPT;
-  const departmentsInPeriod = new Set(periodProjects.map(deptOfProject));
+  // ── Which department(s) does a project feed? ──
+  // On the cash basis, the mix of what was actually billed and collected (each
+  // invoice by its own lines); otherwise the project's own mix — explicit split,
+  // services sold, or the whole project in `project.department`.
+  const mixByProject = new Map<string, LineShare[]>();
+  for (const p of periodProjects) {
+    const billed = useInvoiced ? invoicedLinesByProject.get(p.id) : undefined;
+    const fromInvoices = billed ? normalizeMix([...billed].map(([line, amount]) => ({ line, amount }))) : [];
+    mixByProject.set(p.id, fromInvoices.length ? fromInvoices : baseMixOf(p));
+  }
+  const departmentsInPeriod = new Set([...mixByProject.values()].flatMap(m => m.map(s => s.line)));
 
   // ── expense.departmentId (a `teams` doc id) → department label ──
   // Prefer `team.department` (the same free-text field projects carry), fall
@@ -277,7 +337,7 @@ export function computeDepartmentPnl(
   // reported rather than silently reattributed.
   const deptLabelByTeamId = new Map<string, string>();
   for (const t of opts.teams ?? []) {
-    const candidates = [(t.department || '').trim(), (t.name || '').trim()].filter(Boolean);
+    const candidates = [(t.department || '').trim(), (t.name || '').trim()].filter(Boolean).map(c => label(c));
     const match = candidates.find(c => departmentsInPeriod.has(c));
     if (match) deptLabelByTeamId.set(t.id, match);
   }
@@ -367,68 +427,109 @@ export function computeDepartmentPnl(
     const m = memberById.get(id);
     return m ? (m.displayName || (m as any).email || 'Pa emër') : 'I panjohur';
   };
-  // Revenue and project count per department — the weights a department-tagged
-  // expense is spread by inside its own department (equal split when the
-  // department earned nothing, mirroring the business-wide `allocationBasis`).
-  const deptRevenue = new Map<string, number>();
-  const deptProjectCount = new Map<string, number>();
-  for (const p of periodProjects) {
-    const d = deptOfProject(p);
-    deptRevenue.set(d, (deptRevenue.get(d) || 0) + (revenueByProject.get(p.id) || 0));
-    deptProjectCount.set(d, (deptProjectCount.get(d) || 0) + 1);
-  }
+  // ── Slice every project into its department lines ──
+  // A project sold as SEO + Ads becomes two lines: each takes its weight of the
+  // revenue and of the direct cost, the labour of the people whose craft is that
+  // line (memberLaborSplit), and its share of the business-wide overhead (by its
+  // own labour hours when overhead is spread by hours, else by its revenue
+  // weight). Σ slices == the project's figures, so every total below is unchanged
+  // by the split — only WHERE the money sits moves.
+  const memberByUid = new Map<string, TeamMember>();
+  (teamMembers ?? []).forEach(m => { if (m.userId) memberByUid.set(norm(m.userId), m); });
+  const linesOfMember = (uid: string) => memberServiceLines(memberByUid.get(norm(uid)), label);
 
-  const projectLines: Array<DeptProjectLine & { departmentFixed: number }> = periodProjects.map(p => {
+  type Slice = Omit<DeptProjectLine, 'overhead' | 'cost' | 'profit' | 'margin'> & {
+    department: string; globalOverhead: number;
+  };
+  const slices: Slice[] = [];
+  for (const p of periodProjects) {
+    const mix = mixByProject.get(p.id)!;
     const revenue = revenueByProject.get(p.id) || 0;
     const directCost = directByProject.get(p.id) || 0;
-    const parts = hoursLabor
-      ? (hoursLabor.byProject.get(p.id)?.byMember || []).map(l => ({ userId: l.userId, name: l.name, cost: l.cost }))
+    const parts: Array<DeptParticipant & { hours: number }> = hoursLabor
+      ? (hoursLabor.byProject.get(p.id)?.byMember || []).map(l => ({ userId: l.userId, name: l.name, cost: l.cost, hours: l.hours }))
       : participantsOf(p).map(id => {
           const m = memberById.get(id)!;
           const cnt = projectCountByMember.get(id) || 1;
-          return { userId: id, name: memberName(id), cost: memberPeriodSalary(m) / cnt };
+          return { userId: id, name: memberName(id), cost: memberPeriodSalary(m) / cnt, hours: 0 };
         });
-    const labor = parts.reduce((s, x) => s + x.cost, 0);
-    // Two overhead components: the business-wide pool (by labour hours when hours
-    // exist, else revenue weight, else equally), plus this department's OWN
-    // tagged expenses spread only inside the department.
+    // The business-wide pool's share for the WHOLE project (by labour hours when
+    // hours exist, else revenue weight, else equally) — split across lines below.
     const share = allocationBasis === 'labor-hours'
       ? (hoursLabor!.byProject.get(p.id)?.hours || 0) / totalLaborHours
       : allocationBasis === 'revenue'
         ? revenue / totalRevenue
         : equalPoolShare;
     const globalOverhead = sharedPool * share;
-    const dept = deptOfProject(p);
-    const deptPool = departmentFixedPool.get(dept) || 0;
-    const dRev = deptRevenue.get(dept) || 0;
+
+    const partsByLine = new Map<string, Array<DeptParticipant & { hours: number }>>();
+    for (const part of parts) {
+      for (const s of memberLaborSplit(linesOfMember(part.userId), mix)) {
+        const list = partsByLine.get(s.line) || [];
+        list.push({ ...part, cost: part.cost * s.weight, hours: part.hours * s.weight });
+        partsByLine.set(s.line, list);
+      }
+    }
+    const projectHours = parts.reduce((t, x) => t + x.hours, 0);
+    const splitAcross = mix.map(s => s.line);
+    for (const s of mix) {
+      const lineParts = partsByLine.get(s.line) || [];
+      const lineHours = lineParts.reduce((t, x) => t + x.hours, 0);
+      const overheadShare = allocationBasis === 'labor-hours' && projectHours > 0 ? lineHours / projectHours : s.weight;
+      slices.push({
+        department: s.line,
+        id: p.id, name: p.name, customerId: p.customerId,
+        revenue: revenue * s.weight,
+        directCost: directCost * s.weight,
+        labor: lineParts.reduce((t, x) => t + x.cost, 0),
+        globalOverhead: globalOverhead * overheadShare,
+        participants: lineParts.map(({ userId, name, cost }) => ({ userId, name, cost })).sort((a, b) => b.cost - a.cost),
+        share: s.weight,
+        splitAcross,
+      });
+    }
+  }
+  const splitProjects = periodProjects.filter(p => (mixByProject.get(p.id)?.length || 0) > 1).length;
+
+  // Revenue and line count per department — the weights a department-tagged
+  // expense is spread by inside its own department (equal split when the
+  // department earned nothing, mirroring the business-wide `allocationBasis`).
+  const deptRevenue = new Map<string, number>();
+  const deptSliceCount = new Map<string, number>();
+  for (const sl of slices) {
+    deptRevenue.set(sl.department, (deptRevenue.get(sl.department) || 0) + sl.revenue);
+    deptSliceCount.set(sl.department, (deptSliceCount.get(sl.department) || 0) + 1);
+  }
+
+  const projectLines: Array<DeptProjectLine & { departmentFixed: number; department: string }> = slices.map(sl => {
+    // Two overhead components: the business-wide pool (above), plus this
+    // department's OWN tagged expenses spread only inside the department.
+    const deptPool = departmentFixedPool.get(sl.department) || 0;
+    const dRev = deptRevenue.get(sl.department) || 0;
     const departmentFixed = deptPool === 0 ? 0
-      : dRev > 0 ? deptPool * (revenue / dRev)
-      : deptPool / (deptProjectCount.get(dept) || 1);
+      : dRev > 0 ? deptPool * (sl.revenue / dRev)
+      : deptPool / (deptSliceCount.get(sl.department) || 1);
+    const { globalOverhead, ...line } = sl;
     const overhead = globalOverhead + departmentFixed;
-    const cost = directCost + labor + overhead;
-    const profit = revenue - cost;
+    const cost = line.directCost + line.labor + overhead;
+    const profit = line.revenue - cost;
     return {
-      id: p.id, name: p.name, customerId: p.customerId,
-      revenue, directCost, labor, overhead, cost, profit,
-      margin: revenue > 0 ? profit / revenue : null,
-      participants: parts.sort((a, b) => b.cost - a.cost),
+      ...line, overhead, cost, profit,
+      margin: line.revenue > 0 ? profit / line.revenue : null,
       departmentFixed,
     };
   });
 
   // ── Group by department ──
   const deptMap = new Map<string, DepartmentRow>();
-  const projectById = new Map(periodProjects.map(p => [p.id, p]));
-  for (const line of projectLines) {
-    const proj = projectById.get(line.id);
-    const dept = proj ? deptOfProject(proj) : NO_DEPT;
+  for (const { department: dept, departmentFixed, ...line } of projectLines) {
     const row = deptMap.get(dept) || {
       department: dept, revenue: 0, directCost: 0, labor: 0, overhead: 0, cost: 0, profit: 0, margin: null,
       projects: [], departmentFixed: 0,
     };
     row.revenue += line.revenue; row.directCost += line.directCost; row.labor += line.labor;
     row.overhead += line.overhead; row.cost += line.cost; row.profit += line.profit;
-    row.departmentFixed += line.departmentFixed;
+    row.departmentFixed += departmentFixed;
     row.projects.push(line);
     deptMap.set(dept, row);
   }
@@ -473,6 +574,7 @@ export function computeDepartmentPnl(
     allocationBasis,
     unallocatedOverhead,
     laborOutsideRows: outside?.total || 0,
+    splitProjects,
     totals,
   };
 }
@@ -506,6 +608,9 @@ export function buildDepartmentProfitTrend(
     timeEntries?: import('../../types').TimeEntry[] | null;
     settings?: Partial<FinanceSettings> | null;
     rateCard?: RateCardRole[] | null;
+    /** Service catalogue + invoice lines: split a project across departments (serviceMix.ts). */
+    services?: Service[] | null;
+    invoiceItems?: InvoiceItem[] | null;
   } = {},
 ): DepartmentTrend {
   const monthly: { label: string; byDept: Map<string, number> }[] = [];
@@ -527,6 +632,7 @@ export function buildDepartmentProfitTrend(
       range: { start, end }, mode: 'all', now,
       revenueBasis: extra.revenueBasis, invoices: extra.invoices, teams: extra.teams,
       labor, timeEntries: extra.timeEntries,
+      services: extra.services, invoiceItems: extra.invoiceItems,
     });
     const byDept = new Map<string, number>();
     for (const row of res.rows) {
