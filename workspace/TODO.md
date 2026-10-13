@@ -19,8 +19,13 @@ Rules:
 <!-- Add tasks here only when there are real next steps. -->
 
 <todo>
-Aktivizo kujtesen ditore te shpenzimeve ne VPS (git pull + pm2 restart)
-Puna `expense-daily-reminder` (17:00 lokale, dite pune) u shtua me 7 Tetor: njoftim "A ke shpenzime per te shtuar sot?" te Admin/Manager me buton qe hap formularin (`/app/expenses?new=1`), toggle te Cilesimet -> Automatizime. Logjika eshte ne Vercel (push-uar), por ORARI jeton ne vps/server.ts: ne VPS `cd /root/fivocrm && git pull && pm2 restart server`, pastaj `pm2 logs server --out --lines 200 --nostream | grep -i scheduler`. Prove: Cilesimet -> Automatizime -> karta "Kujtese ditore per shpenzimet" -> "Ekzekuto Tani" duhet te sjelle nje njoftim te zilja (nje here ne dite; rifillimi s'e dyfishon).
+Firestore "Quota exceeded" (RESOURCE_EXHAUSTED) eshte AKTIV ne VPS - kaloje projektin ne Blaze
+Pare 13 Tetor 16:45 UTC ne /root/.pm2/logs/server-error.log (742 MB, 3 520 goditje "Quota exceeded", te fundit pas restart-it te dites: "Error updating receipt" nga agjenti WhatsApp). Kuota ditore e planit Spark (50K lexime) mbaron brenda dites, keshtu qe cdo pune cron ne Vercel qe prek Firestore pas asaj ore deshton heshtazi. Hapat: (1) Firebase Console -> Usage -> Blaze; (2) `pm2 install pm2-logrotate` ne VPS qe logu te mos rritet pa fund; (3) pasi te kaloje, kontrollo `platformJobRuns` per punet e sotme.
+</todo>
+
+<todo>
+Vercel env + whitelist IP per hosting-un, pastaj ndez modulet ne UI
+Vercel (CLI eshte i dale nga llogaria ketu): `HOSTING_PROXY_URL=https://wa.fivocrm.com/provider-proxy` (ose lihet WHMCS_PROXY_URL) dhe `SECRETS_ENC_KEY` (openssl rand -base64 32), pastaj redeploy. Whitelist IP-ne e VPS (65.109.132.203) te Dynadot (Tools -> API) dhe te firewall-i WHM (porti 2087). Ne app: Cilesimet -> Modulet -> Hosting; shto serverin + token, paketat, TLD-te, celesin Dynadot; Cilesimet -> Automatizime -> Kujtesa -> "Kujtesa faturash ne WhatsApp" (burimi WHMCS). Mbetur nga auditi i faturave: `node scripts/fix-orphan-invoice-items.mjs --apply` (shkrim ne prodhim, dry-run pa flamur).
 </todo>
 
 <todo>
@@ -34,23 +39,8 @@ workspace/ANDROID_UI_AUDIT_2026_09.md. Te 21 gjetjet e te dy raundeve jane rregu
 </todo>
 
 <todo>
-Deploy audit-in e financave (rregulla, indekse, VPS)
-Kodi i 18 Shtatorit është në pemë, i patestuar kundrejt prodhimit. Duhen: `firebase deploy --only firestore:rules` (klauzolat e reja `quotes` për portalin + `shopOrders` paymentStatus) dhe `--only firestore:indexes` (`quotes (customerId,status)` dhe `(leadId,status)`) — pa to numëruesi i ofertave në portal bie në 0; pastaj push në main (Vercel merr `api/cron/run.ts`) dhe `pm2 restart` në VPS. Provë e shpejtë: nis `invoice-reminders` manualisht nga një qiraxhi dhe shiko që përgjigja kthen `scopedTo` me biznesin e tij.
-</todo>
-
-<todo>
 Nxirr rrogat jashtë `teamMembers` (P0 i mbetur i auditit)
 workspace/FINANCE_BUGS_2026_09_18.md → "Still open". Rregullat ende i japin çdo anëtari biznesi leximin e `monthlySalary`/`salaryHistory` dhe të rreshtave `category: 'Salary'` te `expenses`; klienti nuk i dërgon më, por pyetja e drejtpërdrejtë punon. Plani: koleksion `teamMemberComp/{teamId}_{uid}` me `read` vetëm për vetveten dhe aprovuesit, backfill nga cron, periudhë me lexim të dyfishtë, dhe vetëm pastaj fshirja e fushave të vjetra. Kërkon ekzekutim kundrejt prodhimit, ndaj nuk u bë bashkë me pjesën tjetër.
-</todo>
-
-<todo>
-Deploy WHMCS payment write-back + WhatsApp invoice reminders
-Code shipped 2026-09-14 (workspace/WHMCS_SYNC.md). Left: `firebase deploy --only firestore:indexes` (new `invoices (status, dueDate)`), push to main (Vercel: /api/whmcs-payment + cron logic + UI), then Cilësimet → Automatizime → Kujtesa → switch on "Kujtesa faturash në WhatsApp" (burimi WHMCS, kanali, fazat) and — for Meta — an approved Utility template. Smoke test: mark a WHMCS test invoice Paid → badge `WHMCS ✓`, transid `fivocrm-…` visible in WHMCS.
-</todo>
-
-<todo>
-Restart the VPS so the hourly `crm-automations` tick starts
-Rules + indexes deployed and code pushed on 2026-09-07 (Vercel deploys from main). Left: `pm2 restart` on the VPS (vps/server.ts schedules the job), then CRM → Automatizime → Receta → arm the first rules. Checklist: workspace/CRM_AUTOMATION.md.
 </todo>
 
 <todo>
@@ -70,18 +60,8 @@ All 9 are implemented (workspace/CHAT_NOTIFICATIONS_AUDIT_2026_08.md). Left to c
 
 
 <todo>
-Deploy the invoice-module audit fixes
-Rules deploy (invoiceItems is now staff-only write), VPS cron restart for the new period-key recurrence engine, then `node scripts/fix-orphan-invoice-items.mjs --apply`. Full checklist: workspace/INVOICES_AUDIT_2026_08.md.
-</todo>
-
-<todo>
 Ndaj leximet e cron-it sipas qiraxhiut (vetëm çështje kostoje tani)
 Nisja MANUALE e `invoice-reminders`/`overdue-reminders`/`recurring-expenses` u skopua më 18 Shtator (`manualScopeId()` në `api/cron/run.ts`), pra vrima ndër-qiraxhinj është mbyllur. Mbetet vetëm gjysma e kostos: nisja e planifikuar ende lexon `invoices` pa filtër (`where('status','==',…)`), kundër rregullit të dokumentuar "asnjë punë të mos lexojë një koleksion pa filtër". Shkon bashkë me nxjerrjen e `tenantScopedDocs()` — backlog #24.
-</todo>
-
-<todo>
-Deploy Expense Rules + Indexes
-Rules tests pass 96/96 in the emulator. Deploy: firebase deploy --only firestore:rules,firestore:indexes (expenses rule now enforces keepsBusinessId, approver-only approvalStatus, re-approval on amount/date edit; indexes moved teamId -> businessId). See workspace/EXPENSES_AUDIT_2026_08.md.
 </todo>
 
 <todo>
@@ -95,9 +75,9 @@ From WorkloadView, allow drag-and-drop or quick-assign to move tasks between tea
 </todo>
 
 ## Hosting & Domain-e (Sep 15, 2026) — kodi gati, deploy në pritje
-- [ ] `firebase deploy --only firestore:rules,firestore:indexes` (rules test 111/111 me JDK 21)
+- [x] `firebase deploy --only firestore:rules,firestore:indexes` (verifikuar ne prodhim 13 Tetor 2026: 150/150 indekse, rregullat e 10 Tetorit)
 - [ ] Vercel env: `HOSTING_PROXY_URL=https://wa.fivocrm.com/provider-proxy` (ose lihet WHMCS_PROXY_URL) — `WHMCS_PROXY_SECRET` ekziston
-- [ ] VPS: pull + pm2 restart (shton `/provider-proxy`, orarët `hosting-lifecycle` 60min / `hosting-sync` 360min)
+- [x] VPS: pull + pm2 restart (bere 13 Tetor 2026, commit 05306112; `hosting-lifecycle` tik ok)
 - [ ] Whitelist IP-në e VPS te Dynadot (Tools → API) dhe te firewall-i WHM (porti 2087)
 - [ ] Ndez modulin te tenant-i (Cilësimet → Modulet), shto serverin + token, paketat, TLD-të, çelësin Dynadot
 - [x] Tab "Hosting" te Customer360View (abonimet + domain-et e klientit, lidhje te moduli)
@@ -115,5 +95,5 @@ From WorkloadView, allow drag-and-drop or quick-assign to move tasks between tea
 - [x] Ri-provë automatike me backoff (15m→24h) për provisioning-un e dështuar
 - [x] Domain falas me hosting vjetor (rregull per paketë) + kupona (percent/fixed, kufij, skadencë)
 - [x] Rregullime: merge i dublikatave ri-drejton domains/hostingOrders/hostingEvents/hostingBackups; eksporti/fshirja GDPR përfshin gjithë koleksionet e hosting-ut
-- [ ] VPS: pas pull-it shtohen `hosting-backups` (30 min) dhe `hosting-expiry-report` (e hënë 08:00) — restart pm2
+- [x] VPS: pas pull-it shtohen `hosting-backups` (30 min) dhe `hosting-expiry-report` (e hënë 08:00) — restart pm2 (13 Tetor 2026)
 
