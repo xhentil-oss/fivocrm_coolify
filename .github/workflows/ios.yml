@@ -47,8 +47,17 @@ jobs:
           node-version: 22
           cache: npm
 
+      # App Store Connect refuses uploads built with an SDK older than iOS 26
+      # (Xcode 26). The image's default /Applications/Xcode.app is still 16.x, so
+      # pick the newest Xcode 26+ explicitly and fail loudly if there is none.
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app
+        run: |
+          ls -d /Applications/Xcode*.app
+          XCODE=$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then echo "::error::No Xcode 26+ on this runner image"; exit 1; fi
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
 
       - run: npm ci
 
