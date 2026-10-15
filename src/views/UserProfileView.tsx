@@ -20,6 +20,7 @@ import {
 import { phoneKeyDown } from '../lib/utils';
 import { sortArchivedLast } from '../lib/projectArchive';
 import { Card } from '../components/ui/card';
+import DeleteAccountCard from '../components/DeleteAccountCard';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -746,6 +747,9 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
           </Tabs>
         </Card>
       </div>
+
+      {/* Only on your OWN profile — deletion is a request about the signed-in account. */}
+      {!isDemoMode && targetUserId === currentUser?.uid && <DeleteAccountCard />}
     </div>
   );
 };

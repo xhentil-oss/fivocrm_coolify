@@ -168,6 +168,11 @@ as a new (portal) identity. Staff should share their real email or use Google/em
 The web has no Apple button (needs a Services ID + return URL).
 
 ### 4.3 Everything else the reviewer will need
+- **Account deletion (5.1.1(v))** — `DeleteAccountCard` on the staff profile (own
+  profile only) and the portal profile: confirm dialog → pre-filled email request to
+  social@fivo.al with email + uid, plus "Çfarë fshihet" → fivocrm.com/delete-account.
+  It is a REQUEST (30 days), not an instant wipe, because an account can own a whole
+  business. If review insists on self-service deletion, that needs a server endpoint.
 - A **demo account** (staff login + a portal client login) in the review notes —
   the whole app is behind auth, and a reviewer who cannot log in rejects.
 - The **App Privacy questionnaire** in App Store Connect must agree with

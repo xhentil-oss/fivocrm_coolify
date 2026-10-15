@@ -15,6 +15,7 @@ import { Label } from '../../components/ui/label';
 import { Switch } from '../../components/ui/switch';
 import { User, Bell, Lock, Camera, Loader2, Save } from 'lucide-react';
 import type { Customer } from '../../types';
+import DeleteAccountCard from '../../components/DeleteAccountCard';
 
 type Prefs = {
   pushEnabled: boolean;
@@ -323,6 +324,8 @@ const PortalProfileView: React.FC = () => {
           )}
         </CardContent>
       </Card>
+
+      <DeleteAccountCard />
     </div>
   );
 };
