@@ -319,11 +319,23 @@ function addResource(pbx, { fileRef, buildFile, name }) {
   return pbx;
 }
 
+/**
+ * iPhone only (decided 15 Oct 2026). `cap add ios` targets "1,2" (iPhone + iPad),
+ * which makes App Review test the app on an iPad and require iPad screenshots. On an
+ * iPad the app still installs and runs in iPhone compatibility mode.
+ */
+function patchDeviceFamily(pbx) {
+  const next = pbx.replace(/TARGETED_DEVICE_FAMILY = "1,2";/g, 'TARGETED_DEVICE_FAMILY = 1;');
+  if (next !== pbx) done.push('project.pbxproj: TARGETED_DEVICE_FAMILY = 1 (iPhone only)');
+  return next;
+}
+
 function patchPbxproj() {
   let pbx = readPbxproj();
   const before = pbx;
 
   pbx = patchEntitlementsSetting(pbx);
+  pbx = patchDeviceFamily(pbx);
   pbx = addResource(pbx, {
     fileRef: IDS.privacyFileRef,
     buildFile: IDS.privacyBuildFile,

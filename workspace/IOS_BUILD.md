@@ -135,25 +135,17 @@ minor/major split — see *Capacitor version parity* in
 
 ## 4. App Store review — the two real blockers
 
-### 4.1 In-app purchases (guideline 3.1.1) — decide before submitting
-The app sells subscriptions through Stripe (`/app/billing`,
-`api/create-checkout-session.ts`). Apple requires digital subscriptions consumed in
-the app to go through In-App Purchase, and rejects apps that link out to an
-external checkout. Three options:
+### 4.1 In-app purchases (guideline 3.1.1) — decided 15 Oct 2026: read-only on iOS
+`PURCHASES_ALLOWED` (`src/lib/billing.ts`) is `false` on iOS. BillingView then shows
+the subscription STATE only (plan, status, seats, last payment) — no plan cards, no
+prices, no "Faturat & karta" (Stripe portal); SubscriptionBanner / SubscriptionGate
+lose their "Zgjidh plan" / "Aktivizo abonimin" buttons and ActivationChecklist drops
+its plan step. Accounts are bought on the web (3.1.3(b) multiplatform services); the
+app must not point there either, so the iOS copy says only "menaxhohet nga pronari".
+Client invoice payments (InvoicesView, portal, PublicPayView) stay — they pay for
+real-world services, not for the app. Any NEW upgrade/pay CTA must check the flag.
 
-1. **Hide the purchase path on iOS** (cheapest, most common for B2B SaaS): on
-   `Capacitor.getPlatform() === 'ios'`, render Abonimi as read-only — plan, seats,
-   renewal date, no "Upgrade"/"Pay" button and no link to Stripe. Accounts are
-   bought on the web; the app is a client for an existing account
-   (guideline 3.1.3(b), "multiplatform services"). This is not implemented yet — it
-   is a product decision.
-2. **Add StoreKit IAP** for iOS purchases — 15–30% Apple commission plus a second
-   billing source of truth to reconcile against `businesses.plan`. Expensive.
-3. **Ship as an internal-distribution app** (Apple Business Manager / custom app),
-   which skips public review entirely. Viable if FivoCRM is sold per-company.
-
-Option 1 is the recommendation; say the word and it is a small change in
-`BillingView` + the plan CTAs.
+Also decided: **iPhone only** — `ios-configure.cjs` sets `TARGETED_DEVICE_FAMILY = 1`.
 
 ### 4.2 Sign in with Apple (guideline 4.8) — shipped 8 Oct 2026
 "Vazhdo me Apple" is on the login screen **in the iOS app only**
@@ -181,9 +173,7 @@ The web has no Apple button (needs a Services ID + return URL).
 - The **App Privacy questionnaire** in App Store Connect must agree with
   `PrivacyInfo.xcprivacy`: email, name, user id, crash data — collected, linked to
   the user, not used for tracking.
-- Screenshots for 6.7" and 6.5" iPhones, and iPad if `TARGETED_DEVICE_FAMILY`
-  stays `1,2` (it currently does — the app would be reviewed as an iPad app too).
-  Set it to `1` in `scripts/ios-configure.cjs` if iPad support is not wanted.
+- Screenshots for 6.9"/6.7" and 6.5" iPhones (iPhone only — no iPad set needed).
 - Privacy policy URL + support URL.
 
 ---

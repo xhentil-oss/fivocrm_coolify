@@ -6,6 +6,7 @@ import { Button } from './ui/button';
 import { useCollection, useGlobalBusinessId } from '../hooks/useFirestore';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useSubscription } from '../hooks/useSubscription';
+import { PURCHASES_ALLOWED } from '../lib/billing';
 
 /**
  * Activation checklist — the "time to first value" path for a new tenant.
@@ -78,13 +79,14 @@ const ActivationChecklist: React.FC = () => {
       to: '/app/teams',
       done: (members || []).filter((m: any) => m.status === 'Active').length > 1,
     },
-    {
+    // Not offered in the iOS app — it may not point to a purchase (PURCHASES_ALLOWED).
+    ...(PURCHASES_ALLOWED ? [{
       key: 'plan',
       label: 'Zgjidh planin',
       hint: 'Aktivizo abonimin përpara se provja të mbarojë.',
       to: '/app/billing',
       done: status === 'active',
-    },
+    }] : []),
   ], [services, customers, projects, invoices, members, status]);
 
   const doneCount = steps.filter(s => s.done).length;
@@ -146,7 +148,7 @@ const ActivationChecklist: React.FC = () => {
         ))}
       </div>
 
-      {status === 'trialing' && (
+      {PURCHASES_ALLOWED && status === 'trialing' && (
         <Button asChild size="sm" variant="outline" className="w-full sm:w-auto">
           <Link to="/app/billing">Shiko planet</Link>
         </Button>

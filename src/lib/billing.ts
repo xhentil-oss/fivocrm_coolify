@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core';
 import type { PlanKey } from './modules';
 import { MODULES } from './modules';
 import { auth } from './firebase';
@@ -12,6 +13,18 @@ import type { Business } from '../types';
  */
 
 export type BillingInterval = 'month' | 'year';
+
+/**
+ * Whether this build may SELL the FivoCRM subscription.
+ *
+ * False in the iOS app: App Store guideline 3.1.1 forbids buying a digital
+ * subscription outside In-App Purchase, and 3.1.3(b) (multiplatform services) lets
+ * the app serve an account bought elsewhere only if it neither sells nor points to
+ * the purchase. So on iOS every surface shows the subscription STATE and no button,
+ * price list or "pay" link. Client invoice payments (real-world services) are not
+ * affected — they are not a purchase of the app.
+ */
+export const PURCHASES_ALLOWED = Capacitor.getPlatform() !== 'ios';
 
 export interface PlanDef {
   key: Exclude<PlanKey, 'trial'>;

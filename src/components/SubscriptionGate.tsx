@@ -4,7 +4,7 @@ import { AlertTriangle, Lock, CreditCard } from 'lucide-react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { useSubscription } from '../hooks/useSubscription';
-import { GRACE_DAYS } from '../lib/billing';
+import { GRACE_DAYS, PURCHASES_ALLOWED } from '../lib/billing';
 
 /**
  * Billing state, made visible.
@@ -32,7 +32,7 @@ export const SubscriptionBanner: React.FC = () => {
           ? `Pagesa dështoi — hapësira pezullohet pas ${graceDaysLeft} ditë${graceDaysLeft === 1 ? '' : 'ësh'}.`
           : `Pagesa dështoi — pezullimi ndodh brenda ${GRACE_DAYS} ditëve.`)
       : status === 'canceled'
-        ? 'Abonimi u anulua. Aktivizo një plan për të vazhduar.'
+        ? (PURCHASES_ALLOWED ? 'Abonimi u anulua. Aktivizo një plan për të vazhduar.' : 'Abonimi u anulua.')
         : trialDaysLeft !== null && trialDaysLeft > 0
           ? `Provja mbaron pas ${trialDaysLeft} ditë${trialDaysLeft === 1 ? '' : 'ësh'}.`
           : 'Provja ka mbaruar.';
@@ -43,9 +43,11 @@ export const SubscriptionBanner: React.FC = () => {
         <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
         <span className="truncate">{message}</span>
       </p>
-      <Button size="sm" asChild className="shrink-0">
-        <Link to="/app/billing">Zgjidh plan</Link>
-      </Button>
+      {PURCHASES_ALLOWED && (
+        <Button size="sm" asChild className="shrink-0">
+          <Link to="/app/billing">Zgjidh plan</Link>
+        </Button>
+      )}
     </div>
   );
 };
@@ -70,9 +72,11 @@ export const SubscriptionGate: React.FC<{ children: React.ReactNode }> = ({ chil
             dhe kthehen menjëherë sapo pagesa aktivizohet.
           </p>
         </div>
-        <Button asChild className="w-full">
-          <Link to="/app/billing"><CreditCard className="w-4 h-4" /> Aktivizo abonimin</Link>
-        </Button>
+        {PURCHASES_ALLOWED && (
+          <Button asChild className="w-full">
+            <Link to="/app/billing"><CreditCard className="w-4 h-4" /> Aktivizo abonimin</Link>
+          </Button>
+        )}
         <p className="text-xs text-muted-foreground">
           Nëse mendon se ky është gabim, shkruaji ekipit të suportit.
         </p>

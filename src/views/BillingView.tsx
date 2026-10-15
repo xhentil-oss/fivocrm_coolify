@@ -11,7 +11,7 @@ import { useSubscription } from '../hooks/useSubscription';
 import { useCollection } from '../hooks/useFirestore';
 import {
   PLANS, PLAN_BY_KEY, priceFor, statusLabel, GRACE_DAYS,
-  startSubscriptionCheckout, openBillingPortal, type BillingInterval,
+  startSubscriptionCheckout, openBillingPortal, PURCHASES_ALLOWED, type BillingInterval,
 } from '../lib/billing';
 import AuditLogPanel from '../components/AuditLogPanel';
 import type { TeamMember } from '../types';
@@ -103,7 +103,7 @@ const BillingView: React.FC = () => {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {business?.stripeCustomerId && canManageBilling && (
+            {PURCHASES_ALLOWED && business?.stripeCustomerId && canManageBilling && (
               <Button variant="outline" onClick={() => go(() => openBillingPortal(businessId!), 'portal')} disabled={busy === 'portal'}>
                 {busy === 'portal' ? <Loader2 className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
                 Faturat & karta
@@ -135,7 +135,17 @@ const BillingView: React.FC = () => {
         </div>
       </Card>
 
-      {!canManageBilling && (
+      {/* iOS: state only — no plans, prices or purchase path (see PURCHASES_ALLOWED). */}
+      {!PURCHASES_ALLOWED && (
+        <Card className="p-4 flex items-start gap-3">
+          <ShieldCheck className="w-5 h-5 text-muted-foreground mt-0.5 shrink-0" />
+          <p className="text-body-sm text-muted-foreground">
+            Abonimi menaxhohet nga pronari i hapësirës. Për ndryshime, kontaktoni pronarin.
+          </p>
+        </Card>
+      )}
+
+      {PURCHASES_ALLOWED && !canManageBilling && (
         <Card className="p-4 flex items-start gap-3 border-amber-500/40 bg-amber-500/5">
           <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
           <p className="text-body-sm text-muted-foreground">
@@ -145,6 +155,7 @@ const BillingView: React.FC = () => {
       )}
 
       {/* ── Plans ─────────────────────────────────────────────────────── */}
+      {PURCHASES_ALLOWED && (<>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h2 className="text-heading-sm text-foreground">Planet</h2>
         <div className="inline-flex rounded-lg border border-border p-0.5">
@@ -220,6 +231,7 @@ const BillingView: React.FC = () => {
         Pagesat procesohen nga Stripe. Nuk ruajmë të dhëna karte. Fatura dhe anulimi bëhen nga
         “Faturat &amp; karta”.
       </p>
+      </>)}
 
       {/* Audit trail — billing + security events of this tenant (admins only). */}
       <AuditLogPanel />
