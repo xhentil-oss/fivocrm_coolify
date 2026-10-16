@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Expense, TeamMember, TimeEntry } from '../../types';
-import { allocateLabor, laborOutsideRows, poolLabor, laborByProjectForEntries, laborForEntries } from './laborAllocation';
+import { allocateLabor, laborOutsideRows, loadCreditOf, poolLabor, laborByProjectForEntries, laborForEntries, memberEmployedMonthsBetween } from './laborAllocation';
+import { entryHours } from './laborCost';
 import { payrollBetween } from './payroll';
 
 const d = (iso: string) => new Date(iso);
@@ -10,7 +11,8 @@ const member = (userId: string, monthlySalary: number, extra: Partial<TeamMember
 } as TeamMember);
 const entry = (userId: string, projectId: string | undefined, hours: number, day = '2026-09-10', extra: Partial<TimeEntry> = {}): TimeEntry => ({
   id: `${userId}_${projectId}_${day}_${hours}`, userId, projectId, startTime: d(`${day}T09:00:00`), endTime: d(`${day}T17:00:00`),
-  duration: hours * 60, createdAt: d(day), updatedAt: d(day), ...extra,
+  // `source: 'manual'`: the fixture's hours are a typed duration (the 09–17 span is synthetic).
+  duration: hours * 60, source: 'manual', createdAt: d(day), updatedAt: d(day), ...extra,
 } as TimeEntry);
 const period = { start: d('2026-09-01T00:00:00'), end: d('2026-09-30T23:59:59.999') };
 // employer load 0 so the arithmetic is readable: 120 000 / 120 h = 1 000 L/h
@@ -179,5 +181,100 @@ describe('laborByProjectForEntries / laborForEntries (all-time, as of a date)', 
     expect(byProject.get('')).toMatchObject({ hours: 2, cost: 2_000 });
     expect(laborForEntries(entries, [ana], settings, null, 'web', period.end)).toMatchObject({ hours: 53, cost: 53_000 });
     expect(laborForEntries(entries, [ana], settings, null, undefined, period.end).hours).toBe(62);
+  });
+});
+
+// -- Oct 2026 audit ----------------------------------------------------------
+describe('loaded rate vs unloaded payroll: the pool is never negative, the excess is loadCredit', () => {
+  const p = member('p', 100_000);
+  // defaults: employerCostPct 0.167, capacity 120 -> 116 700 / 120 = 972.5 L/h
+  it('100 h client + 40 h no project: rows + poolLabor == payroll + loadCredit', () => {
+    const a = allocateLabor({
+      timeEntries: [entry('p', 'pX', 100), entry('p', undefined, 40)],
+      members: [p], expenses: [], period, clientProjectIds: new Set(['pX']),
+    });
+    expect(a.absorbed + a.internal.cost).toBeCloseTo(136_150, 6);
+    expect(a.overAbsorbed).toBeCloseTo(36_150, 6);
+    expect(loadCreditOf(a)).toBeCloseTo(36_150, 6);
+    expect(a.unabsorbed).toBe(0);
+    const rows = new Set(['pX']);
+    const rowLabor = a.byProject.get('pX')!.cost;
+    expect(poolLabor(a, rows)).toBeCloseTo(38_900, 6);              // the 40 h no-project, never negative
+    expect(rowLabor + poolLabor(a, rows)).toBeCloseTo(100_000 + loadCreditOf(a), 6);
+    expect(a.loadedPayroll).toBeCloseTo(116_700, 6);
+    // 140 h > 120 h practical capacity: THAT is the real signal, not the employer load
+    expect(a.overAbsorbedVsLoaded).toBeCloseTo(136_150 - 116_700, 6);
+  });
+  it('a month at exactly the practical capacity over-absorbs only by the employer load -> no rates warning, pool 0', () => {
+    const a = allocateLabor({ timeEntries: [entry('p', 'pX', 120)], members: [p], expenses: [], period });
+    expect(a.overAbsorbed).toBeCloseTo(16_700, 6);
+    expect(a.overAbsorbedVsLoaded).toBe(0);
+    expect(poolLabor(a, new Set(['pX']))).toBe(0);
+    expect(a.byProject.get('pX')!.cost + poolLabor(a, new Set(['pX'])) - loadCreditOf(a)).toBeCloseTo(100_000, 6);
+  });
+  it('per-month rate over a person\'s rows: the Inactive 80k row (left 1 Mar) does not price September hours', () => {
+    const rowA = member('ana', 80_000, { id: 'tA_ana', teamId: 'tA', status: 'Inactive', leftAt: new Date(2026, 2, 1) } as any);
+    const rowB = member('ana', 60_000, { id: 'tB_ana', teamId: 'tB', hiredAt: new Date(2026, 2, 1) } as any);
+    const sept = allocateLabor({ timeEntries: [entry('ana', 'pX', 10)], members: [rowA, rowB], expenses: [], period, settings });
+    expect(sept.byProject.get('pX')!.cost).toBe(5_000);          // 60 000 / 120 h × 10 h (the merge used 80 000)
+    expect(sept.payroll.total).toBe(60_000);
+    const jan = { start: d('2026-01-01T00:00:00'), end: d('2026-01-31T23:59:59.999') };
+    const a = allocateLabor({ timeEntries: [entry('ana', 'pX', 12, '2026-01-15')], members: [rowA, rowB], expenses: [], period: jan, settings });
+    expect(a.byProject.get('pX')!.cost).toBe(8_000);             // January: still the 80 000 row
+  });
+  it('an hourlyCostRate override on ANY of the person\'s rows is honoured', () => {
+    const rowA = member('ana', 120_000, { id: 'tA_ana', teamId: 'tA' });
+    const rowB = member('ana', 0, { id: 'tB_ana', teamId: 'tB', monthlySalary: undefined, hourlyCostRate: 1_500 });
+    const a = allocateLabor({ timeEntries: [entry('ana', 'pX', 10)], members: [rowA, rowB], expenses: [], period, settings });
+    expect(a.byProject.get('pX')!.cost).toBe(15_000);
+  });
+});
+
+describe('one person, one record (rows per team are collapsed by userId)', () => {
+  it('hours are costed with the salary on the OTHER team row, capacity counted once', () => {
+    const rowA = member('ana', 120_000, { id: 'tA_ana', teamId: 'tA' });
+    const rowB = member('ana', 0, { id: 'tB_ana', teamId: 'tB', monthlySalary: undefined });
+    const a = allocateLabor({ timeEntries: [entry('ana', 'pX', 30)], members: [rowA, rowB], expenses: [], period, settings });
+    expect(a.byProject.get('pX')!.cost).toBe(30_000);          // was 0: last row (no salary) won
+    expect(a.payroll.total).toBe(120_000);
+    expect(a.byMember.get('ana')!.capacityHours).toBe(120);
+    const both = member('ana', 120_000, { id: 'tB_ana', teamId: 'tB' });
+    expect(payrollBetween([rowA, both], [], period.start, period.end).total).toBe(120_000); // was 240 000
+    expect(laborByProjectForEntries([entry('ana', 'pX', 10)], [rowA, rowB], settings).get('pX')!.cost).toBe(10_000);
+  });
+});
+
+describe('capacity only over the months the person was employed', () => {
+  it('a 1 Nov 2026 hire adds 0 to September; a March hire in a Jan-Dec view counts from March', () => {
+    const nov = member('nov', 120_000, { hiredAt: d('2026-11-01T12:00:00') } as any);
+    expect(memberEmployedMonthsBetween(nov, period.start, period.end)).toBe(0);
+    const mar = member('mar', 120_000, { hiredAt: d('2026-03-01T12:00:00'), createdAt: d('2026-03-01T12:00:00') } as any);
+    expect(memberEmployedMonthsBetween(mar, new Date(2026, 0, 1), new Date(2026, 11, 31, 23, 59, 59, 999))).toBeCloseTo(10, 6);
+    const a = allocateLabor({ timeEntries: [entry('nov', 'pX', 1)], members: [nov], expenses: [], period, settings });
+    expect(a.byMember.get('nov')!.capacityHours).toBe(0);
+  });
+});
+
+describe('entryHours: the span is the truth (timeTracking.ts rule)', () => {
+  it('11:17 -> 13:11 with a stale duration of 2993 min -> 1.9 h', () => {
+    expect(entryHours({ startTime: d('2026-09-10T11:17:00'), endTime: d('2026-09-10T13:11:00'), duration: 2993, source: 'timer' } as any)).toBeCloseTo(1.9, 6);
+    expect(entryHours({ startTime: d('2026-09-10T11:17:00'), endTime: d('2026-09-10T13:11:00'), duration: 2993 } as any)).toBeCloseTo(1.9, 6);
+  });
+  it('a paused timer: a duration SHORTER than the span wins', () => {
+    expect(entryHours({ startTime: d('2026-09-10T09:00:00'), endTime: d('2026-09-10T11:00:00'), duration: 90, source: 'timer' } as any)).toBe(1.5);
+  });
+  it('no endTime + duration 500 + source timer -> 0 (running)', () => {
+    expect(entryHours({ startTime: d('2026-09-10T09:00:00'), duration: 500, source: 'timer' } as any)).toBe(0);
+    expect(entryHours({ startTime: d('2026-09-10T09:00:00'), duration: 500 } as any)).toBe(0);
+  });
+  it('manual with duration 90 and no endTime -> 1.5 h; daily-report likewise', () => {
+    expect(entryHours({ startTime: d('2026-09-10T09:00:00'), duration: 90, source: 'manual' } as any)).toBe(1.5);
+    expect(entryHours({ duration: 90, source: 'daily-report' } as any)).toBe(1.5);
+  });
+  it('allocateLabor skips a running timer that has a duration written', () => {
+    const ana = member('ana', 120_000);
+    const running = { ...entry('ana', 'pX', 5), endTime: undefined, source: 'timer' } as any;
+    const a = allocateLabor({ timeEntries: [running], members: [ana], expenses: [], period, settings });
+    expect(a.basis).toBe('none');
   });
 });

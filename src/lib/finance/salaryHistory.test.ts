@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { TeamMember } from '../../types';
-import { memberSalaryForMonth, totalSalaryForMonth, appendSalaryChange } from './salaryHistory';
+import {
+  memberSalaryForMonth, totalSalaryForMonth, appendSalaryChange, leftAtForStatusChange,
+  groupMembersByPerson, personEmployedInMonth, personHourlyCostOverride, personSalaryRowForMonth,
+} from './salaryHistory';
 
 function mkMember(m: Partial<TeamMember>): TeamMember {
   return {
@@ -149,10 +152,10 @@ describe('memberSalaryForMonth', () => {
 describe('totalSalaryForMonth', () => {
   it('sums per-member salaries for the given month', () => {
     const members = [
-      mkMember({ id: 'a', monthlySalary: 50_000 }),
-      mkMember({ id: 'b', monthlySalary: 30_000, status: 'Inactive' }), // excluded (no history)
+      mkMember({ id: 'a', userId: 'ua', monthlySalary: 50_000 }),
+      mkMember({ id: 'b', userId: 'ub', monthlySalary: 30_000, status: 'Inactive' }), // excluded (no history)
       mkMember({
-        id: 'c', monthlySalary: 40_000,
+        id: 'c', userId: 'uc', monthlySalary: 40_000,
         salaryHistory: [{ monthlySalary: 40_000, effectiveFrom: new Date('2026-05-01') }],
       }),
     ];
@@ -239,5 +242,103 @@ describe('appendSalaryChange', () => {
     );
     expect(hist).toHaveLength(1);
     expect(hist[0].monthlySalary).toBe(70_000);
+  });
+});
+
+describe('one person, several rows (groupMembersByPerson + per-month resolution)', () => {
+  it('groups rows per userId; the profile prefers the Active row and fills empty fields; a row without userId is its own person', () => {
+    const rows = [
+      mkMember({ id: 'tA', userId: 'u', monthlySalary: 90_000, status: 'Inactive', clientCapacityHours: 90, leftAt: new Date('2026-01-01') } as any),
+      mkMember({ id: 'tB', userId: 'u', monthlySalary: 80_000, status: 'Active', displayName: 'Ana' } as any),
+      { ...mkMember({ id: 'solo', monthlySalary: 10_000 }), userId: '' } as TeamMember,
+    ];
+    const out = groupMembersByPerson(rows);
+    expect(out).toHaveLength(2);
+    const u = out.find(p => p.userId === 'u')!;
+    expect(u.rows).toHaveLength(2);
+    expect(u.profile.id).toBe('tB');                      // the Active row, not the higher-paid Inactive one
+    expect(u.profile.clientCapacityHours).toBe(90);       // filled from the other row
+    expect(out.find(p => !p.userId)!.rows[0].monthlySalary).toBe(10_000);
+  });
+  it('totalSalaryForMonth counts a salary carried on two rows of the same person ONCE', () => {
+    const rows = [mkMember({ id: 'a', userId: 'u', monthlySalary: 50_000 }), mkMember({ id: 'b', userId: 'u', monthlySalary: 50_000 })];
+    expect(totalSalaryForMonth(rows, end(2026, 5))).toBe(50_000);
+  });
+  it('(a) an Inactive 80k row (left 1 Mar) next to an Active 60k row hired in March: September costs 60k, January 80k', () => {
+    const rows = [
+      mkMember({ id: 'A', userId: 'u', monthlySalary: 80_000, status: 'Inactive', leftAt: new Date(2026, 2, 1) } as any),
+      mkMember({ id: 'B', userId: 'u', monthlySalary: 60_000, status: 'Active', hiredAt: new Date(2026, 2, 1) } as any),
+    ];
+    expect(totalSalaryForMonth(rows, end(2026, 8))).toBe(60_000);  // Sept — the merge charged 80k and dropped leftAt
+    expect(totalSalaryForMonth(rows, end(2026, 0))).toBe(80_000);  // Jan — still on the old row
+    expect(totalSalaryForMonth(rows, end(2026, 1))).toBe(80_000);  // Feb
+    const p = groupMembersByPerson(rows)[0];
+    expect(personEmployedInMonth(p, end(2026, 8))).toBe(true);
+    expect(personSalaryRowForMonth(p, end(2026, 8))!.id).toBe('B');
+  });
+  it("(b) one row's history does not erase the other row's months: January keeps 50k", () => {
+    const rows = [
+      mkMember({ id: 'A', userId: 'u', monthlySalary: 50_000, status: 'Active' } as any),
+      mkMember({ id: 'B', userId: 'u', monthlySalary: 70_000, status: 'Active',
+        salaryHistory: [{ monthlySalary: 70_000, effectiveFrom: new Date(2026, 3, 1) }] } as any),
+    ];
+    expect(totalSalaryForMonth(rows, end(2026, 0))).toBe(50_000);  // the merge took B's history -> 0
+    expect(totalSalaryForMonth(rows, end(2026, 4))).toBe(70_000);  // May: B's history applies, max wins
+  });
+  it('a person is employed in a month when ANY row is; nobody employed -> not', () => {
+    const rows = [
+      mkMember({ id: 'A', userId: 'u', monthlySalary: 1, status: 'Inactive', leftAt: new Date(2026, 2, 1) } as any),
+      mkMember({ id: 'B', userId: 'u', monthlySalary: 1, status: 'Active', hiredAt: new Date(2026, 5, 1) } as any),
+    ];
+    const p = groupMembersByPerson(rows)[0];
+    expect(personEmployedInMonth(p, end(2026, 1))).toBe(true);   // Feb: row A
+    expect(personEmployedInMonth(p, end(2026, 3))).toBe(false);  // Apr: between rows
+    expect(personEmployedInMonth(p, end(2026, 6))).toBe(true);   // Jul: row B
+  });
+  it('the hourlyCostRate override comes from any row, an Active row first', () => {
+    const p1 = groupMembersByPerson([
+      mkMember({ id: 'A', userId: 'u', monthlySalary: 90_000, status: 'Active' } as any),
+      mkMember({ id: 'B', userId: 'u', status: 'Active', hourlyCostRate: 950 } as any),
+    ])[0];
+    expect(personHourlyCostOverride(p1)).toBe(950);
+    const p2 = groupMembersByPerson([
+      mkMember({ id: 'A', userId: 'u', status: 'Inactive', hourlyCostRate: 700, leftAt: new Date(2026, 0, 1) } as any),
+      mkMember({ id: 'B', userId: 'u', status: 'Active', hourlyCostRate: 800 } as any),
+    ])[0];
+    expect(personHourlyCostOverride(p2)).toBe(800);
+    const p3 = groupMembersByPerson([mkMember({ id: 'A', userId: 'u', status: 'Inactive', hourlyCostRate: 700 } as any)])[0];
+    expect(personHourlyCostOverride(p3)).toBe(700);
+  });
+});
+
+describe('leaving payroll is stamped with a date (leftAtForStatusChange)', () => {
+  const now = new Date('2026-10-16T10:00:00Z');
+  it('Active -> Inactive with no date picked stamps NOW, so a later edit cannot resurrect past salaries', () => {
+    const prev = { status: 'Active', updatedAt: new Date('2026-01-01') } as any;
+    const left = leftAtForStatusChange(prev, 'Inactive', null, now)!;
+    expect(left).toEqual(now);
+    // Later edit: updatedAt moves to December, leftAt does not.
+    const m = mkMember({ monthlySalary: 60_000, status: 'Inactive', leftAt: left, updatedAt: new Date('2026-12-20') } as any);
+    expect(memberSalaryForMonth(m, end(2026, 8))).toBe(60_000);   // Sep: before leaving
+    expect(memberSalaryForMonth(m, end(2026, 10))).toBe(0);       // Nov: after leaving - the edit did not resurrect it
+  });
+  it('a picked date wins; reactivation clears with an explicit null; nothing to say -> undefined', () => {
+    const picked = new Date('2026-08-31T12:00:00');
+    expect(leftAtForStatusChange({ status: 'Active' } as any, 'Inactive', picked, now)).toEqual(picked);
+    expect(leftAtForStatusChange({ status: 'Inactive', leftAt: picked } as any, 'Active', null, now)).toBeNull();
+    expect(leftAtForStatusChange({ status: 'Active' } as any, 'Active', null, now)).toBeUndefined();
+  });
+  it('an Inactive member whose stored date the owner EMPTIED leaves from now ("Bosh = nga sot e tutje")', () => {
+    // The form pre-fills the stored leftAt, so an empty box is the owner clearing it.
+    const picked = new Date('2026-08-31T12:00:00');
+    expect(leftAtForStatusChange({ status: 'Inactive', leftAt: picked } as any, 'Inactive', null, now)).toEqual(now);
+  });
+  it('a LEGACY Inactive row without leftAt freezes its pre-edit updatedAt', () => {
+    const was = new Date('2026-04-15T09:00:00Z');
+    expect(leftAtForStatusChange({ status: 'Inactive', updatedAt: was } as any, 'Inactive', null, now)).toEqual(was);
+  });
+  it('documents the legacy hazard: without leftAt, a later edit (updatedAt) moves the leave date', () => {
+    const m = mkMember({ monthlySalary: 60_000, status: 'Inactive', updatedAt: new Date('2026-12-20') } as any);
+    expect(memberSalaryForMonth(m, end(2026, 10))).toBe(60_000);  // why TeamsView must stamp leftAt
   });
 });

@@ -11,6 +11,7 @@ import {
   EXPENSE_CATEGORY_SALARY,
 } from '../lib/finance/financialAnalytics';
 import { memberSalaryForMonth } from '../lib/finance/salaryHistory';
+import { billingTypeOf, monthlyFeeOf } from '../lib/finance/projectPeriod';
 import { useMemberCompensation } from '../hooks/useMemberCompensation';
 import { Award, TrendingUp, DollarSign, Users, ChevronDown, ChevronUp, Info, ShieldAlert } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
@@ -253,6 +254,13 @@ const BonusView: React.FC = () => {
      *  denominator that prorates it — they used to disagree (the charge looked at
      *  `memberUserIds`, the denominator also at `responsibleUserId`), so part of
      *  the salary was never charged and every bonus came out too high. */
+    /** What the project brings in for ONE month, in ALL: a retainer earns its
+     *  MONTHLY fee (`monthlyFeeOf` — a weekly retainer's `budget` is one week, ×52/12
+     *  like every engine), a one-time project its contract. Used for the net AND for
+     *  the weights that prorate salaries, so the two never disagree. */
+    const projectRevenueAll = (p: Project): number =>
+      toAll(billingTypeOf(p) === 'monthly' ? monthlyFeeOf(p) : (Number(p.budget) || 0), p.currency);
+
     const participantsOf = (p: Project): string[] => {
       const s = new Set<string>();
       ((p.memberUserIds as string[] | undefined) || []).forEach(u => { if (u) s.add(u); });
@@ -306,15 +314,15 @@ const BonusView: React.FC = () => {
             const tmSalary = chargedSalary(uid, tm);
             if (!tmSalary) return sum;
             const assignedProjects = periodProjects.filter(pp => participantsOf(pp).includes(uid));
-            const totalAssignedBudget = assignedProjects.reduce((s, pp) => s + toAll(pp.budget || 0, pp.currency), 0);
+            const totalAssignedBudget = assignedProjects.reduce((s, pp) => s + projectRevenueAll(pp), 0);
             const fraction = totalAssignedBudget > 0
-              ? toAll(p.budget || 0, p.currency) / totalAssignedBudget
+              ? projectRevenueAll(p) / totalAssignedBudget
               : 1 / Math.max(1, assignedProjects.length);
             return sum + tmSalary * fraction;
           }, 0);
 
           // Normalizo në ALL që fitimi neto të mos përziejë EUR me kostot në Lekë.
-          const budget = toAll(p.budget || 0, p.currency);
+          const budget = projectRevenueAll(p);
           const net = budget - directExpenses - perProjectOffice - salaryCosts;
 
           return {

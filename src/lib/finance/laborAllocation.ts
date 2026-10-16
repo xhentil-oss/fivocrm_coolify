@@ -25,15 +25,30 @@
  *
  * (equality with payroll holds exactly when `overAbsorbed` is 0).
  *
+ * Rows are charged at the LOADED rate (salary × (1 + employerCostPct) / capacity)
+ * while `payroll` is what was paid (unloaded), so a normal month over-absorbs by
+ * the employer load alone. That excess is NOT pooled as a negative cost — a
+ * signed pool made overhead negative under the defaults (net > gross for every
+ * client). The pool is `poolLabor()` = unabsorbed (≥ 0) + labour outside rows,
+ * never negative, and the excess is reported on its own as `loadCredit`
+ * (`loadCreditOf` = `overAbsorbed`), so exactly:
+ *
+ *     Σ rows' labour + poolLabor  ==  payroll + loadCredit
+ *     Σ row profit − unallocated overhead + loadCredit  ==  operating profit
+ *
+ * "Kontrollo tarifat" is only a real signal beyond the employer load:
+ * `overAbsorbedVsLoaded` compares against `loadedPayroll` = payroll × (1 + employerCostPct).
+ *
  * With NO entries in the period the result says `basis: 'none'` and every caller
  * falls back to its legacy rule and labels it — the same law as payroll's `basis`.
  */
 import type { Expense, TeamMember, TimeEntry } from '../../types';
 import { payrollBetween, type PeriodPayroll } from './payroll';
-import { memberCostRate, memberCostRole, memberCapacityHours, type RateCardRole } from './costRates';
+import { personCostRate, memberCostRole, memberCapacityHours, type RateCardRole } from './costRates';
 import { resolveFinanceSettings, type FinanceSettings, type CostRateBasis } from './profitabilityCore';
 import { entryHours, entryInPeriod, entryInstantMs, entryIsOpen } from './timeEntries';
 import { fractionalMonthsBetween, monthCoverage } from './projectPeriod';
+import { groupMembersByPerson, personEmployedInMonth, personOf, type PersonRecord } from './salaryHistory';
 
 export interface MemberLaborLine {
   userId: string;
@@ -89,10 +104,18 @@ export interface LaborAllocation {
    * is what left the bank and is never scaled (same law as the Financat hero).
    */
   payroll: PeriodPayroll;
-  /** Payroll not covered by logged hours → shared overhead. */
+  /** Payroll not covered by logged hours → shared overhead (≥ 0). */
   unabsorbed: number;
-  /** Hours × rates beyond what payroll actually paid (rates too high / unpaid people). */
+  /**
+   * Hours × rates beyond what payroll actually paid (employer load, rates too
+   * high, unpaid people) — ≥ 0. Never pooled as a negative cost: every consumer
+   * reports it as its own reconciliation line (`loadCredit`), see the header.
+   */
   overAbsorbed: number;
+  /** payroll × (1 + employerCostPct) — what the loaded rates are calibrated to cover. */
+  loadedPayroll: number;
+  /** Hours × rates beyond the LOADED payroll — the real "kontrollo tarifat" signal. */
+  overAbsorbedVsLoaded: number;
   totalHours: number;
   entriesConsidered: number;
   /** Entries whose userId is not a member — costed at 0 and counted here. */
@@ -138,13 +161,44 @@ export function proratePlanPayroll(p: PeriodPayroll, start: Date, end: Date): Pe
   return changed ? { ...p, total, profile, months } : p;
 }
 
+/**
+ * Months (fractional, like `fractionalMonthsBetween`) of [start, end] in which
+ * `member` was employed — whole-month convention, the same as salary: a month
+ * counts when `memberEmployedInMonth` says so, at the share the period covers.
+ * A Nov hire adds nothing to September; a March hire in a Jan–Dec view counts
+ * from March.
+ */
+export function memberEmployedMonthsBetween(member: TeamMember | PersonRecord, start: Date, end: Date): number {
+  if (end <= start) return 0;
+  const person: PersonRecord = 'rows' in member ? member : personOf(member);
+  let total = 0;
+  let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+  const lastMonth = new Date(end.getFullYear(), end.getMonth(), 1);
+  for (let guard = 0; cursor.getTime() <= lastMonth.getTime() && guard < 1200; guard++) {
+    const y = cursor.getFullYear(), m = cursor.getMonth();
+    const monthEnd = new Date(y, m + 1, 0, 23, 59, 59, 999);
+    if (personEmployedInMonth(person, monthEnd)) total += monthCoverage(y, m, start, end);
+    cursor = new Date(y, m + 1, 1);
+  }
+  return total;
+}
+
+/** userId → the person (all their rows). Rows without a userId cannot log hours and are skipped. */
+function personsByUid(members: TeamMember[] | null | undefined): Map<string, PersonRecord> {
+  const out = new Map<string, PersonRecord>();
+  for (const p of groupMembersByPerson(members)) if (p.userId) out.set(p.userId, p);
+  return out;
+}
+
 export function allocateLabor(input: LaborAllocationInput): LaborAllocation {
   const settings = resolveFinanceSettings(input.settings);
   const { start, end } = input.period;
   const months = fractionalMonthsBetween(start, end);
   const payroll = proratePlanPayroll(payrollBetween(input.members, input.expenses, start, end), start, end);
-  const memberByUid = new Map<string, TeamMember>();
-  for (const m of input.members || []) if (m.userId) memberByUid.set(m.userId, m);
+  // One record per PERSON — a member on two teams has two rows, and a
+  // last-row-wins map costed their hours at 0 when the salary sat on the other.
+  // The rate is resolved PER MONTH over all their rows (salaryHistory.ts).
+  const memberByUid = personsByUid(input.members);
 
   const byProject = new Map<string, ProjectLabor>();
   const byMember = new Map<string, MemberLabor>();
@@ -152,27 +206,29 @@ export function allocateLabor(input: LaborAllocationInput): LaborAllocation {
   let absorbed = 0, totalHours = 0, considered = 0, withoutMember = 0;
   const noRate = new Set<string>();
   const rateCache = new Map<string, { rate: number; basis: CostRateBasis }>();
-  const rateFor = (m: TeamMember, atMs: number) => {
-    const key = `${m.userId}|${new Date(atMs).getFullYear()}-${new Date(atMs).getMonth()}`;
+  const rateFor = (p: PersonRecord, atMs: number) => {
+    const key = `${p.userId}|${new Date(atMs).getFullYear()}-${new Date(atMs).getMonth()}`;
     let r = rateCache.get(key);
     if (!r) {
-      const cr = memberCostRate(m, monthEndOf(atMs), settings, input.rateCard);
+      const cr = personCostRate(p, monthEndOf(atMs), settings, input.rateCard);
       r = { rate: cr.rate, basis: cr.basis };
       rateCache.set(key, r);
     }
     return r;
   };
-  const memberRow = (m: TeamMember): MemberLabor => {
-    let row = byMember.get(m.userId);
+  const memberRow = (p: PersonRecord): MemberLabor => {
+    let row = byMember.get(p.userId);
     if (!row) {
-      const lastRate = rateFor(m, end.getTime());
+      const m = p.profile;
+      const lastRate = rateFor(p, end.getTime());
       row = {
-        userId: m.userId, name: m.displayName || m.email || 'Pa emër', role: memberCostRole(m),
+        userId: p.userId, name: m.displayName || m.email || 'Pa emër', role: memberCostRole(m),
         clientHours: 0, internalHours: 0, totalHours: 0,
-        capacityHours: memberCapacityHours(m, settings, input.rateCard) * months,
+        // Only the months they were employed — not the whole period.
+        capacityHours: memberCapacityHours(m, settings, input.rateCard) * memberEmployedMonthsBetween(p, start, end),
         utilizationPct: null, clientCost: 0, totalCost: 0, rate: lastRate.rate, rateBasis: lastRate.basis,
       };
-      byMember.set(m.userId, row);
+      byMember.set(p.userId, row);
     }
     return row;
   };
@@ -188,9 +244,9 @@ export function allocateLabor(input: LaborAllocationInput): LaborAllocation {
     if (!member) withoutMember++;
     const at = entryInstantMs(e) ?? end.getTime();
     const r = member ? rateFor(member, at) : { rate: 0, basis: 'none' as CostRateBasis };
-    if (member && r.basis === 'none') noRate.add(member.displayName || member.email || member.userId);
+    if (member && r.basis === 'none') noRate.add(member.profile.displayName || member.profile.email || member.userId);
     const cost = h * r.rate;
-    const role = e.costRole || memberCostRole(member);
+    const role = e.costRole || memberCostRole(member?.profile);
     const isClient = !!e.projectId && (!input.clientProjectIds || input.clientProjectIds.has(e.projectId));
 
     if (e.projectId) {
@@ -199,7 +255,7 @@ export function allocateLabor(input: LaborAllocationInput): LaborAllocation {
       pl.hours += h; pl.cost += cost;
       const uid = e.userId || '?';
       let line = pl.byMember.find(l => l.userId === uid);
-      if (!line) { line = { userId: uid, name: member ? (member.displayName || member.email || 'Pa emër') : 'I panjohur', role, hours: 0, cost: 0 }; pl.byMember.push(line); }
+      if (!line) { line = { userId: uid, name: member ? (member.profile.displayName || member.profile.email || 'Pa emër') : 'I panjohur', role, hours: 0, cost: 0 }; pl.byMember.push(line); }
       line.hours += h; line.cost += cost;
       const br = pl.byRole[role] || { hours: 0, cost: 0 };
       br.hours += h; br.cost += cost; pl.byRole[role] = br;
@@ -225,6 +281,8 @@ export function allocateLabor(input: LaborAllocationInput): LaborAllocation {
   const covered = absorbed + internal.cost;
   const unabsorbed = Math.max(0, payroll.total - covered);
   const overAbsorbed = Math.max(0, covered - payroll.total);
+  const loadedPayroll = payroll.total * (1 + Math.max(0, settings.employerCostPct || 0));
+  const overAbsorbedVsLoaded = Math.max(0, covered - loadedPayroll);
 
   return {
     basis: considered > 0 ? 'hours' : 'none',
@@ -237,6 +295,8 @@ export function allocateLabor(input: LaborAllocationInput): LaborAllocation {
     payroll,
     unabsorbed,
     overAbsorbed,
+    loadedPayroll,
+    overAbsorbedVsLoaded,
     totalHours,
     entriesConsidered: considered,
     entriesWithoutMember: withoutMember,
@@ -277,9 +337,23 @@ export function laborOutsideRows(alloc: LaborAllocation, rowProjectIds: Readonly
   return { internal, absentProjects, absentHours, absentProjectIds, total: internal + absentProjects };
 }
 
-/** The labour share of a consumer's overhead pool: unabsorbed payroll + every hour no row carries. */
+/**
+ * The labour share of a consumer's overhead pool: the unabsorbed payroll (≥ 0)
+ * + every hour no row carries. Never negative. Exactly:
+ *     Σ rows' labour + poolLabor  ==  payroll + loadCreditOf(alloc)
+ */
 export function poolLabor(alloc: LaborAllocation, rowProjectIds: ReadonlySet<string>): number {
-  return Math.max(0, alloc.unabsorbed) + laborOutsideRows(alloc, rowProjectIds).total;
+  return alloc.unabsorbed + laborOutsideRows(alloc, rowProjectIds).total;
+}
+
+/**
+ * Labour charged to rows ABOVE the unloaded payroll (= `overAbsorbed`, ≥ 0) —
+ * mostly the employer contributions the loaded rate carries. Every consumer
+ * reports it as its own line so its identity is exact:
+ *     Σ row profit − unallocated overhead + loadCredit == operating profit
+ */
+export function loadCreditOf(alloc: Pick<LaborAllocation, 'overAbsorbed'> | null | undefined): number {
+  return alloc ? Math.max(0, alloc.overAbsorbed || 0) : 0;
 }
 
 /** projectId → labour, over ALL entries (no period, no payroll reconciliation). Entries with no project key on `''`. */
@@ -292,8 +366,7 @@ export function laborByProjectForEntries(
   asOf?: Date | null,
 ): Map<string, ProjectLabor> {
   const settings = resolveFinanceSettings(rawSettings);
-  const memberByUid = new Map<string, TeamMember>();
-  for (const m of members || []) if (m.userId) memberByUid.set(m.userId, m);
+  const memberByUid = personsByUid(members);
   const out = new Map<string, ProjectLabor>();
   const rateCache = new Map<string, number>();
   const asOfMs = asOf ? asOf.getTime() : null;
@@ -307,11 +380,11 @@ export function laborByProjectForEntries(
     const key = `${e.userId}|${new Date(at).getFullYear()}-${new Date(at).getMonth()}`;
     let rate = rateCache.get(key);
     if (rate == null) {
-      rate = member ? memberCostRate(member, monthEndOf(at), settings, rateCard).rate : 0;
+      rate = member ? personCostRate(member, monthEndOf(at), settings, rateCard).rate : 0;
       rateCache.set(key, rate);
     }
     const cost = h * rate;
-    const role = e.costRole || memberCostRole(member);
+    const role = e.costRole || memberCostRole(member?.profile);
     const pid = e.projectId || '';
     let pl = out.get(pid);
     if (!pl) { pl = { projectId: pid, hours: 0, cost: 0, byMember: [], byRole: {} }; out.set(pid, pl); }
@@ -319,7 +392,7 @@ export function laborByProjectForEntries(
     const br = pl.byRole[role] || { hours: 0, cost: 0 };
     br.hours += h; br.cost += cost; pl.byRole[role] = br;
     let line = pl.byMember.find(l => l.userId === e.userId);
-    if (!line) { line = { userId: e.userId, name: member ? (member.displayName || member.email || 'Pa emër') : 'I panjohur', role, hours: 0, cost: 0 }; pl.byMember.push(line); }
+    if (!line) { line = { userId: e.userId, name: member ? (member.profile.displayName || member.profile.email || 'Pa emër') : 'I panjohur', role, hours: 0, cost: 0 }; pl.byMember.push(line); }
     line.hours += h; line.cost += cost;
   }
   for (const pl of out.values()) pl.byMember.sort((a, b) => b.cost - a.cost);

@@ -26,7 +26,7 @@ import {
   MONTH_LABELS_SQ,
 } from '../lib/finance/financialAnalytics';
 import { computeProjectPnl, type ProjectPnlOptions } from '../lib/finance/projectPnl';
-import { invoiceBillingBlockReason, type InvoiceGenerationBlock } from '../lib/finance/recurringInvoices';
+import { invoiceBillingBlockReason, INVOICE_BLOCK_LABELS, type InvoiceGenerationBlock } from '../lib/finance/recurringInvoices';
 import { getExpenseDate } from '../lib/finance/financialAnalytics';
 import {
   payrollForMonth,
@@ -45,7 +45,13 @@ import { allocateLabor } from '../lib/finance/laborAllocation';
 import { computeClientProfitability, monthCloseChecks, snapshotForClose } from '../lib/finance/clientProfitability';
 import { computeCapacity } from '../lib/finance/capacity';
 import { monthCloseId } from '../lib/finance/timeEntries';
-import { closeMonthPatch, monthCloseBlockReason, reopenMonthPatch, resultFromSnapshot, snapshotNetDrift } from '../lib/finance/monthClose';
+import {
+  closeMonthPatch, closeSnapshotDoc, closeSnapshotPath, monthCloseBlockReason, reopenMonthPatch,
+  resolveCloseSnapshot, resultFromSnapshot, snapshotNetDrift, snapshotRevenueBasis,
+} from '../lib/finance/monthClose';
+import { Timestamp, deleteField, doc, getDoc, writeBatch } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import { monthCoverage } from '../lib/finance/projectPeriod';
 import { useToast } from '../hooks/use-toast';
 import ClientProfitabilityPanel from '../components/finance/ClientProfitabilityPanel';
 import CapacityCard from '../components/finance/CapacityCard';
@@ -247,15 +253,22 @@ const FinancesView: React.FC = () => {
     const prev = monthWindow(now, -1);
     const prev2 = monthWindow(now, -2);
 
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    // Month-to-date means TO DATE: an expense entered today but dated the 30th
+    // (prepaid rent) used to sit in the hero while its comparison base was
+    // clamped to the same day last month — 30 days of outflow vs a few.
+    const curEnd = cur.end > now ? now : cur.end;
     const elapsedDay = now.getDate();
-    const elapsedFraction = Math.min(1, elapsedDay / daysInMonth);
-    // The recorded window is the WHOLE month, matching `otherExpenses` in
-    // monthProfit: a salary row dated the 30th is as real as a rent row dated
-    // the 30th, and counting one but not the other split the same month across
-    // two bases.
+    // The elapsed share of the month by INSTANT, exactly as `proratePlanPayroll`
+    // (laborAllocation.ts) prorates the plan in the client/department tables —
+    // whole days put the hero's plan payroll up to a day ahead of theirs.
+    const elapsedFraction = monthCoverage(cur.year, cur.monthIndex, cur.start, curEnd);
+    // The recorded window is cut at NOW too, matching `otherExpenses` in
+    // monthProfit (which reads to `curEnd`): a salary row dated the 30th is no
+    // more "paid to date" than a rent row dated the 30th, and reading one to
+    // month-end but not the other split the same month across two windows.
+    // The PLAN still resolves at month-end (`planAt`), then is prorated.
     const curPay = proratedPayroll(
-      payrollForMonth(teamMembers, exp, cur.start, cur.end),
+      payrollForMonth(teamMembers, exp, cur.start, curEnd, cur.end),
       elapsedFraction,
     );
 
@@ -267,10 +280,6 @@ const FinancesView: React.FC = () => {
       Math.min(1, prevDay / prevDays),
     );
 
-    // Month-to-date means TO DATE: an expense entered today but dated the 30th
-    // (prepaid rent) used to sit in the hero while its comparison base was
-    // clamped to the same day last month — 30 days of outflow vs a few.
-    const curEnd = cur.end > now ? now : cur.end;
     return {
       cur, prev, prev2,
       current: monthProfit(inv, exp, curPay, cur.start, curEnd),
@@ -290,7 +299,9 @@ const FinancesView: React.FC = () => {
       delta: data.profit - base.profit,
       title: `${MONTH_NAMES_FULL[w.monthIndex]} ${w.year}`,
       deltaVs: usePrev ? MONTH_NAMES_FULL[prev2.monthIndex] : 'e njëjta datë muajin e kaluar',
-      marginPct: data.collected > 0 ? Math.round((data.profit / data.collected) * 100) : 0,
+      // No cash in → no margin. 0 % read as "a month with no profit margin",
+      // which is a claim about money that never arrived.
+      marginPct: data.collected > 0 ? Math.round((data.profit / data.collected) * 100) : null,
       closed: usePrev,
     };
   }, [snapshots, usePrev]);
@@ -330,23 +341,21 @@ const FinancesView: React.FC = () => {
   const trend = useMemo(() => {
     const inv = invoices || [];
     const exp = expenses || [];
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const elapsedFraction = Math.min(1, now.getDate() / daysInMonth);
     const out: { label: string; profit: number }[] = [];
     for (let i = 5; i >= 0; i--) {
       const w = monthWindow(now, -i);
-      // The current month (i===0) is month-to-date → prorate its payroll just
-      // like the hero (and only when it is the plan), so the last trend point
-      // equals the headline number.
-      const pay = proratedPayroll(
-        payrollForMonth(teamMembers, exp, w.start, w.end),
-        i === 0 ? elapsedFraction : 1,
-      );
-      // …and cut its window at NOW like the hero does (`curEnd` in `snapshots`):
-      // read to month-end, a prepaid expense dated the 30th sat in the trend's
-      // last point but not in the headline, and the forecast segment — which is
-      // anchored on that point — started from a number the page never showed.
+      // The current month (i===0) is month-to-date: cut its window at NOW like
+      // the hero does (`curEnd` in `snapshots`) — expenses AND recorded payroll —
+      // and prorate its PLAN payroll by the same instant share, so the last
+      // trend point equals the headline number. Read to month-end, a prepaid
+      // expense dated the 30th sat in the trend's last point but not in the
+      // headline, and the forecast segment — which is anchored on that point —
+      // started from a number the page never showed.
       const end = i === 0 && w.end > now ? now : w.end;
+      const pay = proratedPayroll(
+        payrollForMonth(teamMembers, exp, w.start, end, w.end),
+        i === 0 ? monthCoverage(w.year, w.monthIndex, w.start, end) : 1,
+      );
       const p = monthProfit(inv, exp, pay, w.start, end);
       out.push({ label: MONTH_LABELS_SQ[w.monthIndex], profit: Math.round(p.profit) });
     }
@@ -409,8 +418,17 @@ const FinancesView: React.FC = () => {
       const block = invoiceBillingBlockReason(p as any, now, p.projectId ? projectById.get(p.projectId) as any : null);
       if (block === 'paused') { paused++; continue; }
       if (block === 'not-due' || block === 'already-generated') { healthy++; continue; }
-      if (block === 'unsupported-frequency' || block === 'no-next-date' || block === 'series-ended' || block === 'project-also-bills') {
-        misconfigured.push({ id: p.id, name, amount, reason: REASON_LABEL[block] || block });
+      // A cancelled parent ended the series — listed with the stopped ones, never
+      // as healthy (it used to fall through every branch and vanish).
+      if (block === 'parent-cancelled') {
+        stopped.push({ id: p.id, name, amount, reason: INVOICE_BLOCK_LABELS[block] });
+        continue;
+      }
+      // A DRAFT parent never generates until it is issued: a fixable setup
+      // problem, so it sits with the misconfigured series.
+      if (block === 'unsupported-frequency' || block === 'no-next-date' || block === 'series-ended'
+        || block === 'project-also-bills' || block === 'parent-draft') {
+        misconfigured.push({ id: p.id, name, amount, reason: REASON_LABEL[block] || INVOICE_BLOCK_LABELS[block] || block });
         continue;
       }
       if (block === null) {
@@ -454,7 +472,10 @@ const FinancesView: React.FC = () => {
     }
     if (isPickedMonth(period)) {
       const [y, m] = period.split('-').map(Number);
-      return { start: new Date(y, m, 1, 0, 0, 0, 0), end: new Date(y, m + 1, 0, 23, 59, 59, 999) };
+      // `?period=` can name the RUNNING month (a deep link): it ends NOW like
+      // "Ky muaj", never at a month-end that has not happened yet.
+      const monthEnd = new Date(y, m + 1, 0, 23, 59, 59, 999);
+      return { start: new Date(y, m, 1, 0, 0, 0, 0), end: monthEnd > now ? now : monthEnd };
     }
     if (period === 'all') {
       // From the first thing the books know about — project, expense or invoice —
@@ -523,13 +544,42 @@ const FinancesView: React.FC = () => {
     customers, projects, timeEntries, members: teamMembers, expenses, invoices, period: periodRange,
     settings: tenantSettings?.financeSettings, rateCard: tenantSettings?.rateCard, labor, revenueBasis,
   }), [customers, projects, timeEntries, teamMembers, expenses, invoices, periodRange, tenantSettings?.financeSettings, tenantSettings?.rateCard, labor, revenueBasis]);
+  // The SAME table on the earned basis, whatever the toggle says. A month close
+  // is always taken on it (the snapshot records `revenueBasis: 'earned'`), the
+  // pre-close checks read it, and the bridge line quotes "Fituar" from it on the
+  // "Arkëtuar" toggle — so closing never depends on which toggle was lit.
+  const earnedClientProfit = useMemo(() => (revenueBasis === 'earned' ? clientProfit : computeClientProfitability({
+    customers, projects, timeEntries, members: teamMembers, expenses, invoices, period: periodRange,
+    settings: tenantSettings?.financeSettings, rateCard: tenantSettings?.rateCard, labor, revenueBasis: 'earned',
+  })), [revenueBasis, clientProfit, customers, projects, timeEntries, teamMembers, expenses, invoices, periodRange, tenantSettings?.financeSettings, tenantSettings?.rateCard, labor]);
   const capacity = useMemo(() => computeCapacity(labor, teamMembers, tenantSettings?.rateCard), [labor, teamMembers, tenantSettings?.rateCard]);
   const currentClose = useMemo(
     () => (periodMonthKey ? (monthCloses || []).find(c => c.periodKey === periodMonthKey) || null : null),
     [monthCloses, periodMonthKey],
   );
+  // The close snapshot (payroll, profit, every client's margin) is NOT on the
+  // member-readable lock doc any more: it lives in
+  // `financeMonthCloses/{id}/private/snapshot`, readable by Owner/Admin only, and
+  // is fetched here only for them (monthClose.ts `closeSnapshotPath`).
+  const canReadCloseSnapshot = !!(permissions.isAdmin || permissions.isOwner || permissions.isSuperAdmin);
+  const [privateSnapshot, setPrivateSnapshot] = useState<{ closeId: string; snapshot: unknown } | null>(null);
+  const closeIdForSnapshot = currentClose?.id || null;
+  const closeStampForSnapshot = String(parseDate(currentClose?.closedAt)?.getTime() ?? '');
+  useEffect(() => {
+    if (!closeIdForSnapshot || !canReadCloseSnapshot) { setPrivateSnapshot(null); return; }
+    let cancelled = false;
+    const [c, cid, sub, sid] = closeSnapshotPath(closeIdForSnapshot);
+    getDoc(doc(db, c, cid, sub, sid))
+      .then(s => { if (!cancelled) setPrivateSnapshot(s.exists() ? { closeId: closeIdForSnapshot, snapshot: (s.data() as any)?.snapshot ?? null } : null); })
+      .catch(err => {
+        // Denied / offline: fall back to the legacy inline field (if any), never crash the page.
+        console.warn('[Finances] close snapshot unreadable:', err?.code || err);
+        if (!cancelled) setPrivateSnapshot(null);
+      });
+    return () => { cancelled = true; };
+  }, [closeIdForSnapshot, closeStampForSnapshot, canReadCloseSnapshot]);
   const [closeOpen, setCloseOpen] = useState(false);
-  const closeChecks = useMemo(() => monthCloseChecks(clientProfit), [clientProfit]);
+  const closeChecks = useMemo(() => monthCloseChecks(earnedClientProfit), [earnedClientProfit]);
   const businessIdForClose = ((teamMembers || []).find(m => (m as any).businessId) as any)?.businessId as string | undefined;
   const canCloseMonth = !!(permissions.isAdmin || permissions.isOwner) && !!businessIdForClose;
   // Only a month that has ENDED may be closed (src/lib/finance/monthClose.ts):
@@ -539,18 +589,33 @@ const FinancesView: React.FC = () => {
   const confirmClose = useCallback(async (acknowledged: string[]) => {
     if (!periodMonthKey || !businessIdForClose) return;
     if (monthCloseBlockReason(periodMonthKey, new Date())) throw new Error('Muaji nuk ka mbaruar ende — mund të mbyllet pas fundit të muajit.');
-    const patch = closeMonthPatch({
+    const input = {
       businessId: businessIdForClose, periodKey: periodMonthKey, userId: user?.uid,
-      snapshot: snapshotForClose(clientProfit), warnings: acknowledged,
-    });
-    const id = monthCloseId(businessIdForClose, periodMonthKey);
+      snapshot: snapshotForClose(earnedClientProfit), warnings: acknowledged, at: new Date(),
+    };
+    const patch = closeMonthPatch(input);
+    const id = currentClose?.id || monthCloseId(businessIdForClose, periodMonthKey);
+    // ONE batch: the member-readable lock doc + the Owner/Admin-only snapshot
+    // subdocument (monthClose.ts `closeSnapshotPath`) — a lock without its
+    // snapshot (or the reverse) can never be left behind.
     // A month that was closed, reopened and is being closed AGAIN must keep its
-    // `reopenedAt` / `reopenedByUserId`: `create` is a `setDoc` without merge and
-    // wiped them (and the original `createdAt`), erasing the only evidence the
-    // month had ever been reopened. The rules allow the update (periodKey pinned).
-    if (currentClose) await closeMutation.update(currentClose.id || id, patch as any);
-    else await closeMutation.create(patch as any, id);
-  }, [periodMonthKey, businessIdForClose, closeMutation, user?.uid, clientProfit, currentClose]);
+    // `reopenedAt` / `reopenedByUserId`: an `update`, never a replace (a setDoc
+    // without merge wiped them and the original `createdAt`). The rules allow the
+    // update (periodKey pinned). The re-close also DELETES a legacy inline
+    // `snapshot` field, so the old copy stops being readable by every member.
+    const batch = writeBatch(db);
+    const closeRef = doc(db, 'financeMonthCloses', id);
+    const nowTs = Timestamp.now();
+    if (currentClose) {
+      batch.update(closeRef, { ...patch, snapshot: deleteField(), updatedAt: nowTs });
+    } else {
+      batch.set(closeRef, { ...patch, createdAt: nowTs, updatedAt: nowTs, createdByUserId: user?.uid || null });
+    }
+    const [c, cid, sub, sid] = closeSnapshotPath(id);
+    batch.set(doc(db, c, cid, sub, sid), { ...closeSnapshotDoc(input), updatedAt: nowTs });
+    await batch.commit();
+    setPrivateSnapshot({ closeId: id, snapshot: input.snapshot });
+  }, [periodMonthKey, businessIdForClose, user?.uid, earnedClientProfit, currentClose]);
   // Admin/owner-only: unlock the month (timesheets become editable again). The
   // close record is UPDATED, never replaced — closedAt and the snapshot survive
   // as the audit trail, and a later re-close updates the same document.
@@ -560,7 +625,7 @@ const FinancesView: React.FC = () => {
     if (!window.confirm(`Rihap ${periodLabel}? Orët e këtij muaji do të mund të ndryshohen përsëri; snapshot-i i mbylljes ruhet.`)) return;
     setReopening(true);
     try {
-      await closeMutation.update(currentClose.id, reopenMonthPatch(user?.uid) as any);
+      await closeMutation.update(currentClose.id, reopenMonthPatch(user?.uid));
       toast({ title: 'Muaji u rihap', description: 'Orët mund të ndryshohen përsëri. Mbylle sërish kur të jetë gati.' });
     } catch (err: any) {
       console.error('[Finances] reopen month failed:', err);
@@ -573,14 +638,38 @@ const FinancesView: React.FC = () => {
   // the snapshot used to be write-only. The drift (live net − closed net) is
   // reported beside the pill: a non-zero drift means something dated inside the
   // closed month was written after the close, which the timesheet lock cannot stop.
+  // Only in the SAME revenue basis: a close is earned, so on the "Arkëtuar"
+  // toggle `resultFromSnapshot` answers null and the table stays live, with a
+  // note that the close is in "Fituar" (`snapshotBasis` on the panel).
+  // The snapshot itself: the private subdocument (Owner/Admin only), else the
+  // legacy inline field of a close written before the move (monthClose.ts).
+  const closeSnapshot = useMemo(
+    () => resolveCloseSnapshot(
+      privateSnapshot && currentClose && privateSnapshot.closeId === currentClose.id ? privateSnapshot : null,
+      currentClose,
+    ),
+    [privateSnapshot, currentClose],
+  );
   const frozenClientProfit = useMemo(
-    () => (currentClose?.locked ? resultFromSnapshot(currentClose.snapshot, clientProfit) : null),
-    [currentClose, clientProfit],
+    () => (currentClose?.locked ? resultFromSnapshot(closeSnapshot, clientProfit) : null),
+    [currentClose, closeSnapshot, clientProfit],
+  );
+  const frozenEarnedClientProfit = useMemo(
+    () => (revenueBasis === 'earned' ? frozenClientProfit : currentClose?.locked ? resultFromSnapshot(closeSnapshot, earnedClientProfit) : null),
+    [revenueBasis, frozenClientProfit, currentClose, closeSnapshot, earnedClientProfit],
+  );
+  const closeSnapshotBasis = useMemo(
+    () => (currentClose?.locked ? snapshotRevenueBasis(closeSnapshot) : null),
+    [currentClose, closeSnapshot],
   );
   const closeDrift = useMemo(
-    () => (currentClose?.locked ? snapshotNetDrift(currentClose.snapshot, clientProfit) : null),
-    [currentClose, clientProfit],
+    () => (currentClose?.locked ? snapshotNetDrift(closeSnapshot, clientProfit) : null),
+    [currentClose, closeSnapshot, clientProfit],
   );
+  // What the client table SHOWS — the CSV export, the "Klient" alarms and the
+  // bridge line read this, never the live result behind a frozen table.
+  const shownClientProfit = frozenClientProfit ?? clientProfit;
+  const shownEarnedClientProfit = frozenEarnedClientProfit ?? earnedClientProfit;
 
   // ── Collected cash, attributed to a department and a person ──
   // The accrual columns (budget/invoiced) say what was EARNED; this says what
@@ -597,6 +686,15 @@ const FinancesView: React.FC = () => {
     () => computeDepartmentPnl(projects, teamMembers, expenses, { ...periodOpts, revenueBasis: pnlBasis, invoices, teams, labor, timeEntries, services, invoiceItems }),
     [projects, teamMembers, expenses, invoices, periodOpts, pnlBasis, teams, labor, timeEntries, services, invoiceItems],
   );
+
+  // Invoices whose `projectId` resolves to no project (deleted). Both engines
+  // count them over the same window; the larger answer is shown (they agree
+  // whenever both see the same invoices — projectPnl counts every amount,
+  // departmentPnl only invoices with a projectId, which these all have).
+  const unresolvedInvoices = useMemo(() => {
+    const a = projectPnl.unresolvedInvoices, b = departmentPnl.unresolvedInvoices;
+    return a.count >= b.count ? a : b;
+  }, [projectPnl.unresolvedInvoices, departmentPnl.unresolvedInvoices]);
 
   /**
    * Department rows carrying BOTH bases side by side.
@@ -720,18 +818,18 @@ const FinancesView: React.FC = () => {
 
   // ── Forward-looking cashflow health (recurring inflow vs fixed outflow) ──
   const cashflow = useMemo(
-    () => computeCashflowHealth(invoices, expenses, teamMembers, projects, now, hostingSubs),
-    [invoices, expenses, teamMembers, projects, now, hostingSubs],
+    () => computeCashflowHealth(invoices, expenses, teamMembers, projects, now, hostingSubs, hostingDomains),
+    [invoices, expenses, teamMembers, projects, now, hostingSubs, hostingDomains],
   );
 
   // ── Next-month profit forecast (project pipeline + recurring invoices) ──
   const forecast = useMemo(
-    () => forecastNextMonth(projects, invoices, expenses, teamMembers, now, hostingSubs),
-    [projects, invoices, expenses, teamMembers, now, hostingSubs],
+    () => forecastNextMonth(projects, invoices, expenses, teamMembers, now, hostingSubs, hostingDomains),
+    [projects, invoices, expenses, teamMembers, now, hostingSubs, hostingDomains],
   );
   const hostingFinance = useMemo(() => {
     if (!hostingOn) return null;
-    const mrr = hostingMonthlyRecurringRevenue(hostingSubs);
+    const mrr = hostingMonthlyRecurringRevenue(hostingSubs, hostingDomains);
     const start = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     const end = new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59, 59);
     const next = hostingRenewalsInWindow(hostingSubs, hostingDomains, start, end);
@@ -770,7 +868,7 @@ const FinancesView: React.FC = () => {
     if (hero.profit < 0) {
       items.push({ tag: 'Humbje', tone: 'red', scope: hero.title, text: `Po humb para: ${formatALL(Math.abs(hero.profit))} (cash).` });
     }
-    if (hero.profit >= 0 && hero.collected > 0 && hero.marginPct < 20) {
+    if (hero.profit >= 0 && hero.marginPct != null && hero.marginPct < 20) {
       items.push({ tag: 'Marzh', tone: 'amber', scope: hero.title, text: `Marzhi cash është vetëm ${hero.marginPct}% — nën 20%.` });
     }
     if (recurringHealth.stuck.length > 0) {
@@ -782,7 +880,7 @@ const FinancesView: React.FC = () => {
     if (recurringHealth.misconfigured.length > 0) {
       items.push({ tag: 'Config', tone: 'amber', scope: 'sot', text: `${recurringHealth.misconfigured.length} faturë recurring e konfiguruar keq — s'do gjenerohet kurrë.` });
     }
-    const losing = clientProfit.rows.filter(r => r.netProfit < 0);
+    const losing = shownClientProfit.rows.filter(r => r.netProfit < 0);
     for (const l of losing.slice(0, 5)) {
       items.push({ tag: 'Klient', tone: 'amber', scope: periodLabel, text: `"${l.name}" po humb para: ${formatALL(Math.round(l.netProfit))} neto.` });
     }
@@ -794,7 +892,7 @@ const FinancesView: React.FC = () => {
       });
     }
     return items;
-  }, [receivables, hero, clientProfit, recurringHealth, periodLabel, cashflow, customerNameById]);
+  }, [receivables, hero, shownClientProfit, recurringHealth, periodLabel, cashflow, customerNameById]);
 
   // Badge on the "Rreziqet" tab — that tab holds everything broken.
   const riskCount = alarms.length;
@@ -806,11 +904,11 @@ const FinancesView: React.FC = () => {
       bits.push(`${receivables.overdueCount} fatura të vonuara (${formatALL(receivables.overdueAmount)})`);
     }
     if (recurringHealth.stuck.length > 0) bits.push(`${recurringHealth.stuck.length} recurring ngeci`);
-    const losing = clientProfit.rows.filter(r => r.netProfit < 0).length;
+    const losing = shownClientProfit.rows.filter(r => r.netProfit < 0).length;
     if (losing > 0) bits.push(`${losing} klientë në humbje (${periodLabel})`);
     if (cashflow.gap < 0) bits.push(`mungesë mujore ${formatALL(Math.abs(cashflow.gap))}`);
     return bits.join(' · ');
-  }, [receivables, recurringHealth, clientProfit, cashflow, periodLabel]);
+  }, [receivables, recurringHealth, shownClientProfit, cashflow, periodLabel]);
 
   // ── CSV export of exactly what is on screen ──
   const exportCsv = useCallback(() => {
@@ -822,7 +920,7 @@ const FinancesView: React.FC = () => {
       ['Shpenzime të tjera', -Math.round(hero.otherExpenses)],
       ['Gjithsej dalje', -Math.round(hero.salary + hero.otherExpenses)],
       ['Fitimi neto', Math.round(hero.profit)],
-      ['Marzhi %', hero.marginPct],
+      ['Marzhi %', hero.marginPct ?? '—'],
       ['Të pambledhura', Math.round(receivables.outstanding)],
       ['Të vonuara', Math.round(receivables.overdueAmount), `${receivables.overdueCount} fatura`],
       [],
@@ -838,8 +936,8 @@ const FinancesView: React.FC = () => {
       ['Përgjegjësi', 'Të ardhura', 'Kosto', 'Fitimi', 'Arkëtuar'],
       ...staffRevenue.rows.map(r => [r.name, Math.round(r.revenue), Math.round(r.cost), Math.round(r.profit), Math.round(r.collected)]),
       [],
-      [`Klienti (${periodLabel})`, 'Të ardhura të fituara', 'Orë', 'Punë direkte', 'Kosto direkte', 'Fitimi bruto', 'Marzhi bruto %', 'Overhead', 'Fitimi neto', 'Faturuar', 'Arkëtuar', 'Pa arkëtuar'],
-      ...clientProfit.rows.map(c => [
+      [`Klienti (${periodLabel})${frozenClientProfit ? ' — snapshot i mbylljes' : ''}`, shownClientProfit.revenueBasis === 'collected' ? 'Të ardhura (arkëtuar)' : 'Të ardhura të fituara', 'Orë', 'Punë direkte', 'Kosto direkte', 'Fitimi bruto', 'Marzhi bruto %', 'Overhead', 'Fitimi neto', 'Faturuar', 'Arkëtuar', 'Pa arkëtuar'],
+      ...shownClientProfit.rows.map(c => [
         c.name, Math.round(c.earned), Math.round(c.hours * 10) / 10, Math.round(c.directLabor), Math.round(c.directExpenses),
         Math.round(c.grossProfit), c.grossMarginPct == null ? '' : Math.round(c.grossMarginPct), Math.round(c.overhead),
         Math.round(c.netProfit), Math.round(c.invoiced), Math.round(c.collected), Math.round(c.outstanding),
@@ -855,7 +953,7 @@ const FinancesView: React.FC = () => {
     void saveOrShareFile(blob, `financat-${periodLabel.toLowerCase().replace(/[^a-z0-9ëç]+/gi, '-').replace(/^-+|-+$/g, '')}.csv`, {
       shareTitle: 'Financat - FivoCRM',
     });
-  }, [hero, receivables, departmentRows, staffRevenue, clientProfit, periodLabel, revenueBasis, projectPnl.laborBasis]);
+  }, [hero, receivables, departmentRows, staffRevenue, shownClientProfit, frozenClientProfit, periodLabel, revenueBasis, projectPnl.laborBasis]);
 
   if (!allowed) {
     return (
@@ -994,8 +1092,8 @@ const FinancesView: React.FC = () => {
             iconBg="#e7f6ef"
             iconInk={GREEN}
             label="Marzhi i fitimit"
-            value={`${hero.marginPct}%`}
-            sub="mbi paranë e arkëtuar"
+            value={hero.marginPct == null ? '—' : `${hero.marginPct}%`}
+            sub={hero.marginPct == null ? 'asnjë arkëtim këtë muaj' : 'mbi paranë e arkëtuar'}
           />
           <KpiCard
             icon={<Wallet className="h-4 w-4" />}
@@ -1219,15 +1317,24 @@ const FinancesView: React.FC = () => {
             {/* The bridge between the two bases, so nobody has to flip the toggle to
                 learn why the tables disagree with the hero. */}
             <p className={cn('px-1 text-[12px]', INK_MUTED)}>
-              Fituar <strong className={cn(NUM, INK_NAVY)}>{formatALL(Math.round(clientProfit.revenueBasis === 'earned' ? clientProfit.totals.earned : clientProfit.totals.earned))}</strong>
-              {' '}· arkëtuar në periudhë <strong className={cn(NUM, INK_NAVY)}>{formatALL(Math.round(clientProfit.totals.collected))}</strong>
-              {clientProfit.totals.unbilledEarned > 0 && <> · punë e pafaturuar <strong className={cn(NUM, INK_WARN)}>{formatALL(Math.round(clientProfit.totals.unbilledEarned))}</strong></>}
+              {shownClientProfit.revenueBasis === 'collected' ? (
+                <>
+                  Arkëtuar në periudhë <strong className={cn(NUM, INK_NAVY)}>{formatALL(Math.round(shownClientProfit.totals.earned))}</strong>
+                  {' '}· fituar <strong className={cn(NUM, INK_NAVY)}>{formatALL(Math.round(shownEarnedClientProfit.totals.earned))}</strong>
+                </>
+              ) : (
+                <>
+                  Fituar <strong className={cn(NUM, INK_NAVY)}>{formatALL(Math.round(shownClientProfit.totals.earned))}</strong>
+                  {' '}· arkëtuar në periudhë <strong className={cn(NUM, INK_NAVY)}>{formatALL(Math.round(shownClientProfit.totals.collected))}</strong>
+                </>
+              )}
+              {shownEarnedClientProfit.totals.unbilledEarned > 0 && <> · punë e pafaturuar <strong className={cn(NUM, INK_WARN)}>{formatALL(Math.round(shownEarnedClientProfit.totals.unbilledEarned))}</strong></>}
               {' '}· hero-ja lart është cash i muajit, tabelat këtu janë {revenueBasis === 'collected' ? 'cash i periudhës' : 'puna e periudhës'}.
             </p>
 
             {/* ── Clients first: the owner's question is "sa fitoj nga çdo klient" ── */}
             <ClientProfitabilityPanel
-              result={frozenClientProfit ?? clientProfit}
+              result={shownClientProfit}
               periodLabel={periodLabel}
               monthKey={periodMonthKey}
               closeState={currentClose ? {
@@ -1236,6 +1343,7 @@ const FinancesView: React.FC = () => {
                 reopenedAt: parseDate(currentClose.reopenedAt),
                 fromSnapshot: !!frozenClientProfit,
                 liveNetDrift: closeDrift,
+                snapshotBasis: closeSnapshotBasis,
               } : null}
               canClose={canCloseMonth}
               closeBlock={closeBlock}
@@ -1432,8 +1540,17 @@ const FinancesView: React.FC = () => {
                   while quietly excluding revenue: an invoice with no projectId is
                   dropped from the collected basis, yet the FULL overhead pool is
                   still allocated — so unlinked invoices read as pure loss. */}
-              {(collected.unlinked.amount > 0 || departmentPnl.unallocatedLabor.total > 0) && (
+              {(collected.unlinked.amount > 0 || departmentPnl.unallocatedLabor.total > 0 || unresolvedInvoices.count > 0) && (
                 <div className="space-y-1 border-t border-[#eef2f8] px-5 py-3 sm:px-6">
+                  {/* Invoices whose projectId points at a DELETED project: they carry a
+                      projectId, so `?project=none` does not list them — a notice only. */}
+                  {unresolvedInvoices.count > 0 && (
+                    <p className={cn('text-xs leading-relaxed', INK_WARN)}>
+                      <strong>{unresolvedInvoices.count}</strong> fatura me projekt të fshirë ·{' '}
+                      <strong className={NUM}>{formatALL(Math.round(unresolvedInvoices.amount))}</strong> — arkëtimi i tyre
+                      nuk i takon asnjë projekti apo departamenti. Hap faturën dhe lidhe me një projekt ekzistues.
+                    </p>
+                  )}
                   {collected.unlinked.amount > 0 && (
                     <p className={cn('text-xs leading-relaxed', INK_MUTED)}>
                       <strong className={NUM}>{formatALL(collected.unlinked.amount)}</strong> arkëtuar nga{' '}
@@ -2281,7 +2398,9 @@ const DepartmentTrend: React.FC<{
   trend: ReturnType<typeof buildDepartmentProfitTrend>;
 }> = ({ trend }) => {
   const view = useMemo(() => {
-    const REST_KEY = 'Të tjera';
+    // A sentinel KEY, never a label: a real department called "Të tjera" used
+    // to share the data key with the fold and the two series overwrote each other.
+    const REST_KEY = '__rest__';
     const shown = trend.departments.slice(0, 4);
     const rest = trend.departments.slice(4);
     const data = trend.data.map(row => {
@@ -2291,10 +2410,11 @@ const DepartmentTrend: React.FC<{
       return next;
     });
     const series = [
-      ...shown.map((d, i) => ({ key: d, color: DEPT_SERIES[i], delta: trend.deltas[d]?.delta ?? 0 })),
+      ...shown.map((d, i) => ({ key: d, label: d, color: DEPT_SERIES[i], delta: trend.deltas[d]?.delta ?? 0 })),
       ...(rest.length
         ? [{
             key: REST_KEY,
+            label: 'Të tjera',
             color: DEPT_REST,
             delta: rest.reduce((s, d) => s + (trend.deltas[d]?.delta ?? 0), 0),
           }]
@@ -2316,7 +2436,7 @@ const DepartmentTrend: React.FC<{
           <Tooltip content={<ChartTip />} />
           {view.series.map(s => (
             <Line
-              key={s.key} name={s.key} type="monotone" dataKey={s.key}
+              key={s.key} name={s.label} type="monotone" dataKey={s.key}
               stroke={s.color} strokeWidth={2.5} strokeLinecap="round"
               dot={{ r: 3.5, fill: s.color, stroke: '#FFFFFF', strokeWidth: 2 }}
               activeDot={{ r: 6, stroke: '#FFFFFF', strokeWidth: 2 }}
@@ -2332,7 +2452,7 @@ const DepartmentTrend: React.FC<{
           return (
             <li key={s.key} className="flex items-center gap-2 text-[13px]">
               <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: s.color }} />
-              <span className={cn('min-w-0 flex-1 truncate font-semibold', INK_NAVY)}>{s.key}</span>
+              <span className={cn('min-w-0 flex-1 truncate font-semibold', INK_NAVY)}>{s.label}</span>
               <span className={cn('flex shrink-0 items-center gap-1 text-xs font-bold', NUM, up ? INK_POS : INK_NEG)}>
                 {up ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
                 {up ? '+' : ''}{formatALL(s.delta)}

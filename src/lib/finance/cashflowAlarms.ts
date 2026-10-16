@@ -9,7 +9,7 @@
 // Alarms: negative gap, receivables aged >60d, revenue decline vs 3-month
 // average, expense spike, single-client concentration.
 
-import type { Invoice, Expense, TeamMember, Project, Subscription } from '../../types';
+import type { Invoice, Expense, TeamMember, Project, Subscription, Domain } from '../../types';
 import { toAll } from '../utils';
 import {
   parseDate,
@@ -54,6 +54,10 @@ function monthStart(base: Date, offset: number): Date {
 // would have been an import cycle.
 export { FREQ_TO_MONTHLY, isActiveRecurringParent, monthlyRecurringExpenseRate } from './recurringExpenses';
 
+/** Minimum 3-month collected cash (ALL) before a ONE-client tenant gets the
+ *  concentration alarm — ~€500: below it there is no business yet to be at risk. */
+export const CONCENTRATION_MIN_SINGLE_CLIENT_ALL = 50_000;
+
 export function computeCashflowHealth(
   invoices: Invoice[] | undefined | null,
   expenses: Expense[] | undefined | null,
@@ -61,6 +65,7 @@ export function computeCashflowHealth(
   projects: Project[] | undefined | null,
   now: Date = new Date(),
   hostingSubscriptions?: Subscription[] | null,
+  hostingDomains?: Domain[] | null,
 ): CashflowHealth {
   const inv = invoices || [];
   const exp = expenses || [];
@@ -68,7 +73,7 @@ export function computeCashflowHealth(
   // ── Monthly recurring inflow — SAME definition as the forecast card (monthly
   // projects + active recurring invoices, deduped) so the two cards agree and a
   // retainer modelled as a monthly project doesn't trigger a false gap alarm.
-  const monthlyInflow = monthlyRecurringRevenue(projects, invoices, now, hostingSubscriptions);
+  const monthlyInflow = monthlyRecurringRevenue(projects, invoices, now, hostingSubscriptions, hostingDomains);
 
   // ── Monthly fixed outflow: payroll + recurring expenses.
   // Payroll for a month that has not happened yet is the PLAN — but a tenant who
@@ -149,6 +154,7 @@ export function computeCashflowHealth(
   }
 
   // ── Client concentration: one client > 40% of last-3-month collected.
+  // (CONCENTRATION_MIN_SINGLE_CLIENT_ALL gates the one-client case, below.)
   // The window must be the THREE months the copy promises: `monthStart(now, -3)`
   // opened it four calendar months back (Apr 1 → Jul 15 is Apr+May+Jun+Jul), so
   // the alarm was measured over a span nobody could reconcile with the text.
@@ -167,7 +173,12 @@ export function computeCashflowHealth(
     let topVal = 0;
     for (const [id, v] of byCustomer) if (v > topVal) { topVal = v; topId = id; }
     const share = topVal / total3;
-    if (share > 0.4 && byCustomer.size > 1) {
+    // A tenant whose ENTIRE cash comes from one client is the purest
+    // concentration risk; `byCustomer.size > 1` used to exempt exactly that
+    // case. A single client alarms once the cash is meaningful, so a brand-new
+    // tenant with one test payment is not told off.
+    const meaningful = byCustomer.size > 1 || total3 >= CONCENTRATION_MIN_SINGLE_CLIENT_ALL;
+    if (share > 0.4 && meaningful) {
       alarms.push({
         id: 'concentration',
         severity: 'amber',

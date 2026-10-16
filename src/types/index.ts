@@ -2261,6 +2261,13 @@ export interface InvoiceItem {
   id: string;
   invoiceId: string;
   serviceId?: string;
+  /**
+   * The department / service line this line bills, written by
+   * `projectInvoiceLines()` (explicit split line, or the sold service's
+   * category). Read FIRST by `invoiceServiceMix()` — a split line with no sold
+   * service has no `serviceId`, and would otherwise be spread over the project mix.
+   */
+  serviceLine?: string;
   /** Free-text line description when the line isn't a catalogue service. */
   description?: string;
   quantity: number;
@@ -2435,8 +2442,16 @@ export interface FinanceMonthClose {
   closedByUserId: string | null;
   reopenedAt?: Date | null;
   reopenedByUserId?: string | null;
-  /** Compact copy of the client table at close (see clientProfitability.ts `snapshotForClose`). */
+  /**
+   * LEGACY: the compact client-table copy used to live inline here, readable by
+   * every member of the business. Closes written now carry `snapshotPrivate`
+   * and keep it in `financeMonthCloses/{id}/private/snapshot` (Owner/Admin
+   * only, see `closeSnapshotDoc` in src/lib/finance/monthClose.ts); a re-close
+   * deletes this field. Read only as a fallback for old closes.
+   */
   snapshot?: Record<string, unknown>;
+  /** True when the snapshot lives in the private subdocument (closeMonthPatch). */
+  snapshotPrivate?: boolean;
   /** Pre-close checks that were still failing when the owner closed anyway. */
   warnings?: string[];
   createdAt?: Date;

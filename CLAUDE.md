@@ -636,6 +636,85 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
   `canSeeBudget`); `cleanServiceMixInput` cleans it, an emptied editor writes `null`,
   a form without the editor leaves the field untouched.
 
+### Finance bug sweep 16 Oct 2026 — laws added
+
+- **Loaded rates, unloaded payroll, a pool that is never negative.** Rows are costed at
+  the LOADED rate (salary × (1 + employerCostPct) ÷ capacity). The pool's labour is
+  `poolLabor()` = `unabsorbed` (≥ 0) + `laborOutsideRows` — NEVER a signed credit (that
+  made every client's overhead negative under the defaults: net > gross). The excess of
+  row labour over the unloaded payroll (`overAbsorbed`) is its own reconciliation line,
+  `loadCredit` (`loadCreditOf()`; `company.loadCredit`, `fixedPool.loadCredit`,
+  `departmentPnl.loadCredit`; panel: "Kontributet e punëdhënësit të ngarkuara mbi pagën e
+  regjistruar"). Exact identities (tested): Σ rows' labour + poolLabor == payroll +
+  loadCredit; **Σ client net − unallocatedOverhead + loadCredit − directOutsideRows ==
+  operatingProfit** (earned basis; same shape for projectPnl / departmentPnl). The
+  "kontrollo tarifat" warning reads `overAbsorbedVsLoaded` (vs payroll × load).
+- **One person = several rows, resolved PER MONTH.** teamMembers has one row per TEAM
+  (sometimes an old Inactive row with its own leftAt/history next to the new one).
+  `groupMembersByPerson()` (`salaryHistory.ts`) groups them; money is never read from
+  a merged record: salary in month M = max over the rows of `memberSalaryForMonth`
+  (`personSalaryForMonth`), employed if ANY row is (`personEmployedInMonth`), override =
+  an Active row's `hourlyCostRate` else any row's (`personHourlyCostOverride`); the
+  `profile` (Active first, then highest salary, gaps filled) is identity only. Used by
+  totalSalaryForMonth, `personCostRate` (allocateLabor + laborByProjectForEntries: rate
+  of month M from month M's salary), capacity, buildRateCard, departmentPnl's legacy
+  split, and mirrored in the `project-spend-rollup` cron (`costRateForUser`, rate per
+  user per booking month). Capacity counts only employed months.
+- **Hours = the span for timer/pomodoro rows** (`entryHours`: duration may only shorten
+  it; no endTime = open = 0); `duration` is authoritative only for `source: 'manual' |
+  'daily-report'`. Mirrored in the cron (`timeEntryHoursServer`). Test fixtures with
+  duration and no real span must say `source: 'manual'`.
+- **Inactive needs `leftAt`** — `leftAtForStatusChange()` stamps it in TeamsView; the
+  `updatedAt` fallback is legacy only (an unrelated edit used to resurrect salaries).
+  An empty date box = "nga sot" (`now`), also when the owner EMPTIES a stored date; only
+  a legacy Inactive row with no `leftAt` (box loaded empty) freezes its pre-edit `updatedAt`.
+- With hours, a one-time project is in the period when it has hours or earned revenue
+  there (not only by `updatedAt`). A weekly retainer earns `monthlyFeeOf(p)` =
+  budget × 52/12 per month, and its "Kontrata · vlerë" is the same monthly fee × the
+  months its span overlaps the period, the running month whole
+  (`contractValueInPeriod`); one-time = `budget`. Invoices on a deleted project count as
+  unlinked (`unresolvedInvoices`) and FinancesView says so ("N fatura me projekt të
+  fshirë · X L" — they have a projectId, so `?project=none` cannot list them). Refunds
+  reduce collected in BOTH engines.
+- **Customer360's P&L runs the engine over the WHOLE business** (all projects + invoices)
+  and picks `clientRowFor(customerId)` — fed only one client's projects, that client
+  absorbed the entire company overhead pool.
+- Invoice lines carry `serviceLine`; `invoiceServiceMix` reads it first, an
+  uncategorised service lands in the project's own department.
+- **Month close snapshots the EARNED basis** (`revenueBasis` stored); a snapshot is shown
+  only under the same basis. The page CSV/alarms/bridge read the DISPLAYED result
+  (`shownClientProfit`). Hero payroll is cut at now like every other month-to-date figure.
+- **The snapshot is private.** The lock doc `financeMonthCloses/{bid}_{YYYY-MM}` stays
+  member-readable (timesheet/expense lock) and carries no figures (`snapshotPrivate:
+  true`); the snapshot goes to `financeMonthCloses/{id}/private/snapshot` (`businessId`,
+  `periodKey`, `closedAt`, `closedByUserId`, `snapshot`) in ONE `writeBatch` with the
+  close (FinancesView), Owner/Admin read+write in the rules. FinancesView fetches it only
+  for admin/owner; `resolveCloseSnapshot()` falls back to the legacy inline `snapshot` of
+  old closes, and a re-close deletes that inline field. Reopen touches neither. The day-2
+  `client-profitability-report` reads the subdoc first, the inline field second.
+
+### Money rules (Oct 2026 hardening — tests 81a–81j)
+
+- **Money fields are Admin/Manager only, in the RULES**: a project's `projectFinanceKeys()`
+  (budget, billing cycle, claim, bank*, serviceMix, plan fields) — a Member may only
+  stop/pause/archive/restore and write the first claim; a settled invoice's amounts;
+  an invoice's bank keys (any status); delete of a non-Draft invoice; items of a
+  settled invoice; teamSettings `bankAccounts`/`financeSettings`/`rateCard` (owner/Admin).
+  The UI hides what the rules deny (ProjectsView `financeFields`, InvoicesView
+  `invoiceEditLocked`/`invoiceDeleteLocked`, `canEditFinanceSettings`, `taskValue`
+  `canEditBudget`). Adding a money field? → add it to the key list + a test.
+- **Salary rows are unreadable for non-approvers.** Rules are not filters: every
+  `expenses` query a non-approver runs must carry `category != 'Salary'`
+  (`expenseListQueryOptions(isApprover)`; `deleteCascade` always adds it). In rules use
+  direct field access (`'category' in resource.data && …`), never `.get(f, default)` —
+  the emulator proved `.get()` lets an unconstrained list through.
+- Expenses: own rows only for non-approvers (`createdByUserId`), and a closed month
+  (`financeMonthCloses`) blocks create/delete/booking changes (month read from the
+  timestamp +2h — documented approximation). Month-close snapshot lives in
+  `financeMonthCloses/{id}/private/snapshot` (owner/Admin), the parent stays member-readable.
+- Known gap (deliberate): the portal still receives whole project docs, internal cost
+  fields included — fixing it means moving them to a staff-only `projectFinance/{id}`.
+
 ### Finance audit 30 Sep 2026 — laws added (`workspace/FINANCE_AUDIT_2026_09_30.md`)
 
 - **Labour that lands on no row is overhead, never dropped.** `allocateLabor` splits

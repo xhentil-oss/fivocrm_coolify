@@ -13,6 +13,13 @@ import { costRateFor, resolveFinanceSettings, type FinanceSettings } from './pro
  * imports as its byte-identical mirror — so the two can no longer drift.
  *
  * `settings` = `teamSettings.financeSettings`; omitted = the defaults.
+ *
+ * CURRENT RATE ONLY: it reads ONE row's current `monthlySalary`, with no salary
+ * history and no per-month payer row. Its only consumer is `memberBillRate`'s
+ * fallback, used by ProjectDetailView for the display-only "billable value"
+ * estimate. Any COST figure (P&L, client profitability, budgets, EAC) must go
+ * through `personCostRate` (costRates.ts) per month via `allocateLabor` /
+ * `laborForEntries` — never through this function.
  */
 export function memberHourlyCost(
   m?: Pick<TeamMember, 'hourlyCostRate' | 'monthlySalary' | 'clientCapacityHours'> | null,
@@ -36,16 +43,37 @@ export function memberBillRate(
   return memberHourlyCost(m, settings);
 }
 
-/** Duration of a time entry in hours. Prefers stored `duration` (minutes),
- *  falls back to start/end delta. Ignores running (open) entries. */
-export function entryHours(e: Pick<TimeEntry, 'duration' | 'startTime' | 'endTime'>): number {
-  if (typeof e.duration === 'number' && e.duration > 0) return e.duration / 60;
-  if (e.startTime && e.endTime) {
-    const s = getTimestampMs(e.startTime);
-    const en = getTimestampMs(e.endTime);
-    if (en > s) return (en - s) / 3_600_000;
+/** Sources whose rows carry a typed `duration` only — no timer ever ran for them. */
+export const DURATION_ONLY_SOURCES: ReadonlySet<string> = new Set(['manual', 'daily-report']);
+
+/**
+ * Duration of a time entry in hours — the same rule as `entryDurationMinutes`
+ * (src/lib/timeTracking.ts): `endTime − startTime` is the source of truth.
+ *
+ *   · typed by hand (`source: 'manual' | 'daily-report'`) → `duration` is the
+ *     figure the person entered; its start/end are synthesised FROM it
+ *     (noon − minutes … noon), so there is no independent span to check.
+ *   · otherwise (timer, pomodoro, legacy rows with no source), start AND end →
+ *     the span. A stored `duration` may only SHORTEN it (a paused timer), never
+ *     stretch it: a stale `duration` written against the wrong `startTime`
+ *     (overlapping timers) once costed 11:17→13:11 as 49.9 h.
+ *   · no `endTime` → a running timer, 0 — even when a `duration` was written.
+ *
+ * Mirrored by `timeEntryHoursServer` in api/cron/run.ts — keep the two in sync.
+ */
+export function entryHours(e: Pick<TimeEntry, 'duration' | 'startTime' | 'endTime' | 'source'>): number {
+  const durH = typeof e.duration === 'number' && e.duration > 0 ? e.duration / 60 : 0;
+  if (DURATION_ONLY_SOURCES.has(String(e.source || '')) && durH > 0) return durH;
+  const s = e.startTime ? getTimestampMs(e.startTime) : 0;
+  const en = e.endTime ? getTimestampMs(e.endTime) : 0;
+  if (s && en) {
+    if (en <= s) return 0;
+    const spanH = (en - s) / 3_600_000;
+    return durH > 0 ? Math.min(durH, spanH) : spanH;
   }
-  return 0;
+  if (!e.endTime) return 0;
+  // An end with no start: only the typed duration can say anything.
+  return durH;
 }
 
 export interface ProjectLabor {

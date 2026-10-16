@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Project } from '../../types';
-import { retainerRevenueInPeriod, monthCoverage } from './projectPeriod';
+import { retainerRevenueInPeriod, monthCoverage, monthlyFeeOf, WEEKS_PER_MONTH } from './projectPeriod';
 
 const p = (extra: Partial<Project> = {}): Project => ({
   id: 'r', name: 'R', status: 'Active', budget: 50_000, currency: 'ALL', billingType: 'monthly', isRecurring: true,
@@ -37,5 +37,15 @@ describe('retainerRevenueInPeriod', () => {
     expect(retainerRevenueInPeriod(dead, 50_000, new Date(2026, 8, 1), monthEnd(8), 1)).toEqual({ revenue: 0, activeMonths: 0 });
     const fresh = p({ createdAt: new Date(2026, 8, 15) });
     expect(retainerRevenueInPeriod(fresh, 50_000, new Date(2026, 8, 1), monthEnd(8), 1)).toEqual({ revenue: 50_000, activeMonths: 1 });
+  });
+});
+
+describe('monthlyFeeOf', () => {
+  it('a weekly retainer bills budget every week → budget × 52/12 per month; anything else is per month', () => {
+    expect(monthlyFeeOf({ budget: 12_000, recurringFrequency: 'weekly' })).toBeCloseTo(52_000);
+    expect(WEEKS_PER_MONTH).toBeCloseTo(52 / 12);
+    expect(monthlyFeeOf({ budget: 12_000, recurringFrequency: 'monthly' })).toBe(12_000);
+    expect(monthlyFeeOf({ budget: 12_000 })).toBe(12_000);
+    expect(monthlyFeeOf({})).toBe(0);
   });
 });

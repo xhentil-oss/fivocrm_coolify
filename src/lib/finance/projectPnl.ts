@@ -40,8 +40,9 @@ import {
   retainerEarningEnd,
   retainerRevenueInPeriod,
   memberOnPayrollBetween,
+  monthlyFeeOf,
 } from './projectPeriod';
-import { laborOutsideRows, proratePlanPayroll, type LaborAllocation } from './laborAllocation';
+import { laborOutsideRows, loadCreditOf, proratePlanPayroll, type LaborAllocation } from './laborAllocation';
 import { projectEarnedInPeriod } from './revenueRecognition';
 
 // Re-exported for the modules that import them from here (departmentPnl, views).
@@ -121,6 +122,13 @@ export interface ProjectPnlResult {
      * Real cost, pooled — it used to be dropped, so Σ rows + pool ≠ payroll.
      */
     laborOutsideRows: number;
+    /**
+     * Hours model only: labour the rows were charged ABOVE the unloaded payroll
+     * (`allocateLabor().overAbsorbed` — mostly employer contributions at the
+     * loaded rate). Not in the pool (which is never negative); reported so that
+     * Σ row profit + loadCredit == revenue − expenses − payroll of the period.
+     */
+    loadCredit: number;
   };
   allocationBasis: 'revenue' | 'equal' | 'labor-hours';
   /** 'hours' when `opts.labor` carried logged hours; 'legacy' otherwise. */
@@ -143,8 +151,15 @@ export interface ProjectPnlResult {
    * so an unlinked invoice shows up as pure loss. Surfacing the count + value is
    * what makes that self-correctable instead of silently wrong.
    * Only populated when `invoices` are supplied.
+   *
+   * Includes invoices whose `projectId` points at a project that does not exist
+   * (deleted, or another tenant's id) — their money is just as unattributable,
+   * and on the invoiced basis it used to vanish without a trace. That subset is
+   * also reported on its own in `unresolvedInvoices`.
    */
   unlinkedInvoices: { count: number; amount: number };
+  /** Subset of `unlinkedInvoices`: a `projectId` that resolves to no project. */
+  unresolvedInvoices: { count: number; amount: number };
   /**
    * Expenses tagged to a project that is NOT in this period's set (closed in an
    * earlier year, archived, or excluded by `mode: 'completed'`). They are real
@@ -167,13 +182,14 @@ export function computeProjectPnl(
   const resolvedBasis: 'budget' | 'invoiced' = opts.revenueBasis === 'invoiced' ? 'invoiced' : 'budget';
   const empty: ProjectPnlResult = {
     rows: [],
-    fixedPool: { salaries: 0, otherFixed: 0, total: 0, payrollFallbackMonths: 0, laborOutsideRows: 0 },
+    fixedPool: { salaries: 0, otherFixed: 0, total: 0, payrollFallbackMonths: 0, laborOutsideRows: 0, loadCredit: 0 },
     allocationBasis: 'revenue',
     laborBasis: 'legacy',
     totals: { revenue: 0, directCost: 0, overhead: 0, cost: 0, profit: 0 },
     missingBudget: { count: 0, names: [] },
     revenueBasis: resolvedBasis,
     unlinkedInvoices: { count: 0, amount: 0 },
+    unresolvedInvoices: { count: 0, amount: 0 },
     unallocatedDirect: { count: 0, amount: 0 },
   };
   if (!projects) return empty;
@@ -190,12 +206,18 @@ export function computeProjectPnl(
   // Tracked whenever invoices are supplied (not just on the invoiced basis) so the
   // UI can warn BEFORE the user flips the toggle and sees phantom losses.
   const unlinkedInvoices = { count: 0, amount: 0 };
+  const unresolvedInvoices = { count: 0, amount: 0 };
+  const knownProjectIds = new Set(projects.map(p => p.id));
   for (const inv of opts.invoices || []) {
     const amt = getInvoiceCollectedBetween(inv, invWindow.start, invWindow.end);
     const pid = inv.projectId;
-    if (!pid) {
-      // A billed invoice with no project: real revenue that no project can absorb.
-      if (amt) { unlinkedInvoices.count += 1; unlinkedInvoices.amount += amt; }
+    if (!pid || !knownProjectIds.has(pid)) {
+      // A billed invoice with no project — or with a projectId that resolves to
+      // nothing (the project was deleted): real revenue no project can absorb.
+      if (amt) {
+        unlinkedInvoices.count += 1; unlinkedInvoices.amount += amt;
+        if (pid) { unresolvedInvoices.count += 1; unresolvedInvoices.amount += amt; }
+      }
       continue;
     }
     if (useInvoiced && amt) invoicedByProject.set(pid, (invoicedByProject.get(pid) || 0) + amt);
@@ -209,6 +231,7 @@ export function computeProjectPnl(
   };
 
   const mode = opts.mode ?? 'all';
+  const labor = opts.labor && opts.labor.basis === 'hours' ? opts.labor : null;
   // Membership window for finite periods (range/year); null = all-time.
   const membershipWindow = opts.range
     ? { start: opts.range.start, end: opts.range.end }
@@ -230,7 +253,17 @@ export function computeProjectPnl(
       const end = retainerEarningEnd(p, membershipWindow.end);
       return start <= membershipWindow.end && end >= membershipWindow.start;
     }
-    return inPeriod(projectDate(p));
+    if (inPeriod(projectDate(p))) return true;
+    // Hours model: a one-time project EARNS by effort in every period its people
+    // log hours on it — not only in the period of its last update. Selecting it
+    // by `projectDate` alone dropped a July fixed-fee project from September
+    // (0 revenue, no row) while its September labour was pooled onto everyone
+    // else. The client table (clientProfitability) always counted it.
+    if (labor && !useInvoiced) {
+      if ((labor.byProject.get(p.id)?.hours || 0) > 0) return true;
+      if (projectEarnedInPeriod(p, opts.timeEntries || [], membershipWindow) !== 0) return true;
+    }
+    return false;
   });
 
   // ── Resolve the period window [periodStart, periodEnd]. Used both for the
@@ -322,13 +355,18 @@ export function computeProjectPnl(
 
   // ── Hours-based labour (opt-in). With logged hours, each project's own labour
   // is a DIRECT cost and only the unabsorbed remainder of payroll is shared.
-  const labor = opts.labor && opts.labor.basis === 'hours' ? opts.labor : null;
+  // (`labor` itself is resolved above, before the period filter.)
   const laborBasis: 'hours' | 'legacy' = labor ? 'hours' : 'legacy';
   // The pool's labour = unabsorbed payroll + every hour no row here carries
   // (no project, or a project outside `absorbable`). Pooling `unabsorbed` alone
   // dropped that labour from every row AND from the pool.
   const outside = labor ? laborOutsideRows(labor, absorbable) : null;
-  if (labor) salaries = Math.max(0, labor.unabsorbed) + (outside?.total || 0);
+  // Never negative: hours × LOADED rates above the unloaded payroll are NOT a
+  // credit inside the pool (that made overhead negative under the defaults);
+  // they are reported apart as `loadCredit`, so
+  //   Σ row profit + loadCredit == revenue − expenses − payroll  (exactly).
+  if (labor) salaries = labor.unabsorbed + (outside?.total || 0);
+  const loadCredit = loadCreditOf(labor);
   const poolTotal = salaries + otherFixed;
 
   // ── Recognised revenue per project.
@@ -359,7 +397,8 @@ export function computeProjectPnl(
     // Retainer: the shared rule (projectPeriod.ts) — span clipped to the period,
     // a dead span earns nothing, and the month the period end cuts short earns
     // its elapsed share. Inlining a copy here let the engines drift.
-    const ret = retainerRevenueInPeriod(p, fee, periodStart, periodEnd, periodMonths);
+    // The fee PER MONTH: a weekly retainer bills `budget` every week (monthlyFeeOf).
+    const ret = retainerRevenueInPeriod(p, toAll(monthlyFeeOf(p), p.currency), periodStart, periodEnd, periodMonths);
     return { revenue: ret.revenue, billingType: bt, activeMonths: ret.activeMonths };
   };
   const revInfo = new Map(periodProjects.map(p => [p.id, revenueOf(p)] as const));
@@ -426,13 +465,14 @@ export function computeProjectPnl(
 
   return {
     rows,
-    fixedPool: { salaries, otherFixed, total: poolTotal, payrollFallbackMonths, laborOutsideRows: outside?.total || 0 },
+    fixedPool: { salaries, otherFixed, total: poolTotal, payrollFallbackMonths, laborOutsideRows: outside?.total || 0, loadCredit },
     allocationBasis,
     laborBasis,
     totals,
     missingBudget,
     revenueBasis: resolvedBasis,
     unlinkedInvoices,
+    unresolvedInvoices,
     unallocatedDirect,
   };
 }

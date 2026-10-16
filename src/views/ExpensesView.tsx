@@ -33,15 +33,30 @@ import {
   SUPPORTED_EXPENSE_FREQUENCIES,
   advanceToCurrentPeriod,
   togglePausePlan,
+  reenableRecurrencePlan,
+  duplicateExpenseKey,
 } from '../lib/finance/recurringExpenses';
+import {
+  isExpenseMonthClosed,
+  monthClosedMessage,
+  occurrencePeriodMoveBlocked,
+  OCCURRENCE_MOVE_MESSAGE,
+  expenseListQueryOptions,
+} from '../lib/finance/expenseSeries';
 import { createValue, createDateValue, updateValue, updateDateValue } from '../lib/formValue';
-import { EXPENSE_FREQ_LABELS, expenseCategoryLabel, expenseCategoryClass } from '../lib/finance/expenseLabels';
+import {
+  EXPENSE_FREQ_LABELS,
+  expenseCategoryLabel,
+  expenseCategoryClass,
+  DEFAULT_EXPENSE_CATEGORIES,
+  findBuiltInExpenseCategory,
+} from '../lib/finance/expenseLabels';
 // Calendar days of a recurring series are read in the BUSINESS zone, never with
 // the machine's getters: the engine (and its cron mirror) answer `expensePeriodKey`
 // / `addMonthsClamped` in Europe/Tirane, so an anchor day taken from `getDate()`
 // on a UTC machine can name a different day than the series the cron advances.
 import { zonedParts } from '../lib/recurringUtils';
-import type { Expense, Team, Project, TeamMember } from '../types';
+import type { Expense, Team, Project, TeamMember, FinanceMonthClose } from '../types';
 
 const ExpensesView: React.FC = () => {
   const { user } = useAuth();
@@ -68,9 +83,31 @@ const ExpensesView: React.FC = () => {
   // live listener over the same documents that FinancesView/BonusView/
   // ProjectDetailView already stream. `filteredExpenses` sorts these rows
   // itself, so the option bought nothing and cost a full extra subscription.
-  const { data: rawExpenses, loading: expensesLoading } = useCollection<Expense>('expenses', {
-    skipTeamFilter: true,
-  });
+  //
+  // A non-approver may not read Salary rows (rules), and rules are not filters —
+  // an unconstrained list would be denied whole, so their query carries
+  // `category != 'Salary'` server-side (`expenseListQueryOptions`).
+  const isExpenseApprover = permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin;
+  const { data: rawExpenses, loading: expensesLoading } = useCollection<Expense>(
+    'expenses',
+    expenseListQueryOptions(isExpenseApprover),
+  );
+  // A non-approver may edit / pause / back-fill / delete ONLY rows they created
+  // (`createdByUserId == uid` in the expenses update/delete rules), and never
+  // delete an Approved one. The actions are hidden instead of failing.
+  const canModifyExpense = (e: Expense) =>
+    isExpenseApprover || (!!user?.uid && (e as any).createdByUserId === user.uid);
+  const canDeleteExpense = (e: Expense) =>
+    isExpenseApprover || (canModifyExpense(e) && (e as any).approvalStatus !== 'Approved');
+  // Closed months (`financeMonthCloses`) — a row dated in one is not created,
+  // edited or deleted. Same listener as Financat / the series page.
+  const { data: monthCloses } = useCollection<FinanceMonthClose>('financeMonthCloses', { skipTeamFilter: true });
+  /** Refuses (with a toast) a write that touches a closed month. */
+  const refuseClosedMonth = (at: Date | null | undefined, businessId?: string | null): boolean => {
+    if (!isExpenseMonthClosed(at, businessId, monthCloses)) return false;
+    toast({ title: 'Muaji është i mbyllur', description: monthClosedMessage(at), variant: 'destructive' });
+    return true;
+  };
   // Role-based filtering: Member/Viewer see only their own expenses
   const expenses = useFilteredByOwner(rawExpenses);
   const { data: teams } = useCollection<Team>('teams');
@@ -98,7 +135,7 @@ const ExpensesView: React.FC = () => {
     const editId = searchParams.get('edit');
     if (!editId || !rawExpenses) return;
     const target = rawExpenses.find(e => e.id === editId);
-    if (target) {
+    if (target && canModifyExpense(target)) {
       setSelectedExpense(target);
       setIsEditDialogOpen(true);
     }
@@ -163,6 +200,7 @@ const ExpensesView: React.FC = () => {
     // booked on the day it was TYPED — a July bill entered in August landed in
     // August, with no way to correct it from the UI.
     const expenseDate = createDateValue(formData.get('date')) ?? new Date();
+    if (refuseClosedMonth(expenseDate)) return;
 
     // Sentinel-safe: '__none__' must never reach Firestore, and on update the
     // empty case must be an explicit null so the field is actually cleared.
@@ -176,15 +214,13 @@ const ExpensesView: React.FC = () => {
     // confirm() (unreliable in the mobile webview, and a false return silently
     // dropped the expense). We save and warn; duplicates are also surfaced by
     // the banner/badge/"Dublikatat" filter.
-    const thisPeriod = expensePeriodKey('monthly', expenseDate);
-    const clash = (rawExpenses || []).some(e => {
-      if ((e as any).approvalStatus === 'Rejected') return false;
-      if ((e.title || '').trim().toLowerCase() !== title.trim().toLowerCase()) return false;
-      if (Number(e.amount) !== amount) return false;
-      if (((e as any).currency || 'ALL') !== (currency || 'ALL')) return false;
-      const d = getExpenseDate(e);
-      return !!d && expensePeriodKey('monthly', d) === thisPeriod;
+    // Same identity as the duplicate banner (`duplicateExpenseKey`): two people's
+    // equal salaries, or one cost on two projects, are NOT a double entry.
+    const newKey = duplicateExpenseKey({
+      id: '', title, amount, currency: (currency || 'ALL') as any, date: expenseDate,
+      memberId: memberId ?? null, projectId: projectId ?? null, category,
     });
+    const clash = !!newKey && (rawExpenses || []).some(e => duplicateExpenseKey(e as any) === newKey);
 
     // A recurring PARENT is itself a real row that counts in its own month, so the
     // first generated occurrence must land in the NEXT period — otherwise the cron
@@ -312,6 +348,17 @@ const ExpensesView: React.FC = () => {
     const dateChanged = (previousBooking?.getTime() ?? null) !== ownDate.getTime();
     const writeDate = dateChanged || selectedExpense.date != null;
 
+    // A closed month is locked both ways: a row already in it is not edited, and
+    // no row is moved INTO it.
+    if (refuseClosedMonth(previousBooking, selectedExpense.businessId)) return;
+    if (dateChanged && refuseClosedMonth(ownDate, selectedExpense.businessId)) return;
+    // A series occurrence IS its period (its id is `rec_exp_<parent>_<period>`),
+    // so it may move inside that period but never into another one.
+    if (dateChanged && occurrencePeriodMoveBlocked(selectedExpense, ownDate)) {
+      toast({ title: 'Data nuk mund të ndryshohet', description: OCCURRENCE_MOVE_MESSAGE, variant: 'destructive' });
+      return;
+    }
+
     const freq = recurringFrequency || 'monthly';
     const prevFreq = (selectedExpense.recurringFrequency as string) || 'monthly';
     const prevClaim = selectedExpense.lastGeneratedPeriodKey;
@@ -330,8 +377,28 @@ const ExpensesView: React.FC = () => {
       return latest;
     })();
 
-    // Turning recurrence ON behaves like creating one: the series starts in the
-    // period AFTER the one this row already covers.
+    // Turning recurrence ON — for a fresh row or one whose series was STOPPED —
+    // starts after the last period the row (or its occurrences) covered, pulled
+    // forward to the current period, with the claim on the PREVIOUS period
+    // (`reenableRecurrencePlan`, same law as resume). Computing it from the
+    // parent's own date made a series stopped in February and re-enabled in
+    // October report "8 periudhë pa shpenzim" for months it was deliberately off.
+    const seriesRows = childrenOf(selectedExpense.id).filter(k => k.approvalStatus !== 'Rejected');
+    const enablePlan = isRecurring && !wasRecurring
+      ? reenableRecurrencePlan({
+        frequency: freq,
+        ownDate,
+        occurrenceDates: seriesRows.map(k => getExpenseDate(k)),
+        occurrenceKeys: seriesRows.map(k => k.periodKey),
+        storedClaim: prevFreq === freq ? prevClaim : null,
+        picked,
+        anchorDay: selectedExpense.recurringAnchorDay,
+        now: new Date(),
+      })
+      : null;
+    const enablePulledForward = !!enablePlan
+      && expensePeriodKey(freq, enablePlan.nextDate) !== expensePeriodKey(freq, firstGenerationDate(ownDate, freq, picked));
+
     //
     // An EXISTING series keeps the day the user typed, but never a period that
     // is already closed: passing the date straight through bypassed
@@ -342,7 +409,7 @@ const ExpensesView: React.FC = () => {
     // survives the move forward.
     let nextDate = !isRecurring ? null
       : wasRecurring ? (picked ? firstGenerationDate(lastCoveredDate, freq, picked) : null)
-      : firstGenerationDate(ownDate, freq, picked);
+      : (enablePlan?.nextDate ?? null);
 
     // The generated occurrences may have been deleted, so the children are not
     // the whole story: the period CLAIM is. A next date inside an already
@@ -374,6 +441,7 @@ const ExpensesView: React.FC = () => {
     const nextDateChangedByUser = !!picked && (!storedNext || !sameZonedDay(picked, storedNext));
     const existingAnchor = selectedExpense.recurringAnchorDay;
     const anchorDay = !isRecurring ? null
+      : enablePlan ? enablePlan.anchorDay
       : nextDateChangedByUser && picked ? zonedParts(picked).day
       : (existingAnchor || (nextDate ? zonedParts(nextDate).day : null));
 
@@ -394,6 +462,8 @@ const ExpensesView: React.FC = () => {
     // form (`InvoicesView.tsx`, `prevFrequency`).
     const resolvedClaim = !isRecurring
       ? null
+      : enablePlan
+        ? enablePlan.claim
       : !prevClaim
         ? expensePeriodKey(freq, ownDate)
         : prevFreq === freq
@@ -402,11 +472,19 @@ const ExpensesView: React.FC = () => {
 
     // Editing what the approval was GRANTED FOR re-opens it. Without this an
     // approved 1 000 could be edited to 100 000 and stay "Aprovuar", because
-    // nothing in the update touched approvalStatus.
-    const materialChange =
+    // nothing in the update touched approvalStatus. WHERE it lands counts too
+    // (rules `expenseValueUnchanged`): category, project and department move the
+    // cost between P&L lines — a Member re-tagging an approved row without
+    // re-submitting it was denied by the rules with no explanation.
+    const valueChange =
       Number(selectedExpense.amount) !== amount
       || (selectedExpense.currency || 'ALL') !== (currency || 'ALL')
       || dateChanged;
+    const placementChange =
+      (selectedExpense.category || null) !== (category || null)
+      || (selectedExpense.projectId || null) !== (projectId || null)
+      || (selectedExpense.departmentId || null) !== (departmentId || null);
+    const materialChange = valueChange || placementChange;
     // Covers Rejected too: fixing a rejected expense and re-submitting it is the
     // whole point of the workflow, and the Firestore rule only accepts
     // 'Submitted' as the new verdict from a non-approver.
@@ -453,13 +531,15 @@ const ExpensesView: React.FC = () => {
 
     logActivity('expense_updated', `Shpenzimi u ndryshua: ${title}`, {
       entityType: 'expense', entityId: selectedExpense.id,
-      description: materialChange ? `${selectedExpense.amount} → ${amount} ${currencySymbol(currency)}` : undefined,
+      description: valueChange ? `${selectedExpense.amount} → ${amount} ${currencySymbol(currency)}` : undefined,
     });
     setIsEditDialogOpen(false);
     setSelectedExpense(null);
     // The clamp above is silent otherwise: the user typed one date and the
     // series was saved with another, which reads as a bug unless we say why.
-    const clampNote = nextDateMoved && nextDate
+    const clampNote = enablePlan && enablePulledForward
+      ? `Përsëritja u aktivizua: data e ardhshme ${enablePlan.nextDate.toLocaleDateString('sq-AL')} — periudhat e kaluara nuk gjenerohen (shtoji nga faqja e serisë nëse duhen).`
+      : nextDateMoved && nextDate
       ? resumes
         ? `Seria u riaktivizua: data e ardhshme u zhvendos te ${nextDate.toLocaleDateString('sq-AL')} — muajt joaktivë nuk gjenerohen.`
         : `Data e ardhshme u zhvendos te ${nextDate.toLocaleDateString('sq-AL')} — periudha e zgjedhur është tashmë e gjeneruar (librat e mbyllur nuk rishkruhen).`
@@ -467,7 +547,7 @@ const ExpensesView: React.FC = () => {
     toast({
       title: 'Shpenzimi u përditësua ✓',
       description: reopenApproval
-        ? `Shuma/data ndryshoi — shpenzimi kaloi përsëri në pritje miratimi.${clampNote ? ` ${clampNote}` : ''}`
+        ? `${valueChange ? 'Shuma/data' : 'Kategoria/projekti/departamenti'} ndryshoi — shpenzimi kaloi përsëri në pritje miratimi.${clampNote ? ` ${clampNote}` : ''}`
         : clampNote,
     });
   };
@@ -523,7 +603,11 @@ const ExpensesView: React.FC = () => {
     toast({ title: 'Përsëritja u ndal ✓', description: 'Rreshtat ekzistues mbeten të paprekur.' });
   };
 
+  const rowById = (id: string) => (rawExpenses || []).find(e => e.id === id);
+
   const handleApproveExpense = async (id: string) => {
+    const row = rowById(id);
+    if (row && refuseClosedMonth(getExpenseDate(row), row.businessId)) return;
     try {
       await expenseMutation.update(id, { approvalStatus: 'Approved', approvedByUserId: user?.uid } as any);
     } catch (err: any) {
@@ -534,6 +618,8 @@ const ExpensesView: React.FC = () => {
   };
 
   const handleRejectExpense = async (id: string) => {
+    const row = rowById(id);
+    if (row && refuseClosedMonth(getExpenseDate(row), row.businessId)) return;
     try {
       await expenseMutation.update(id, { approvalStatus: 'Rejected', approvedByUserId: user?.uid } as any);
     } catch (err: any) {
@@ -548,7 +634,11 @@ const ExpensesView: React.FC = () => {
     (rawExpenses || []).filter(e => (e as any).parentExpenseId === parentId);
 
   const handleDeleteExpense = async (expense: Expense) => {
-    const isRecurringParent = expense.isRecurring && !expense.autoGenerated;
+    // A booked row of a closed month is part of the closed books. (A recurring
+    // parent still reaches the dialog: "Ndalo përsëritjen" touches no booked money.)
+    const isRecurringParentRow = expense.isRecurring && !expense.autoGenerated;
+    if (!isRecurringParentRow && refuseClosedMonth(getExpenseDate(expense), expense.businessId)) return;
+    const isRecurringParent = isRecurringParentRow;
     const hasChildren = childrenOf(expense.id).length > 0;
     // A recurring parent (or one that already spawned occurrences) needs the
     // choice dialog; a plain/one-off/child entry just confirms.
@@ -579,6 +669,7 @@ const ExpensesView: React.FC = () => {
         // Interrupt only: keep the record + all past occurrences.
         await handleStopRecurrence(deleteTarget);
       } else if (deleteMode === 'one') {
+        if (refuseClosedMonth(getExpenseDate(deleteTarget), deleteTarget.businessId)) return;
         // Remove just this record; past/future occurrences are untouched — but
         // they must not keep pointing at a parent that no longer exists, or the
         // cron's belt-and-braces `parentExpenseId` query matches nothing and the
@@ -601,6 +692,10 @@ const ExpensesView: React.FC = () => {
         // first rejection — leaving half the series deleted, the dialog open and
         // no message at all. Report what actually went instead.
         const kids = childrenOf(deleteTarget.id);
+        // The whole series includes its booked history — refuse if any of it
+        // sits in a closed month (stopping the series is still available).
+        const lockedRow = [deleteTarget, ...kids].find(r => isExpenseMonthClosed(getExpenseDate(r), r.businessId, monthCloses));
+        if (lockedRow && refuseClosedMonth(getExpenseDate(lockedRow), lockedRow.businessId)) return;
         const results = await Promise.allSettled(kids.map(k => expenseMutation.remove(k.id)));
         const failedKids = results.filter(r => r.status === 'rejected');
         let parentFailed = false;
@@ -1483,7 +1578,7 @@ const ExpensesView: React.FC = () => {
                   {(expense as any).approvalStatus === 'Rejected' && <Badge className="bg-red-100 text-red-800 text-xs"><X className="w-3 h-3 mr-1" />Refuzuar</Badge>}
                 </div>
               )}
-              {permissions.canEdit && (
+              {permissions.canEdit && canModifyExpense(expense) && (
                 <div className="flex gap-2 pt-1 border-t">
                   <Button variant="outline" size="sm" className="flex-1 gap-1" onClick={() => { setSelectedExpense(expense); setIsEditDialogOpen(true); }}>
                     <Pencil className="w-3.5 h-3.5" /> Ndrysho
@@ -1508,9 +1603,11 @@ const ExpensesView: React.FC = () => {
                       </Button>
                     </>
                   )}
-                  <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => handleDeleteExpense(expense)}>
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </Button>
+                  {canDeleteExpense(expense) && (
+                    <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => handleDeleteExpense(expense)}>
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
                 </div>
               )}
             </Card>
@@ -1661,7 +1758,7 @@ const ExpensesView: React.FC = () => {
                             <ExternalLink className="w-3.5 h-3.5" /> Historiku
                           </Button>
                         )}
-                        {permissions.canEdit && (
+                        {permissions.canEdit && canModifyExpense(expense) && (
                           <Button
                             variant="outline"
                             size="sm"
@@ -1673,7 +1770,7 @@ const ExpensesView: React.FC = () => {
                             Ndrysho
                           </Button>
                         )}
-                        {permissions.canEdit && expense.isRecurring && !(expense as any).autoGenerated && (
+                        {permissions.canEdit && canModifyExpense(expense) && expense.isRecurring && !(expense as any).autoGenerated && (
                           <Button
                             variant="outline" size="sm"
                             className="text-amber-600 hover:text-amber-700 border-amber-200 gap-1"
@@ -1692,7 +1789,7 @@ const ExpensesView: React.FC = () => {
                             </Button>
                           </>
                         )}
-                        {permissions.canEdit && (
+                        {permissions.canEdit && canDeleteExpense(expense) && (
                           <Button
                             variant="outline"
                             size="sm"
@@ -1808,16 +1905,9 @@ const FREQ_LABELS = EXPENSE_FREQ_LABELS;
 const FREQ_OPTIONS = SUPPORTED_EXPENSE_FREQUENCIES.map(v => ({ value: v, label: FREQ_LABELS[v] || v }));
 const getFreqLabel = (f?: string) => (f ? (FREQ_LABELS[f] || f) : '');
 
-const DEFAULT_CATEGORIES: { value: string; label: string }[] = [
-  { value: 'Salary', label: 'Paga' },
-  { value: 'Rent', label: 'Qira' },
-  { value: 'Utilities', label: 'Shërbime (Ujë, Dritë)' },
-  { value: 'Office', label: 'Furnizime Zyre' },
-  { value: 'Hosting', label: 'Hosting & Software' },
-  { value: 'Marketing', label: 'Marketing' },
-  { value: 'Travel', label: 'Udhëtim' },
-  { value: 'Other', label: 'Tjetër' },
-];
+// One table (`expenseLabels.ts`) for the picker AND the list — the picker used
+// to say "Furnizime Zyre" while the list said "Zyrë" for the same 'Office' row.
+const DEFAULT_CATEGORIES = DEFAULT_EXPENSE_CATEGORIES;
 
 /**
  * A custom category is stored BY ITS LABEL and written as the expense's
@@ -1834,8 +1924,8 @@ const DEFAULT_CATEGORIES: { value: string; label: string }[] = [
  * category the user wants already exists, so we select the built-in and say so.
  */
 const norm = (s: string) => s.trim().toLowerCase();
-const findBuiltInCategory = (name: string) =>
-  DEFAULT_CATEGORIES.find(c => norm(c.value) === norm(name) || norm(c.label) === norm(name));
+// Former labels ("Zyrë", "Furnizime Zyre") are still reserved for the built-in.
+const findBuiltInCategory = findBuiltInExpenseCategory;
 
 const ExpenseForm: React.FC<{
   onSubmit: (data: FormData) => void | Promise<void>;

@@ -513,6 +513,7 @@ const TasksView: React.FC = () => {
           taskTitle: title,
           value: createdValue,
           project: proj ? ({ ...(proj as any), id: proj.id }) : null,
+          canEditBudget: canSeeFinancials(permissions),
         });
         if (!result.skipped) {
           toast({

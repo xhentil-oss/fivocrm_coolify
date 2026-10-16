@@ -63,6 +63,30 @@ export function billingTypeOf(p: Project): 'one-time' | 'monthly' {
 }
 
 /**
+ * Weeks per month (52 / 12 ≈ 4.33) — the same factor as `FREQ_TO_MONTHLY.weekly`
+ * (recurringExpenses.ts), which MRR (`monthlyRecurringRevenue`) already applies to
+ * projects. Not imported from there to keep this module free of the expense engine.
+ */
+export const WEEKS_PER_MONTH = 52 / 12;
+
+/**
+ * The fee a retainer earns PER MONTH, in the project's own currency.
+ *
+ * `budget` is the fee per BILLING CYCLE: the Part 2 cron (api/cron/run.ts) bills
+ * `budget` once per week for `recurringFrequency: 'weekly'`, once per month
+ * otherwise. Every earned-revenue engine counts retainer revenue in MONTHS
+ * (`retainerRevenueInPeriod`), so a weekly retainer must be expressed per month
+ * first — reading its weekly fee as a monthly one under-stated its revenue ~4.3×
+ * while the invoices (and MRR) said otherwise. Any other / missing frequency is
+ * the monthly default the billing engine applies (`projectBillingFrequency`);
+ * an unsupported one bills nothing, and its fee is left as-is (never invented).
+ */
+export function monthlyFeeOf(p: Pick<Project, 'budget' | 'recurringFrequency'>): number {
+  const budget = Number(p.budget) || 0;
+  return (p as any).recurringFrequency === 'weekly' ? budget * WEEKS_PER_MONTH : budget;
+}
+
+/**
  * When does a MONTHLY retainer stop earning its fee?
  *
  * The period filter and the revenue calculation both used

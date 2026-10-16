@@ -327,7 +327,7 @@ describe('the shared pool is never dropped', () => {
     const ana = { ...mkM('ana', 120_000), displayName: 'ana' } as TeamMember;
     const entry = (projectId: string | undefined, hours: number): TimeEntry => ({
       id: `${projectId}-${hours}`, userId: 'ana', projectId, startTime: new Date('2026-09-10T09:00:00'), endTime: new Date('2026-09-10T17:00:00'),
-      duration: hours * 60, createdAt: new Date('2026-09-10'), updatedAt: new Date('2026-09-10'),
+      source: 'manual', duration: hours * 60, createdAt: new Date('2026-09-10'), updatedAt: new Date('2026-09-10'),
     } as TimeEntry);
     const inRow = mkP({ id: 'pX', department: 'Social', status: 'Active', budget: 200_000, billingType: 'monthly', responsibleUserId: 'ana', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01') } as any);
     const labor = allocateLabor({ timeEntries: [entry('pX', 30), entry(undefined, 5), entry('gone', 10)], members: [ana], expenses: [], period, settings });
@@ -341,5 +341,49 @@ describe('the shared pool is never dropped', () => {
     expect(res.unallocatedLabor.members.map(m => m.name)).toEqual([
       'Punë e paabsorbuar (orë të paregjistruara / bench)', 'Orë pa projekt', 'Orë në projekte jashtë periudhës',
     ]);
+  });
+});
+
+// ── Oct 2026 audit ──────────────────────────────────────────────────────────
+describe('hours model: a one-time project earns for its department in the period its hours are logged', () => {
+  const period = { start: new Date(2026, 8, 1), end: new Date(2026, 8, 30, 23, 59, 59, 999) };
+  const settings = { employerCostPct: 0, defaultClientCapacityHours: 120 }; // 1 000 L/h
+  const ana = { ...mkM('ana', 120_000), displayName: 'ana' } as TeamMember;
+  const entries = [{
+    id: 'e1', userId: 'ana', projectId: 'ff', date: '2026-09-10', startTime: new Date('2026-09-10T09:00:00'),
+    source: 'manual', duration: 50 * 60, createdAt: new Date('2026-09-10'), updatedAt: new Date('2026-09-10'),
+  } as TimeEntry];
+  // Created/updated in JULY, 50 of 100 planned hours in SEPTEMBER.
+  const fixedFee = mkP({
+    id: 'ff', department: 'Web', status: 'Active', billingType: 'one-time', budget: 100_000, plannedHours: 100,
+    createdAt: new Date('2026-07-05'), updatedAt: new Date('2026-07-20'),
+  } as any);
+
+  it('the department row carries the earned revenue and the labour of those hours', () => {
+    const labor = allocateLabor({ timeEntries: entries, members: [ana], expenses: [], period, settings, clientProjectIds: new Set(['ff']) });
+    const res = computeDepartmentPnl([fixedFee], [ana], [], { range: period, labor, timeEntries: entries });
+    const web = res.rows.find(r => r.department === 'Web')!;
+    expect(web.revenue).toBeCloseTo(50_000);
+    expect(web.labor).toBeCloseTo(50_000);
+    expect(res.laborOutsideRows).toBe(0);
+    // Same answer as the project engine.
+    const pnl = computeProjectPnl([fixedFee], [ana], [], { range: period, labor, timeEntries: entries });
+    expect(res.totals.revenue).toBeCloseTo(pnl.totals.revenue);
+  });
+
+  it('legacy model (no hours) is unchanged', () => {
+    const res = computeDepartmentPnl([fixedFee], [ana], [], { range: period, timeEntries: entries });
+    expect(res.rows).toEqual([]);
+  });
+});
+
+describe('weekly retainer earns its weekly fee × 52/12 per month', () => {
+  it('department revenue for a month', () => {
+    const weekly = mkP({
+      id: 'w', department: 'Ads', status: 'Active', billingType: 'monthly', isRecurring: true, recurringFrequency: 'weekly',
+      budget: 12_000, createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01'),
+    } as any);
+    const res = computeDepartmentPnl([weekly], [], [], OPTS);
+    expect(res.rows[0].revenue).toBeCloseTo(52_000);
   });
 });

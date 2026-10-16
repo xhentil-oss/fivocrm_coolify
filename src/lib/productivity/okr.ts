@@ -15,7 +15,8 @@
  * Pure functions only — no React, no Firestore.
  */
 
-import { getTimestampMs, toAll } from '../utils';
+import { getTimestampMs } from '../utils';
+import { getInvoiceCollectedBetween } from '../finance/financialAnalytics';
 import type { Goal, KeyResult, KeyResultAutoSource, Task, Project, Lead, Invoice } from '../../types';
 
 export interface OkrContext {
@@ -101,11 +102,19 @@ export function computeAutoKRValue(
       ).length;
     }
     case 'revenue': {
+      // Cash COLLECTED inside the goal's window, through the one definition
+      // (`getInvoiceCollectedBetween`, in ALL): instalments count on their own
+      // dates and a Partial invoice is no longer worth 0 until fully paid; a
+      // Paid one is not credited on `updatedAt` (any edit re-bucketed it).
+      // The window ends at the goal's due DAY — money after the goal ended is
+      // not progress on it — and, for a running goal, "to date" (min with now).
+      const dueMs = getTimestampMs(goal.dueDate);
+      const goalEnd = dueMs ? new Date(dueMs) : null;
+      if (goalEnd) goalEnd.setHours(23, 59, 59, 999);
+      const windowEnd = new Date(goalEnd ? Math.min(goalEnd.getTime(), now) : now);
+      const windowStart = new Date(start);
       return (ctx.invoices || [])
-        .filter((inv) => inv.status === 'Paid' && within(getTimestampMs((inv as any).paidAt) || getTimestampMs(inv.updatedAt)))
-        // Normalizo ne ALL: mbledhja e papershtatur e `total` numeronte
-        // 1 € si 1 Lek, dhe rezultati etiketohej si €.
-        .reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
+        .reduce((s, inv) => s + getInvoiceCollectedBetween(inv, windowStart, windowEnd), 0);
     }
     case 'invoicesPaid': {
       return (ctx.invoices || []).filter(

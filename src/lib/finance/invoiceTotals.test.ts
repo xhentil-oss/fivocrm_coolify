@@ -82,3 +82,14 @@ describe('storedInvoiceTotals', () => {
     expect(t.subtotal).toBe(500);
   });
 });
+
+describe('computeInvoiceTotals rounding', () => {
+  it('rounds every figure to cents', () => {
+    const t = computeInvoiceTotals({ subtotal: 100, discount: 33.3333, discountType: 'percent', tax: 0 });
+    expect(t.discountAmount).toBe(33.33);
+    expect(t.total).toBe(66.67);
+    const f = computeInvoiceTotals({ subtotal: 0.1 + 0.2, tax: 0 });
+    expect(f.total).toBe(0.3);
+    expect(computeInvoiceTotals({ subtotal: 10.005, tax: 0 }).total).toBe(10.01);
+  });
+});

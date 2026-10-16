@@ -15,6 +15,13 @@ import type { ClientProfitabilityResult, ClientRow } from './clientProfitability
  * write-only. `resultFromSnapshot` turns it back into the shape the client table
  * renders, so a locked month shows the figures that were signed off, and
  * `snapshotNetDrift` says by how much the live numbers have moved since.
+ *
+ * A close is always taken on the EARNED revenue basis and the snapshot records
+ * it (`revenueBasis`). Both readers compare like with like: on the "Arkëtuar"
+ * toggle a locked month shows the LIVE table (with a note that the close is in
+ * "Fituar"), never earned figures under a cash label, and the drift is not
+ * computed across bases. A snapshot written before the basis was recorded is
+ * read as earned — the toggle's default, and the only basis a close takes now.
  */
 
 /** `YYYY-MM` of an instant, read in the recurrence/business zone. */
@@ -73,12 +80,57 @@ export function closeMonthPatch(input: CloseMonthPatchInput) {
     locked: true as const,
     closedAt: input.at ?? new Date(),
     closedByUserId: input.userId ?? null,
-    snapshot: input.snapshot,
     warnings: input.warnings,
+    /** The snapshot lives in the private subdocument (see `closeSnapshotDoc`). */
+    snapshotPrivate: true as const,
   };
 }
 
-/** Fields a reopen writes — `closedAt` and `snapshot` stay, so history survives. */
+// ── Where the snapshot lives ──
+//
+// The lock doc `financeMonthCloses/{bid}_{YYYY-MM}` must stay readable by EVERY
+// member of the business (the timesheet and expense pages read `locked`). The
+// snapshot is the company's payroll, operating profit and every client's
+// margin — not every member's to read. So it is written to a subdocument
+// `financeMonthCloses/{closeId}/private/snapshot` in the SAME batch as the
+// close (Owner/Admin, the same predicate as the close write) and only an
+// Admin/owner reads it. A close written before this carries the legacy inline
+// `snapshot` field: still read (fallback), and DELETED by the next re-close so
+// it stops being member-readable. Reopen touches neither.
+
+export const CLOSE_SNAPSHOT_SUBCOLLECTION = 'private';
+export const CLOSE_SNAPSHOT_DOC_ID = 'snapshot';
+
+/** `[collection, docId, subcollection, subDocId]` of a close's private snapshot. */
+export function closeSnapshotPath(closeId: string): [string, string, string, string] {
+  return ['financeMonthCloses', closeId, CLOSE_SNAPSHOT_SUBCOLLECTION, CLOSE_SNAPSHOT_DOC_ID];
+}
+
+/** The private snapshot document, written in the same batch as `closeMonthPatch`. */
+export function closeSnapshotDoc(input: CloseMonthPatchInput) {
+  return {
+    businessId: input.businessId,
+    periodKey: input.periodKey,
+    closedAt: input.at ?? new Date(),
+    closedByUserId: input.userId ?? null,
+    snapshot: input.snapshot,
+  };
+}
+
+/**
+ * The snapshot of a close: the private subdocument's when it exists, else the
+ * legacy inline field (closes written before the move). `null` = no snapshot.
+ */
+export function resolveCloseSnapshot(
+  privateDoc: { snapshot?: unknown } | null | undefined,
+  close: { snapshot?: unknown } | null | undefined,
+): unknown {
+  if (privateDoc && privateDoc.snapshot && typeof privateDoc.snapshot === 'object') return privateDoc.snapshot;
+  if (close && close.snapshot && typeof close.snapshot === 'object') return close.snapshot;
+  return null;
+}
+
+/** Fields a reopen writes — `closedAt` and the snapshot (subdocument or legacy field) stay, so history survives. */
 export function reopenMonthPatch(userId: string | null | undefined, at: Date = new Date()) {
   return {
     locked: false as const,
@@ -93,6 +145,10 @@ export interface SnapshotClient {
   customerId: string;
   name: string;
   earned: number;
+  /** 0 on a snapshot written before pass-through was recorded. */
+  passThrough: number;
+  /** `undefined` on an old snapshot (derive it); `null` = no net revenue. */
+  grossMarginPct: number | null | undefined;
   directLabor: number;
   directExpenses: number;
   grossProfit: number;
@@ -106,8 +162,12 @@ export interface SnapshotClient {
   status: ClientRow['status'];
 }
 
+export type SnapshotRevenueBasis = ClientProfitabilityResult['revenueBasis'];
+
 export interface CloseSnapshot {
   basis: ClientProfitabilityResult['basis'];
+  /** The revenue basis the figures are in; a legacy snapshot without one reads as 'earned'. */
+  revenueBasis: SnapshotRevenueBasis;
   overheadBasis: ClientProfitabilityResult['overheadBasis'] | undefined;
   totals: Partial<ClientProfitabilityResult['totals']>;
   company: Partial<ClientProfitabilityResult['company']>;
@@ -142,7 +202,9 @@ export function readCloseSnapshot(raw: unknown): CloseSnapshot | null {
     .map(c => ({
       customerId: String(c.customerId ?? ''),
       name: String(c.name ?? 'Pa emër'),
-      earned: num(c.earned), directLabor: num(c.directLabor), directExpenses: num(c.directExpenses),
+      earned: num(c.earned), passThrough: num(c.passThrough),
+      grossMarginPct: 'grossMarginPct' in c ? numOrNull(c.grossMarginPct) : undefined,
+      directLabor: num(c.directLabor), directExpenses: num(c.directExpenses),
       grossProfit: num(c.grossProfit), overhead: num(c.overhead), netProfit: num(c.netProfit),
       hours: num(c.hours), invoiced: num(c.invoiced), collected: num(c.collected), outstanding: num(c.outstanding),
       category: (c.category ?? null) as ClientRow['category'],
@@ -150,6 +212,7 @@ export function readCloseSnapshot(raw: unknown): CloseSnapshot | null {
     }));
   return {
     basis: s.basis === 'hours' ? 'hours' : 'none',
+    revenueBasis: s.revenueBasis === 'collected' ? 'collected' : 'earned',
     overheadBasis: typeof s.overheadBasis === 'string' ? (s.overheadBasis as ClientProfitabilityResult['overheadBasis']) : undefined,
     totals,
     company,
@@ -160,6 +223,11 @@ export function readCloseSnapshot(raw: unknown): CloseSnapshot | null {
 
 const pct = (part: number, whole: number): number | null => (whole > 0 ? (part / whole) * 100 : null);
 
+/** The revenue basis a stored snapshot is in (`null` when it is not a snapshot). */
+export function snapshotRevenueBasis(raw: unknown): SnapshotRevenueBasis | null {
+  return readCloseSnapshot(raw)?.revenueBasis ?? null;
+}
+
 /**
  * The client table AS IT WAS CLOSED, in the shape the panel renders.
  *
@@ -168,17 +236,26 @@ const pct = (part: number, whole: number): number | null => (whole > 0 ? (part /
  * rows carry empty `projects` / `byRole` and the live settings/company fill the
  * rest. Every figure the table prints — earned, hours, direct cost, gross, GM,
  * overhead, net, L/h, invoiced, collected, outstanding — comes from the snapshot.
+ *
+ * `null` when there is no snapshot OR when it is in another revenue basis than
+ * `live` (the caller then renders live and says the close is in the other
+ * basis): earned figures under the "Arkëtuar" label are the bug this prevents.
+ *
+ * Per-row pass-through and GM % are read from the snapshot when it has them, so
+ * the GM % printed beside the frozen status dot is the one that set it. An old
+ * snapshot without them falls back to earned (pass-through 0).
  */
 export function resultFromSnapshot(raw: unknown, live: ClientProfitabilityResult): ClientProfitabilityResult | null {
   const snap = readCloseSnapshot(raw);
   if (!snap) return null;
+  if (snap.revenueBasis !== (live.revenueBasis ?? 'earned')) return null;
   const rows: ClientRow[] = snap.clients.map(c => {
-    const netRevenue = c.earned; // pass-through is not in the snapshot
+    const netRevenue = c.earned - c.passThrough;
     return {
       customerId: c.customerId, name: c.name, contractValue: 0,
-      earned: c.earned, passThrough: 0, netRevenue,
+      earned: c.earned, passThrough: c.passThrough, netRevenue,
       directLabor: c.directLabor, directExpenses: c.directExpenses,
-      grossProfit: c.grossProfit, grossMarginPct: pct(c.grossProfit, netRevenue),
+      grossProfit: c.grossProfit, grossMarginPct: c.grossMarginPct === undefined ? pct(c.grossProfit, netRevenue) : c.grossMarginPct,
       overhead: c.overhead, netProfit: c.netProfit, netMarginPct: pct(c.netProfit, netRevenue),
       hours: c.hours, effectiveHourlyRevenue: c.hours > 0 ? netRevenue / c.hours : null,
       invoiced: c.invoiced, collected: c.collected, outstanding: c.outstanding,
@@ -189,13 +266,14 @@ export function resultFromSnapshot(raw: unknown, live: ClientProfitabilityResult
   const sum = (k: keyof SnapshotClient) => rows.reduce((s, r) => s + num((r as any)[k]), 0);
   const t = snap.totals;
   const earned = t.earned ?? sum('earned');
-  const netRevenue = t.netRevenue ?? earned - (t.passThrough ?? 0);
+  const passThrough = t.passThrough ?? sum('passThrough');
+  const netRevenue = t.netRevenue ?? earned - passThrough;
   const grossProfit = t.grossProfit ?? sum('grossProfit');
   const netProfit = t.netProfit ?? sum('netProfit');
   const totals: ClientProfitabilityResult['totals'] = {
     contractValue: t.contractValue ?? 0,
     earned,
-    passThrough: t.passThrough ?? 0,
+    passThrough,
     netRevenue,
     directLabor: t.directLabor ?? sum('directLabor'),
     directExpenses: t.directExpenses ?? sum('directExpenses'),
@@ -216,6 +294,7 @@ export function resultFromSnapshot(raw: unknown, live: ClientProfitabilityResult
     totals,
     company: { ...live.company, ...snap.company },
     basis: snap.basis,
+    revenueBasis: snap.revenueBasis,
     overheadBasis: snap.overheadBasis ?? live.overheadBasis,
     warnings: snap.warnings ?? live.warnings,
   };
@@ -226,10 +305,16 @@ export function resultFromSnapshot(raw: unknown, live: ClientProfitabilityResult
  * net figure (nothing to compare against). A non-zero drift means something
  * dated inside the closed month was written after the close — an expense, an
  * invoice payment, a salary row — which the lock on `timeEntries` cannot stop.
+ * Also `null` when `live` is in another revenue basis than the snapshot — cash
+ * minus earned is not a drift, it is two different questions.
  */
-export function snapshotNetDrift(raw: unknown, live: Pick<ClientProfitabilityResult, 'totals'>): number | null {
+export function snapshotNetDrift(
+  raw: unknown,
+  live: Pick<ClientProfitabilityResult, 'totals'> & { revenueBasis?: SnapshotRevenueBasis },
+): number | null {
   const snap = readCloseSnapshot(raw);
   if (!snap) return null;
+  if (snap.revenueBasis !== (live.revenueBasis ?? 'earned')) return null;
   const closedNet = snap.totals.netProfit ?? (snap.clients.length ? snap.clients.reduce((s, c) => s + c.netProfit, 0) : null);
   if (closedNet == null) return null;
   return Math.round(live.totals.netProfit) - Math.round(closedNet);

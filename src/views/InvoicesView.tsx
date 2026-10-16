@@ -64,7 +64,7 @@ import { getRateToAll, getTimestampMs, canSeeFinancials, currencySymbol } from '
 import { toast } from '../hooks/use-toast';
 import { getStatusColor, getInvoiceStatusLabel } from '../lib/statusColors';
 import { projectPickerLabel, sortArchivedLast, resumedBillingClaimPatch } from '../lib/projectArchive';
-import { projectAlsoBills, invoiceBillingPeriodKey, resolveRecurringSchedule, resumedInvoiceClaimPatch } from '../lib/finance/recurringInvoices';
+import { projectAlsoBills, invoiceBillingPeriodKey, resolveRecurringSchedule, resumedInvoiceClaimPatch, INVOICE_BLOCK_LABELS } from '../lib/finance/recurringInvoices';
 import { invoiceStatusTransition } from '../lib/finance/invoiceStatus';
 import { zonedParts, zonedDate } from '../lib/recurringUtils';
 import { computeInvoiceTotals, storedInvoiceTotals } from '../lib/finance/invoiceTotals';
@@ -160,6 +160,21 @@ const initialsOf = (name?: string | null): string => {
 const SETTLEMENT_STATUSES: ReadonlyArray<Invoice['status']> = ['Paid', 'Partial', 'Cancelled'];
 function canSettleInvoices(p: ReturnType<typeof usePermissions>): boolean {
   return !!(p.isAdmin || p.isManager || p.isOwner || p.isSuperAdmin);
+}
+/**
+ * A SETTLED invoice (Paid / Partial / Cancelled) is frozen for a Member: the
+ * rules deny its amount keys (`invoiceAmountsAllowed`) and its line items
+ * (`invoiceItemWriteAllowed`), so the full form — which deletes and recreates
+ * the lines — would fail half-way. Deleting anything but a Draft is
+ * Admin/Manager work too.
+ */
+const SETTLED_EDIT_LOCK_NOTE = 'Fatura është e shlyer ose e anuluar — vetëm Admin ose Manager mund ta ndryshojë.';
+const NON_DRAFT_DELETE_LOCK_NOTE = 'Vetëm Admin ose Manager mund të fshijë një faturë që nuk është draft.';
+function invoiceEditLocked(canSettle: boolean, invoice: Pick<Invoice, 'status'>): boolean {
+  return !canSettle && SETTLEMENT_STATUSES.includes(invoice.status);
+}
+function invoiceDeleteLocked(canSettle: boolean, invoice: Pick<Invoice, 'status'>): boolean {
+  return !canSettle && (invoice.status || 'Draft') !== 'Draft';
 }
 
 const InvoicesView: React.FC = () => {
@@ -299,6 +314,12 @@ const InvoicesView: React.FC = () => {
 
   const handleToggleSeriesPause = async (project: Project) => {
     const paused = (project as any).isRecurringPaused;
+    // Resuming a project's billing is Admin/Manager work (projBillingTransitionOk
+    // in firestore.rules: a Member may pause, never resume).
+    if (paused && !canSettle) {
+      toast({ title: 'Nuk lejohet', description: 'Vetëm Admin ose Manager mund ta rifillojë faturimin e projektit.', variant: 'destructive' });
+      return;
+    }
     // Resuming re-points a stale period claim (same law as restoring from the
     // archive), so the first run bills the current period once and counts
     // nothing that was deliberately paused as "skipped".
@@ -405,11 +426,25 @@ const InvoicesView: React.FC = () => {
   const handleDeleteInvoice = async (id: string) => {
     try {
       const target = invoices?.find(inv => inv.id === id);
+      if (target && invoiceDeleteLocked(canSettle, target)) {
+        toast({ title: 'Nuk lejohet', description: NON_DRAFT_DELETE_LOCK_NOTE, variant: 'destructive' });
+        setInvoiceToDelete(null);
+        return;
+      }
       // WHMCS invoices are mirror copies — hard-deleting them just lets the next
       // sync re-create them (and revenue comes back). Cancel instead: mark
       // Cancelled + locallyCancelled (sync preserves it, excluded from revenue).
       if (target?.source === 'whmcs') {
-        await invoiceMutation.update(id, { status: 'Cancelled', locallyCancelled: true } as any);
+        // The SAME transition every other status path uses: `locallyCancelled`,
+        // the settlement reset when it was Paid/Partial, and an emptied WHMCS
+        // write-back queue — nothing may be posted to WHMCS for an invoice we
+        // cancelled. The bare `{ status, locallyCancelled }` left a queued
+        // payment that the next sync then pushed.
+        const transition = invoiceStatusTransition(target, 'Cancelled');
+        await invoiceMutation.update(id, transition.patch as any);
+        if (transition.clearPaymentLedger) {
+          await deleteInvoicePaymentRows(id, (target as any)?.businessId || activeBusinessId);
+        }
         toast({ title: 'Fatura WHMCS u anulua', description: 'Nuk numërohet më te të ardhurat dhe nuk rikthehet nga sinkronizimi.' });
         setInvoiceToDelete(null);
         return;
@@ -667,9 +702,15 @@ const InvoicesView: React.FC = () => {
     // toAll() is only for display/aggregation, NOT for payment logic
     const invoiceCurrency = (partialPaymentInvoice as any).currency || 'ALL';
     const invoiceTotalNative = partialPaymentInvoice.total ?? partialPaymentInvoice.amount ?? 0;
-    const alreadyPaid = partialPaymentInvoice.paidAmount ?? 0;
+    // Same arithmetic + half-cent tolerance as the transaction in
+    // `recordInvoicePartialPayment`: a pre-check stricter than the write refused
+    // to settle 33.33 against a remaining 33.3333… (float noise), and one that
+    // read only `paidAmount` disagreed with a ledger of recorded instalments.
+    const recordedInstalments = (partialPaymentInvoice.partialPayments || [])
+      .reduce((s, p: any) => s + (Number(p?.amount) || 0), 0);
+    const alreadyPaid = Math.max(Number(partialPaymentInvoice.paidAmount) || 0, recordedInstalments);
     const remaining = invoiceTotalNative - alreadyPaid;
-    if (amount > remaining) {
+    if (amount > remaining + 0.005) {
       toast({ title: 'Shumë e madhe', description: `Mbetet për t'u paguar: ${remaining.toLocaleString()} ${invoiceCurrency}`, variant: 'destructive' });
       return;
     }
@@ -1410,8 +1451,12 @@ const InvoicesView: React.FC = () => {
                       <Eye className="w-4 h-4 mr-2" /> Shiko
                     </DropdownMenuItem>
                     {permissions.canEdit && (
-                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setEditInvoice(invoice); }}>
+                      <DropdownMenuItem
+                        disabled={invoiceEditLocked(canSettle, invoice)}
+                        title={invoiceEditLocked(canSettle, invoice) ? SETTLED_EDIT_LOCK_NOTE : undefined}
+                        onClick={(e) => { e.stopPropagation(); if (!invoiceEditLocked(canSettle, invoice)) setEditInvoice(invoice); }}>
                         <Edit2 className="w-4 h-4 mr-2" /> Ndrysho
+                        {invoiceEditLocked(canSettle, invoice) && <span className="ml-auto pl-2 text-[10px] text-muted-foreground">Admin/Manager</span>}
                       </DropdownMenuItem>
                     )}
                     {permissions.canEdit && (
@@ -1451,7 +1496,7 @@ const InvoicesView: React.FC = () => {
                         </DropdownMenuItem>
                       </>
                     )}
-                    {permissions.canEdit && (
+                    {permissions.canEdit && !invoiceDeleteLocked(canSettle, invoice) && (
                       <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); setInvoiceToDelete(invoice.id); }}>
                         <Trash2 className="w-4 h-4 mr-2" /> Fshi
                       </DropdownMenuItem>
@@ -1551,10 +1596,12 @@ const InvoicesView: React.FC = () => {
                     </Button>
                     {permissions.canEdit && (
                       <>
-                        <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
-                          onClick={() => handleToggleSeriesPause(p)}>
-                          {paused ? <><Play className="w-3 h-3 mr-1" /> Rifillo</> : <><Pause className="w-3 h-3 mr-1" /> Pauzo</>}
-                        </Button>
+                        {(!paused || canSettle) && (
+                          <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
+                            onClick={() => handleToggleSeriesPause(p)}>
+                            {paused ? <><Play className="w-3 h-3 mr-1" /> Rifillo</> : <><Pause className="w-3 h-3 mr-1" /> Pauzo</>}
+                          </Button>
+                        )}
                         <Button size="sm" variant="outline" className="h-7 px-2 text-xs border-destructive/40 text-destructive hover:bg-destructive/5"
                           onClick={() => setSeriesToStop(p)}>
                           <CircleStop className="w-3 h-3 mr-1" /> Ndërprit
@@ -1718,8 +1765,12 @@ const InvoicesView: React.FC = () => {
                               <Eye className="w-4 h-4 mr-2" /> Shiko detajet (shërbimet)
                             </DropdownMenuItem>
                             {permissions.canEdit && (
-                              <DropdownMenuItem onClick={() => setEditInvoice(invoice)}>
+                              <DropdownMenuItem
+                                disabled={invoiceEditLocked(canSettle, invoice)}
+                                title={invoiceEditLocked(canSettle, invoice) ? SETTLED_EDIT_LOCK_NOTE : undefined}
+                                onClick={() => { if (!invoiceEditLocked(canSettle, invoice)) setEditInvoice(invoice); }}>
                                 <Edit2 className="w-4 h-4 mr-2" /> Ndrysho faturën (shërbimet)
+                                {invoiceEditLocked(canSettle, invoice) && <span className="ml-auto pl-2 text-[10px] text-muted-foreground">Admin/Manager</span>}
                               </DropdownMenuItem>
                             )}
                             {permissions.canEdit && (
@@ -1750,7 +1801,7 @@ const InvoicesView: React.FC = () => {
                                 </DropdownMenuItem>
                               </>
                             )}
-                            {permissions.canEdit && (
+                            {permissions.canEdit && !invoiceDeleteLocked(canSettle, invoice) && (
                               <>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem
@@ -1878,9 +1929,13 @@ const InvoicesView: React.FC = () => {
             {/* Footer */}
             <div className="p-4 border-t border-border space-y-2">
               {permissions.canEdit && (
-                <Button variant="outline" className="w-full" onClick={() => { const inv = drawerInvoice; setDrawerInvoice(null); setEditInvoice(inv); }}>
-                  <Edit2 className="w-4 h-4 mr-1" /> Ndrysho faturën e plotë (shërbimet)
-                </Button>
+                invoiceEditLocked(canSettle, drawerInvoice) ? (
+                  <p className="text-xs text-muted-foreground text-center">{SETTLED_EDIT_LOCK_NOTE}</p>
+                ) : (
+                  <Button variant="outline" className="w-full" onClick={() => { const inv = drawerInvoice; setDrawerInvoice(null); setEditInvoice(inv); }}>
+                    <Edit2 className="w-4 h-4 mr-1" /> Ndrysho faturën e plotë (shërbimet)
+                  </Button>
+                )
               )}
               <div className="flex gap-2">
                 {permissions.canEdit && (
@@ -2353,7 +2408,14 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
   // its own description + unitPrice (invoices raised from a task or a project
   // budget). Both must survive an edit: the form used to keep only serviceId, so
   // opening such an invoice and saving wiped its lines and zeroed the total.
-  const [lineItems, setLineItems] = useState<Array<{ serviceId: string; quantity: number; description?: string; unitPrice?: number }>>([]);
+  //
+  // `priceSource` says where a line's unit price comes from. A line loaded from a
+  // saved invoice is 'stored': it keeps the price it was ISSUED at. Editing used
+  // to re-price every service line at TODAY's catalogue price and TODAY's FX
+  // rate, so fixing a typo in the notes silently changed the total of an issued
+  // (maybe already paid) invoice. Only a new line, a line whose service the user
+  // changes, or an invoice-currency change takes the catalogue price.
+  const [lineItems, setLineItems] = useState<Array<{ serviceId: string; quantity: number; description?: string; unitPrice?: number; priceSource?: 'stored' | 'catalogue' }>>([]);
   const [tax, setTax] = useState<number>((editInvoice as any)?.tax || 0);
   const [discount, setDiscount] = useState<number>((editInvoice as any)?.discount || 0);
   const [discountType, setDiscountType] = useState<'fixed' | 'percent'>((editInvoice as any)?.discountType || 'fixed');
@@ -2506,13 +2568,14 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         quantity: item.quantity,
         description: (item as any).description || undefined,
         unitPrice: typeof item.unitPrice === 'number' ? item.unitPrice : undefined,
+        priceSource: typeof item.unitPrice === 'number' ? 'stored' as const : 'catalogue' as const,
       })));
       setLoadedExistingItems(true);
     }
   }, [isEditing, existingItems, loadedExistingItems]);
 
   const addLineItem = () => {
-    setLineItems([...lineItems, { serviceId: '', quantity: 1 }]);
+    setLineItems([...lineItems, { serviceId: '', quantity: 1, priceSource: 'catalogue' }]);
     onDirtyChange?.(true);
   };
 
@@ -2524,6 +2587,10 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
   const updateLineItem = (index: number, field: 'serviceId' | 'quantity' | 'description' | 'unitPrice', value: string | number) => {
     const updated = [...lineItems];
     updated[index] = { ...updated[index], [field]: value };
+    // Picking a (different) service re-prices THAT line from the catalogue;
+    // typing a price is the user's own figure.
+    if (field === 'serviceId' && value !== lineItems[index]?.serviceId) updated[index].priceSource = 'catalogue';
+    if (field === 'unitPrice') updated[index].priceSource = 'stored';
     setLineItems(updated);
     onDirtyChange?.(true);
   };
@@ -2538,14 +2605,36 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     return inAll / getRateToAll(currency);
   };
 
+  // The invoice currency changed: every line is re-expressed in the new one. A
+  // catalogue service line takes the catalogue price converted to the new
+  // currency; a free-text (or orphaned-service) line converts its own price.
+  const changeCurrency = (next: 'ALL' | 'EUR') => {
+    if (next === currency) return;
+    const convert = (amount: number) => (amount * getRateToAll(currency)) / getRateToAll(next);
+    setLineItems(items => items.map(item => {
+      const service = services?.find(sv => sv.id === item.serviceId);
+      if (service) return { ...item, priceSource: 'catalogue' as const };
+      if (typeof item.unitPrice === 'number') {
+        return { ...item, unitPrice: Math.round(convert(item.unitPrice) * 100) / 100, priceSource: 'stored' as const };
+      }
+      return item;
+    }));
+    setCurrency(next);
+    onDirtyChange?.(true);
+  };
+
+  /** Unit price of a line in the invoice currency — see `priceSource`. */
+  const lineUnitPrice = (item: { serviceId: string; unitPrice?: number; priceSource?: 'stored' | 'catalogue' }): number => {
+    if (item.priceSource === 'stored' && typeof item.unitPrice === 'number') return item.unitPrice;
+    const service = services?.find(s => s.id === item.serviceId);
+    if (service) return toInvoiceCurrency(service.price, service.currency);
+    // Free-text line: its own price is the source of truth (a task/budget line
+    // has no catalogue service, and returning 0 here zeroed the invoice).
+    return Number(item.unitPrice) || 0;
+  };
+
   const calculateSubtotal = () => {
-    return lineItems.reduce((sum, item) => {
-      const service = services?.find(s => s.id === item.serviceId);
-      if (service) return sum + toInvoiceCurrency(service.price, service.currency) * item.quantity;
-      // Free-text line: its own price is the source of truth (a task/budget line
-      // has no catalogue service, and returning 0 here zeroed the invoice).
-      return sum + (Number(item.unitPrice) || 0) * item.quantity;
-    }, 0);
+    return lineItems.reduce((sum, item) => sum + lineUnitPrice(item) * item.quantity, 0);
   };
 
   // The linked project when IT also bills this retainer on a cycle. Two engines
@@ -2567,6 +2656,12 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (isSubmitting) return;
+    // A settled invoice is frozen for a Member (amounts + line items, see
+    // invoiceEditLocked) — the save would delete its lines and then be refused.
+    if (editInvoice && invoiceEditLocked(canSettle, editInvoice)) {
+      toast({ title: 'Nuk lejohet', description: SETTLED_EDIT_LOCK_NOTE, variant: 'destructive' });
+      return;
+    }
 
     // Validate paymentUrl — only allow http/https to prevent XSS via javascript: scheme
     if (paymentUrl && !/^https?:\/\//i.test(paymentUrl)) {
@@ -2782,13 +2877,16 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         for (const item of lineItems) {
           const service = services?.find(s => s.id === item.serviceId);
           if (service) {
+            // The price the line was issued at, unless the user re-priced it
+            // (new line / changed service / changed currency) — `lineUnitPrice`.
+            const unitPrice = lineUnitPrice(item);
             await invoiceItemMutation.create({
               invoiceId: editInvoice!.id,
               customerId: editInvoice!.customerId, // portal RLS (isPortalClientFor)
               serviceId: item.serviceId,
               quantity: item.quantity,
-              unitPrice: toInvoiceCurrency(service.price, service.currency),
-              totalPrice: toInvoiceCurrency(service.price * item.quantity, service.currency),
+              unitPrice,
+              totalPrice: unitPrice * item.quantity,
             });
           } else if (Number(item.unitPrice) > 0 || item.description || item.serviceId) {
             // Free-text line (task/budget invoice), OR a line whose catalogue service
@@ -2852,13 +2950,14 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         for (const item of lineItems) {
           const service = services?.find(s => s.id === item.serviceId);
           if (service) {
+            const unitPrice = lineUnitPrice(item);
             await invoiceItemMutation.create({
               invoiceId: invoice.id,
               customerId: selectedCustomerId, // portal RLS (isPortalClientFor)
               serviceId: item.serviceId,
               quantity: item.quantity,
-              unitPrice: toInvoiceCurrency(service.price, service.currency),
-              totalPrice: toInvoiceCurrency(service.price * item.quantity, service.currency),
+              unitPrice,
+              totalPrice: unitPrice * item.quantity,
             });
           } else if (Number(item.unitPrice) > 0 || item.description || item.serviceId) {
             await invoiceItemMutation.create({
@@ -3102,11 +3201,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
                   />
                 </div>
                 <div className="w-20 sm:w-24 text-right text-sm font-medium">
-                  {(() => {
-                    const svc = services?.find(s => s.id === item.serviceId);
-                    if (svc) return toInvoiceCurrency(svc.price * item.quantity, svc.currency).toFixed(2);
-                    return ((Number(item.unitPrice) || 0) * item.quantity).toFixed(2);
-                  })()} {currencySymbol(currency)}
+                  {(lineUnitPrice(item) * item.quantity).toFixed(2)} {currencySymbol(currency)}
                 </div>
                 <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(index)}>
                   <Trash2 className="w-4 h-4" />
@@ -3134,7 +3229,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
 
         <div>
           <Label htmlFor="currency">Monedha</Label>
-          <Select name="currency" value={currency} onValueChange={(v) => setCurrency(v as 'ALL' | 'EUR')}>
+          <Select name="currency" value={currency} onValueChange={(v) => changeCurrency(v as 'ALL' | 'EUR')}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
@@ -3610,7 +3705,11 @@ const InvoiceDetails: React.FC<{
                     ? 'Projekti i lidhur e faturon vetë këtë retainer — përsëritja e faturës u fik për të mos faturuar dyfish.'
                     : (invoice as any).recurringStoppedReason === 'series-ended'
                       ? 'Seria mbërriti datën e fundit ("Përsërit deri më") dhe nuk gjeneron më fatura.'
-                      : (invoice as any).recurringStoppedReason}
+                      : (invoice as any).recurringStoppedReason === 'cancelled'
+                          || (invoice as any).recurringStoppedReason === 'parent-cancelled'
+                        ? 'Fatura bazë u anulua — seria nuk gjeneron më fatura.'
+                        : (INVOICE_BLOCK_LABELS as Record<string, string>)[(invoice as any).recurringStoppedReason]
+                          || (invoice as any).recurringStoppedReason}
                 </p>
               </div>
             )}

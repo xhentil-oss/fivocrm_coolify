@@ -159,6 +159,7 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
     | { kind: 'missing' }
     | { kind: 'redelivery' }
     | { kind: 'duplicate'; inv: Record<string, any> }
+    | { kind: 'cancelled'; inv: Record<string, any>; receivedNative: number }
     | { kind: 'mismatch'; inv: Record<string, any>; expectedCents: number; receivedNative: number; settles: boolean; whmcsQueued: boolean }
     | { kind: 'paid'; inv: Record<string, any>; invCurrency: string; whmcsQueued: boolean };
 
@@ -228,6 +229,26 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
       chargedCurrency: payCurrency || null,
     });
     const instalmentIndex = Array.isArray(inv.partialPayments) ? inv.partialPayments.length : 0;
+
+    // 2b. A CANCELLED invoice paid through a link that was already open (the
+    // client kept the tab, or the email predates the cancellation). Stripe took
+    // the money, so it is BOOKED in the ledger — but the status stays Cancelled:
+    // flipping a withdrawn invoice back to Paid resurrected its revenue (and,
+    // for a WHMCS mirror, would post a payment for an invoice we voided). Owner
+    // and managers are told to refund or re-issue, like a double payment.
+    if (inv.status === 'Cancelled') {
+      const receivedNative = Math.round((paidCents / 100) * fxRate * 100) / 100;
+      tx.update(invoiceRef, {
+        paidWhileCancelledSessionIds: admin.firestore.FieldValue.arrayUnion(session.id),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      tx.set(ledgerRef, {
+        ...ledgerRow(receivedNative),
+        invoiceStatusAtPayment: 'Cancelled',
+        needsRefundReview: true,
+      }, { merge: true });
+      return { kind: 'cancelled', inv, receivedNative };
+    }
 
     if (paidCents !== expectedCents || currencyMismatch) {
       // The money is REAL: Stripe took it. Book what was actually received (a
@@ -328,6 +349,17 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
     return;
   }
 
+  if (outcome.kind === 'cancelled') {
+    console.error(`[Stripe Webhook] PAYMENT ON CANCELLED INVOICE: invoice ${invoiceId} is Cancelled but session ${session.id} paid ${paidCents} ${payCurrency || '?'}; booked in the ledger, status left Cancelled.`);
+    await notifyInvoiceStakeholders(
+      invoiceData,
+      'Pagesë për faturë të anuluar ⚠️',
+      `Fatura ${invoiceLabel} është e anuluar, por klienti e pagoi me Stripe (${paidPretty}). Pagesa u regjistrua; fatura mbeti "Anuluar". Rimbursoje nga Stripe Dashboard ose ri-lësho faturën.`,
+      { escalate: true },
+    );
+    return;
+  }
+
   if (outcome.kind === 'mismatch') {
     console.error(`[Stripe Webhook] AMOUNT MISMATCH on invoice ${invoiceId}: paid ${paidCents} ${payCurrency || '?'}, expected ${outcome.expectedCents} (fxRate=${fxRate}); booked ${outcome.receivedNative} as ${outcome.settles ? 'Paid' : 'Partial'}.`);
     await notifyCreator(
@@ -406,11 +438,18 @@ async function drainWhmcsQueue(invoiceRef: FirebaseFirestore.DocumentReference, 
  * invoices carry `createdByUserId: null`, so double-payment, mismatch and refund
  * escalations on them used to reach NOBODY.
  */
-async function notifyInvoiceStakeholders(invoiceData: Record<string, any>, title: string, message: string): Promise<void> {
+async function notifyInvoiceStakeholders(
+  invoiceData: Record<string, any>,
+  title: string,
+  message: string,
+  opts: { escalate?: boolean } = {},
+): Promise<void> {
   const recipients = new Set<string>();
-  if (invoiceData.createdByUserId) {
-    recipients.add(String(invoiceData.createdByUserId));
-  } else {
+  if (invoiceData.createdByUserId) recipients.add(String(invoiceData.createdByUserId));
+  // `escalate`: money the business must act on (a refund) goes to the owner and
+  // managers EVEN when the invoice has a creator — the creator may be a Member
+  // who cannot settle or refund (Settlement is Admin/Manager work).
+  if (!invoiceData.createdByUserId || opts.escalate) {
     const businessId = invoiceData.businessId ? String(invoiceData.businessId) : null;
     if (businessId) {
       try {
@@ -448,28 +487,48 @@ async function notifyInvoiceStakeholders(invoiceData: Record<string, any>, title
 async function handleChargeRefunded(charge: Stripe.Charge): Promise<void> {
   const pi = typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
   if (!pi) return;
-  const snap = await db.collection('invoices').where('stripePaymentIntentId', '==', pi).limit(1).get();
-  if (snap.empty) {
-    // E.g. the refund of a DOUBLE payment: the duplicate session's PI is not the one
-    // stored on the invoice. Nothing to stamp — the duplicate was already escalated.
-    console.log(`[Stripe Webhook] refund for PI ${pi} matches no invoice; ignoring.`);
+  // The `payments` LEDGER is looked up first: every Stripe receipt writes a row
+  // carrying its own PI, while `invoice.stripePaymentIntentId` holds only the
+  // LATEST one. An invoice paid by two sessions (a mismatch then the remainder,
+  // a double payment, a payment on a cancelled invoice) lost the refund of the
+  // earlier PI — "matches no invoice; ignoring". The invoice field remains the
+  // fallback for receipts that predate the ledger.
+  const ledger = await db.collection('payments').where('stripePaymentIntentId', '==', pi).limit(5).get();
+  const ledgerInvoiceId = ledger.docs.map(d => d.data()?.invoiceId).find((x): x is string => typeof x === 'string' && !!x);
+  let invoiceRef: FirebaseFirestore.DocumentReference | null = null;
+  let invoiceData: Record<string, any> | null = null;
+  if (ledgerInvoiceId) {
+    const got = await db.collection('invoices').doc(ledgerInvoiceId).get();
+    if (got.exists) { invoiceRef = got.ref; invoiceData = got.data() || {}; }
+  }
+  if (!invoiceRef) {
+    const snap = await db.collection('invoices').where('stripePaymentIntentId', '==', pi).limit(1).get();
+    if (!snap.empty) { invoiceRef = snap.docs[0].ref; invoiceData = snap.docs[0].data(); }
+  }
+  if (!invoiceRef || !invoiceData) {
+    console.log(`[Stripe Webhook] refund for PI ${pi} matches no ledger row or invoice; ignoring.`);
     return;
   }
-  const invoiceRef = snap.docs[0].ref;
-  const invoiceData = snap.docs[0].data();
   const refundedCents = charge.amount_refunded ?? 0;
-  const alreadyStamped = Number(invoiceData.stripeRefundedCents || 0);
+  // Per-PI bookkeeping: one invoice can carry several receipts, so "already
+  // stamped" must be judged for THIS charge, never against another PI's refund.
+  const byPi: Record<string, number> = { ...(invoiceData.stripeRefundsByPi || {}) };
+  const legacyStamped = invoiceData.stripePaymentIntentId === pi && !invoiceData.stripeRefundsByPi
+    ? Number(invoiceData.stripeRefundedCents || 0) : 0;
+  const alreadyStamped = Number(byPi[pi] ?? legacyStamped) || 0;
   if (refundedCents <= alreadyStamped) return; // redelivery / older event
+  byPi[pi] = refundedCents;
+  const totalRefundedCents = Object.values(byPi).reduce((s, v) => s + (Number(v) || 0), 0);
 
   const fullyRefunded = charge.refunded === true || refundedCents >= (charge.amount ?? 0);
   await invoiceRef.update({
-    stripeRefundedCents: refundedCents,
+    stripeRefundsByPi: byPi,
+    stripeRefundedCents: totalRefundedCents,
     stripeRefundedAt: admin.firestore.Timestamp.now(),
     ...(fullyRefunded ? { stripeFullyRefunded: true } : {}),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
   // Mirror onto the ledger row so arkëtime reports can exclude refunded receipts.
-  const ledger = await db.collection('payments').where('stripePaymentIntentId', '==', pi).limit(5).get();
   for (const d of ledger.docs) {
     await d.ref.update({
       refundedCents,

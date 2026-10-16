@@ -14,12 +14,13 @@
  * be profitable and still not pay. Unbilled earned revenue (WIP) and deferred
  * revenue come from revenueRecognition.ts.
  *
- * The totals FOOT with Financat: Σ client net profit + unallocated overhead ==
- * earned − (payroll + other expenses of the period) − direct expenses of
- * projects with no client row, because labour comes from ONE allocation
- * (laborAllocation.ts) and EVERY lek of it is either on a client row or in the
- * overhead pool: unabsorbed payroll, hours with no project, hours on internal
- * or out-of-period projects (`laborOutsideRows`). Nothing is dropped.
+ * The totals FOOT with Financat (earned basis), exactly:
+ *   Σ client net − unallocated overhead + loadCredit − directOutsideRows == operating profit
+ * because labour comes from ONE allocation (laborAllocation.ts) and EVERY lek of
+ * it is either on a client row or in the overhead pool: unabsorbed payroll,
+ * hours with no project, hours on internal or out-of-period projects
+ * (`laborOutsideRows`). Rows are charged at the LOADED rate, so they carry more
+ * than the unloaded payroll; that excess is `loadCredit` (never a negative pool).
  * With no logged hours in the period the result says `basis: 'none'` and the
  * table shows the estimate label — never a silent fallback.
  */
@@ -31,13 +32,14 @@ import {
   getExpenseDate,
   getInvoiceBilledBetween,
   getInvoiceCollectedBetween,
+  calculateAccountsReceivable,
   getInvoiceOutstandingAll,
   isProjectDirectExpense,
 } from './financialAnalytics';
-import { allocateLabor, laborByProjectForEntries, laborOutsideRows, type LaborAllocation, type MemberLaborLine, type ProjectLabor } from './laborAllocation';
+import { allocateLabor, laborByProjectForEntries, laborOutsideRows, loadCreditOf, type LaborAllocation, type MemberLaborLine, type ProjectLabor } from './laborAllocation';
 import type { RateCardRole } from './costRates';
-import { projectEarnedInPeriod, projectWip, recognitionMethodOf, plannedHoursOf, type RecognitionMethod } from './revenueRecognition';
-import { billingTypeOf } from './projectPeriod';
+import { monthlyFeeAll, projectEarnedInPeriod, projectWip, recognitionMethodOf, plannedHoursOf, type RecognitionMethod } from './revenueRecognition';
+import { billingTypeOf, monthsBetween, retainerRevenueInPeriod } from './projectPeriod';
 import { projectEac, planVsActual } from './projectBudget';
 import {
   classifyClient,
@@ -150,8 +152,16 @@ export interface ClientProfitabilityResult {
      * without a row (internal, out of period, unknown id). Pooled, never dropped.
      */
     laborOutsideRows: number;
-    /** unabsorbed + laborOutsideRows — the labour share of `overheadPool`. */
+    /** unabsorbed + laborOutsideRows — the labour share of `overheadPool` (≥ 0). */
     poolLabor: number;
+    /**
+     * Labour charged to rows ABOVE the unloaded payroll (`labor.overAbsorbed`,
+     * ≥ 0): the employer contributions the loaded rate carries (plus any excess
+     * of rates over pay). Its own reconciliation line, never a negative overhead.
+     * Earned basis, exactly:
+     *   Σ client net − unallocatedOverhead + loadCredit − directOutsideRows == operatingProfit
+     */
+    loadCredit: number;
     /**
      * Direct + pass-through expenses tagged to projects that have no client row
      * (internal projects). They are in the operating result but in no row and in
@@ -165,6 +175,13 @@ export interface ClientProfitabilityResult {
     /** earned − payroll − other expenses − direct expenses: the period's operating result. */
     operatingProfit: number;
     operatingMarginPct: number | null;
+    /**
+     * Everything still owed TODAY, over ALL invoices — with or without a client,
+     * with or without a row in the period. The same figure as the KPI
+     * "Të pambledhura" (`calculateAccountsReceivable`); `totals.outstanding` is
+     * only the part owed by clients that have a row in this period.
+     */
+    outstandingAll: number;
   };
   labor: LaborAllocation;
   basis: 'hours' | 'none';
@@ -203,6 +220,22 @@ export interface ClientProfitabilityInput {
 
 const NO_CLIENT = '__none__';
 
+/**
+ * "Kontrata · vlerë" beside "fituar në periudhë" — what the engagement is worth
+ * over the same window, in ALL, so the two figures are comparable:
+ *   · one-time (POC / straight-line / completion) → the whole contract (`budget`);
+ *   · retainer (recognition method 'monthly') → the MONTHLY fee (`monthlyFeeAll`:
+ *     a weekly retainer's `budget` is per week, × 52/12) × the months its span
+ *     overlaps the period, counting the running month WHOLE. A full month earned
+ *     therefore equals its contract; the raw `budget` made a weekly retainer's
+ *     "vlerë" ~4.3× smaller than one month of its earned revenue.
+ */
+export function contractValueInPeriod(p: Project, period: { start: Date; end: Date }): number {
+  if (recognitionMethodOf(p) !== 'monthly') return toAll(p.budget || 0, p.currency);
+  const fullEnd = new Date(period.end.getFullYear(), period.end.getMonth() + 1, 0, 23, 59, 59, 999);
+  return retainerRevenueInPeriod(p, monthlyFeeAll(p), period.start, fullEnd, monthsBetween(period.start, fullEnd)).revenue;
+}
+
 /** One label for a period's payroll source (payroll.ts reports it per month). */
 export function periodPayrollBasis(p: { monthsRecorded: number; monthsProfile: number }): 'recorded' | 'profile' | 'mixed' | 'none' {
   if (p.monthsRecorded > 0 && p.monthsProfile > 0) return 'mixed';
@@ -240,6 +273,7 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
   let otherFixed = 0;
   const expensesWithoutProject = { count: 0, amount: 0 };
   const projectIds = new Set(projects.map(p => p.id));
+  const projectById = new Map(projects.map(p => [p.id, p]));
   const isPassThrough = (e: Expense) => passCats.has((e.category || '').toLowerCase());
   for (const e of input.expenses || []) {
     if (!expenseIsCountable(e)) continue;
@@ -362,8 +396,8 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
       cur.hours += v.hours; cur.cost += v.cost; byRole[role] = cur;
     }
     const contractValue = ls.reduce((s, l) => {
-      const p = projects.find(x => x.id === l.id);
-      return s + (p ? toAll(p.budget || 0, p.currency) : 0);
+      const p = projectById.get(l.id);
+      return s + (p ? contractValueInPeriod(p, input.period) : 0);
     }, 0);
     rows.push({
       customerId: cid, name: nameById.get(cid) || 'Klient i panjohur',
@@ -371,8 +405,11 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
       grossProfit, grossMarginPct: pct(grossProfit, netRevenue),
       overhead: 0, netProfit: grossProfit, netMarginPct: null,
       hours, effectiveHourlyRevenue: hours > 0 ? netRevenue / hours : null,
+      // Both cash columns include the invoices with no project: `invoiced` always
+      // did, `collected` did not, so a client paid on an unlinked invoice read as
+      // "faturuar 30 000 · arkëtuar 0" while the money was in the bank.
       invoiced: sum(l => l.invoiced) + (unlinkedByCustomer.get(cid) || 0),
-      collected: sum(l => l.collected),
+      collected: sum(l => l.collected) + (unlinkedCollectedByCustomer.get(cid) || 0),
       outstanding: outstandingByCustomer.get(cid) || 0,
       unbilledEarned: sum(l => l.unbilledEarned), deferred: sum(l => l.deferred),
       unlinkedInvoiced: unlinkedByCustomer.get(cid) || 0,
@@ -387,7 +424,12 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
   // project outside the period. Both are real cost of the period; pooling only
   // the first left the second in no row and no pool.
   const outside = laborOutsideRows(labor, rowProjectIds);
-  const poolLabor = Math.max(0, labor.unabsorbed) + outside.total;
+  // Never negative (laborAllocation.ts `poolLabor`): the loaded-rate excess over
+  // the unloaded payroll is NOT credited into the pool — that gave every client a
+  // negative overhead under the defaults (net > gross). It is `loadCredit`, its
+  // own reconciliation line.
+  const poolLabor = labor.unabsorbed + outside.total;
+  const loadCredit = loadCreditOf(labor);
   const overheadPool = otherFixed + poolLabor;
   const totalHours = rows.reduce((s, r) => s + r.hours, 0);
   const totalNetRevenue = rows.reduce((s, r) => s + Math.max(0, r.netRevenue), 0);
@@ -443,15 +485,19 @@ export function computeClientProfitability(input: ClientProfitabilityInput): Cli
       payrollBasis: periodPayrollBasis(labor.payroll),
       absorbedLabor: labor.absorbed,
       unabsorbedLabor: labor.unabsorbed,
-      overAbsorbedLabor: labor.overAbsorbed,
+      overAbsorbedLabor: labor.overAbsorbedVsLoaded,
       internalProjectLabor,
       laborOutsideRows: outside.total,
       poolLabor,
+      loadCredit,
       directOutsideRows: Math.max(0, directOutsideRows),
       overheadPool,
+      // Weights sum to 1 (all allocated) or to 0 (nothing allocated → the whole
+      // pool), and the pool is ≥ 0, so this is exact; the clamp only eats float dust.
       unallocatedOverhead: Math.max(0, overheadPool - allocated),
       operatingProfit,
       operatingMarginPct: pct(operatingProfit, allEarned - allPass),
+      outstandingAll: calculateAccountsReceivable(invoices),
     },
     labor,
     basis: labor.basis,
@@ -477,18 +523,26 @@ export function clientRowFor(result: ClientProfitabilityResult, customerId: stri
 /** A compact copy for `financeMonthCloses.snapshot` — numbers only, no Maps. */
 export function snapshotForClose(result: ClientProfitabilityResult) {
   const round = (n: number) => Math.round(n);
+  const pctRound = (v: number | null) => (v == null ? null : Math.round(v * 10) / 10);
   return {
     basis: result.basis,
+    // Which revenue the figures are in. A close is always taken on the EARNED
+    // basis (FinancesView computes a separate earned result for it), but the
+    // basis is recorded so a reader never has to guess.
+    revenueBasis: result.revenueBasis,
     overheadBasis: result.overheadBasis,
     totals: Object.fromEntries(Object.entries(result.totals).map(([k, v]) => [k, v == null ? null : round(v)])),
     company: {
       otherFixed: round(result.company.otherFixed), payroll: round(result.company.payroll), payrollBasis: result.company.payrollBasis,
       unabsorbedLabor: round(result.company.unabsorbedLabor), laborOutsideRows: round(result.company.laborOutsideRows),
-      poolLabor: round(result.company.poolLabor), overheadPool: round(result.company.overheadPool),
+      poolLabor: round(result.company.poolLabor), loadCredit: round(result.company.loadCredit || 0),
+      overheadPool: round(result.company.overheadPool),
       operatingProfit: round(result.company.operatingProfit),
+      outstandingAll: round(result.company.outstandingAll),
     },
     clients: result.rows.map(r => ({
-      customerId: r.customerId, name: r.name, earned: round(r.earned), directLabor: round(r.directLabor),
+      customerId: r.customerId, name: r.name, earned: round(r.earned), passThrough: round(r.passThrough),
+      grossMarginPct: pctRound(r.grossMarginPct), directLabor: round(r.directLabor),
       directExpenses: round(r.directExpenses), grossProfit: round(r.grossProfit), overhead: round(r.overhead),
       netProfit: round(r.netProfit), hours: Math.round(r.hours * 10) / 10, invoiced: round(r.invoiced),
       collected: round(r.collected), outstanding: round(r.outstanding), category: r.category, status: r.status,

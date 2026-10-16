@@ -58,6 +58,62 @@ export function memberEndDate(member: Pick<TeamMember, 'status'> & { leftAt?: un
   return parseDate((member as any).leftAt);
 }
 
+/**
+ * Was `member` employed (on payroll) during the month ending at `monthEnd`?
+ * The date half of `memberSalaryForMonth` — start, leave, status — without
+ * the amount, so capacity can be counted over exactly the months salary is.
+ */
+export function memberEmployedInMonth(member: TeamMember, monthEnd: Date): boolean {
+  const left = memberEndDate(member);
+  if (left) {
+    if (monthEnd.getTime() >= left.getTime()) return false;
+  } else if (member.status !== 'Active') {
+    if (member.status !== 'Inactive') return false;
+    // LEGACY fallback only: an Inactive row with no `leftAt` predates TeamsView
+    // stamping it on deactivation. `updatedAt` is the last write, which for an
+    // untouched leaver is the deactivation — but ANY later edit moves it and
+    // resurrects past months, which is why the status change now writes
+    // `leftAt` explicitly (and clears it with `null` on reactivation). The
+    // types carry no `statusChangedAt` / `deactivatedAt`, so there is no better
+    // signal for the legacy rows.
+    const observedAt = parseDate((member as any).updatedAt);
+    if (!observedAt || monthEnd.getTime() >= observedAt.getTime()) return false;
+  }
+  const start = memberStartDate(member);
+  if (start && start.getTime() > monthEnd.getTime()) return false;
+  return true;
+}
+
+/**
+ * The `leftAt` a member edit must write, so leaving payroll is always an event
+ * WITH A DATE (the `updatedAt` fallback is legacy and moves with every edit):
+ *
+ *   · new status not Inactive → `null` (explicit clear; reactivated / pending);
+ *   · a date was picked → that date;
+ *   · no date, was already Inactive WITHOUT a stored one (legacy row — the
+ *     form's date box loaded EMPTY, so the empty box is not a choice the owner
+ *     made) → freeze the pre-edit `updatedAt` (the legacy signal, before this
+ *     very edit moves it); `now` when there is none;
+ *   · no date otherwise → `now`. That covers "just switched to Inactive" AND
+ *     "had a `leftAt` and the owner emptied the box": the form pre-fills the
+ *     stored date, so an empty box there is the owner clearing it, and the UI
+ *     copy promises "Bosh = nga sot e tutje". Keeping the old date (the
+ *     previous rule) silently ignored that edit.
+ * Returns `undefined` when nothing should be written (no date before or after).
+ */
+export function leftAtForStatusChange(
+  prev: Pick<TeamMember, 'status'> & { leftAt?: unknown; updatedAt?: unknown },
+  nextStatus: TeamMember['status'] | string,
+  pickedDate: Date | null,
+  now: Date = new Date(),
+): Date | null | undefined {
+  const prevLeft = parseDate(prev.leftAt);
+  if (nextStatus !== 'Inactive') return prevLeft ? null : undefined;
+  if (pickedDate) return pickedDate;
+  if (prev.status === 'Inactive' && !prevLeft) return parseDate(prev.updatedAt) || now;
+  return now;
+}
+
 /** Monthly salary in effect for `member` during the month ending at `monthEnd`. */
 export function memberSalaryForMonth(member: TeamMember, monthEnd: Date): number {
   // ── Leaving payroll is an EVENT WITH A DATE, not a status ────────────────
@@ -72,29 +128,18 @@ export function memberSalaryForMonth(member: TeamMember, monthEnd: Date): number
   //   • `leftAt` recorded → months ENDING BEFORE it keep their cost, months at
   //     or after it cost 0. (Not pro-rated: the same whole-month convention as
   //     `memberStartDate` on the hiring side.)
-  //   • No `leftAt`, status Inactive → we do not know when they left, and the
-  //     only observable signal the record carries is `updatedAt` — the moment
-  //     the row was last written, which for a leaver IS the moment they were
-  //     flipped to Inactive. Months that ended before that instant are closed
-  //     books and keep their cost; from that instant on, cost 0. With no
-  //     `updatedAt` either there is no date at all, so we keep the historical
-  //     behaviour (0 everywhere) rather than invent cost.
+  //   • No `leftAt`, status Inactive → LEGACY rows only (TeamsView now stamps
+  //     `leftAt` on deactivation). The only observable signal is `updatedAt`;
+  //     months that ended before it keep their cost, from it on cost 0. It is
+  //     fragile — any later edit of the row moves it — hence the explicit stamp.
+  //     With no `updatedAt` either there is no date at all, so we keep the
+  //     historical behaviour (0 everywhere) rather than invent cost.
   //   • Any other non-Active status (`Pending` = invited, never accepted) was
   //     never on payroll → 0, unchanged.
-  const left = memberEndDate(member);
-  if (left) {
-    if (monthEnd.getTime() >= left.getTime()) return 0;
-  } else if (member.status !== 'Active') {
-    if (member.status !== 'Inactive') return 0;
-    const observedAt = parseDate((member as any).updatedAt);
-    if (!observedAt || monthEnd.getTime() >= observedAt.getTime()) return 0;
-  }
-
-  // Not yet employed in this month → no cost. Compared against monthEnd so
-  // someone who joined mid-month still costs that whole month (their salary is
-  // recorded monthly, not pro-rated).
-  const start = memberStartDate(member);
-  if (start && start.getTime() > monthEnd.getTime()) return 0;
+  //   • Not yet employed in this month → no cost. Compared against monthEnd so
+  //     someone who joined mid-month still costs that whole month (salary is
+  //     recorded monthly, not pro-rated).
+  if (!memberEmployedInMonth(member, monthEnd)) return 0;
 
   const hist = (member.salaryHistory || [])
     .map(e => ({ monthlySalary: Number(e.monthlySalary) || 0, from: parseDate(e.effectiveFrom) }))
@@ -117,10 +162,106 @@ export function memberSalaryForMonth(member: TeamMember, monthEnd: Date): number
   return member.monthlySalary || 0;
 }
 
-/** Total monthly salary across all members for the month ending at `monthEnd`. */
+/** Total monthly salary across all PEOPLE (rows grouped per userId) for the month ending at `monthEnd`. */
 export function totalSalaryForMonth(members: TeamMember[] | undefined | null, monthEnd: Date): number {
   if (!members) return 0;
-  return members.reduce((sum, m) => sum + memberSalaryForMonth(m, monthEnd), 0);
+  return groupMembersByPerson(members).reduce((sum, p) => sum + personSalaryForMonth(p, monthEnd), 0);
+}
+
+const isEmptyValue = (v: unknown) => v === undefined || v === null || v === '';
+
+/**
+ * One PERSON = every `teamMembers` row with the same userId. The table holds one
+ * row per (team, user): a person on two departments has two rows, often with the
+ * salary on only one of them, and sometimes an old Inactive row (with its own
+ * `leftAt` and history) next to the row of the team they moved to.
+ *
+ * Money and employment are resolved PER MONTH over the rows, never from one
+ * merged record (a merge picked the highest-salary row even when it was the
+ * Inactive one: a leaver's 80 000 L was charged into months after they had moved
+ * to a 60 000 L row, its `leftAt` was dropped, and the other row's history
+ * replaced theirs — so months before that history began cost 0):
+ *   · salary in month M  = max over the rows of `memberSalaryForMonth(row, M)`
+ *     (max, not sum: two rows of one person are one salary, not two);
+ *   · employed in month M = ANY row is employed in M;
+ *   · override rate       = `hourlyCostRate` of an active row, else of any row.
+ * `profile` is for identity only — name, cost role, capacity, service lines —
+ * taken from the preferred row (active first, then the highest salary) with
+ * empty fields filled from the others. Never read money from it.
+ */
+export interface PersonRecord<T extends TeamMember = TeamMember> {
+  /** `''` for a row with no userId (it is its own person). */
+  userId: string;
+  rows: T[];
+  profile: T;
+}
+
+/** Group member rows into people (rows without a userId stay one person each), in first-seen order. */
+export function groupMembersByPerson<T extends TeamMember>(members: readonly T[] | null | undefined): PersonRecord<T>[] {
+  const out: PersonRecord<T>[] = [];
+  const byUid = new Map<string, T[]>();
+  const order: Array<T[]> = [];
+  for (const m of members || []) {
+    if (!m) continue;
+    if (!m.userId) { order.push([m]); continue; }
+    const g = byUid.get(m.userId);
+    if (g) g.push(m); else { const rows = [m]; byUid.set(m.userId, rows); order.push(rows); }
+  }
+  for (const rows of order) out.push({ userId: rows[0].userId || '', rows, profile: personProfile(rows) });
+  return out;
+}
+
+/** The one-row person (a single member treated as a person). */
+export function personOf<T extends TeamMember>(member: T): PersonRecord<T> {
+  return { userId: member.userId || '', rows: [member], profile: member };
+}
+
+function personProfile<T extends TeamMember>(rows: T[]): T {
+  if (rows.length === 1) return rows[0];
+  const sorted = [...rows].sort((a, b) =>
+    (Number(b.status === 'Active') - Number(a.status === 'Active'))
+    || ((Number(b.monthlySalary) || 0) - (Number(a.monthlySalary) || 0)));
+  const merged: any = { ...sorted[0] };
+  for (const r of sorted.slice(1)) {
+    for (const [k, v] of Object.entries(r)) if (isEmptyValue(merged[k]) && !isEmptyValue(v)) merged[k] = v;
+  }
+  return merged as T;
+}
+
+/** Salary of the person for the month ending at `monthEnd`: the highest of their rows' salaries that month. */
+export function personSalaryForMonth(person: Pick<PersonRecord, 'rows'>, monthEnd: Date): number {
+  let best = 0;
+  for (const r of person.rows) best = Math.max(best, memberSalaryForMonth(r, monthEnd));
+  return best;
+}
+
+/** The row that pays `personSalaryForMonth` that month (`null` when it is 0). */
+export function personSalaryRowForMonth<T extends TeamMember>(person: Pick<PersonRecord<T>, 'rows'>, monthEnd: Date): T | null {
+  let best: T | null = null, bestSal = 0;
+  for (const r of person.rows) {
+    const s = memberSalaryForMonth(r, monthEnd);
+    if (s > bestSal) { best = r; bestSal = s; }
+  }
+  return best;
+}
+
+/** Was the person employed in the month ending at `monthEnd` — on ANY of their rows? */
+export function personEmployedInMonth(person: Pick<PersonRecord, 'rows'>, monthEnd: Date): boolean {
+  return person.rows.some(r => memberEmployedInMonth(r, monthEnd));
+}
+
+/** Is any of the person's rows Active today? */
+export function personIsActive(person: Pick<PersonRecord, 'rows'>): boolean {
+  return person.rows.some(r => r.status === 'Active');
+}
+
+/** The explicit `hourlyCostRate` override: from an Active row first, else from any row. */
+export function personHourlyCostOverride(person: Pick<PersonRecord, 'rows'>): number | undefined {
+  const pick = (rows: TeamMember[]) => rows.map(r => Number(r.hourlyCostRate) || 0).filter(v => v > 0);
+  const active = pick(person.rows.filter(r => r.status === 'Active'));
+  if (active.length) return Math.max(...active);
+  const any = pick(person.rows);
+  return any.length ? Math.max(...any) : undefined;
 }
 
 /**

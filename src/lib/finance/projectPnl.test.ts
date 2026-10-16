@@ -500,7 +500,7 @@ describe('hours model: labour outside the period rows', () => {
   const ana = mkMember({ id: 'ana', userId: 'ana', displayName: 'ana', monthlySalary: 120_000 });
   const entry = (projectId: string | undefined, hours: number): TimeEntry => ({
     id: `${projectId}-${hours}`, userId: 'ana', projectId, startTime: new Date('2026-09-10T09:00:00'), endTime: new Date('2026-09-10T17:00:00'),
-    duration: hours * 60, createdAt: new Date('2026-09-10'), updatedAt: new Date('2026-09-10'),
+    source: 'manual', duration: hours * 60, createdAt: new Date('2026-09-10'), updatedAt: new Date('2026-09-10'),
   } as TimeEntry);
 
   it('hours with no project and hours on a project with no row both land in the fixed pool', () => {
@@ -516,5 +516,68 @@ describe('hours model: labour outside the period rows', () => {
     expect(res.rows[0].laborCost + res.fixedPool.salaries).toBeCloseTo(payroll, 6);
     // and the whole pool reaches the one row
     expect(res.rows[0].overhead).toBeCloseTo(90_000, 6);
+  });
+});
+
+// ── Oct 2026 audit ──────────────────────────────────────────────────────────
+describe('hours model: a one-time project earns in the period its hours are logged', () => {
+  const period = { start: new Date(2026, 8, 1), end: new Date(2026, 8, 30, 23, 59, 59, 999) };
+  const settings = { employerCostPct: 0, defaultClientCapacityHours: 120 }; // 1 000 L/h
+  const ana = mkMember({ id: 'ana', userId: 'ana', displayName: 'ana', monthlySalary: 120_000 });
+  const entry = (projectId: string, hours: number): TimeEntry => ({
+    id: `${projectId}-${hours}`, userId: 'ana', projectId, date: '2026-09-10', startTime: new Date('2026-09-10T09:00:00'),
+    source: 'manual', duration: hours * 60, createdAt: new Date('2026-09-10'), updatedAt: new Date('2026-09-10'),
+  } as TimeEntry);
+  // Created and last edited in JULY; 50 of 100 planned hours logged in SEPTEMBER.
+  const fixedFee = mkProject({
+    id: 'ff', name: 'Fixed fee', status: 'Active', billingType: 'one-time', budget: 100_000, plannedHours: 100,
+    createdAt: new Date('2026-07-05'), updatedAt: new Date('2026-07-20'),
+  });
+  const entries = [entry('ff', 50)];
+
+  it('September carries its row: 50 000 earned, its own 50 h of labour (not pooled onto others)', () => {
+    const labor = allocateLabor({ timeEntries: entries, members: [ana], expenses: [], period, settings, clientProjectIds: new Set(['ff']) });
+    const res = computeProjectPnl([fixedFee], [ana], [], { range: period, labor, timeEntries: entries });
+    expect(res.rows.map(r => r.id)).toEqual(['ff']);
+    expect(res.rows[0].revenue).toBeCloseTo(50_000);
+    expect(res.rows[0].laborCost).toBeCloseTo(50_000);
+    expect(res.rows[0].hours).toBe(50);
+    expect(res.fixedPool.laborOutsideRows).toBe(0);
+  });
+
+  it('legacy model (no hours) is unchanged: not in September', () => {
+    const res = computeProjectPnl([fixedFee], [ana], [], { range: period, timeEntries: entries });
+    expect(res.rows).toEqual([]);
+  });
+});
+
+describe('invoices pointing at a deleted project are reported, not lost', () => {
+  it('counts an unresolved projectId as unlinked (and separately as unresolved)', () => {
+    const now = new Date('2026-07-23');
+    const projects = [mkProject({ id: 'a', name: 'A', budget: 100_000, billingType: 'one-time' })];
+    const invoices = [
+      { id: 'ok', projectId: 'a', total: 50_000, status: 'Paid', invoiceDate: new Date('2026-03-10'), paidAt: new Date('2026-03-12'), createdAt: new Date('2026-03-10') },
+      { id: 'ghost', projectId: 'deleted', total: 30_000, status: 'Paid', invoiceDate: new Date('2026-04-10'), paidAt: new Date('2026-04-12'), createdAt: new Date('2026-04-10') },
+      { id: 'none', total: 20_000, status: 'Paid', invoiceDate: new Date('2026-04-10'), paidAt: new Date('2026-04-12'), createdAt: new Date('2026-04-10') },
+    ] as any;
+    const res = computeProjectPnl(projects, [], [], { year: 2026, now, revenueBasis: 'invoiced', invoices });
+    expect(res.unlinkedInvoices).toEqual({ count: 2, amount: 50_000 });
+    expect(res.unresolvedInvoices).toEqual({ count: 1, amount: 30_000 });
+    expect(res.rows.map(r => r.id)).toEqual(['a']);
+    expect(res.rows[0].revenue).toBe(50_000);
+  });
+});
+
+describe('weekly retainer: budget is a WEEKLY fee (the cron bills it every week)', () => {
+  it('earns budget × 52/12 per month, the same as MRR', () => {
+    const weekly = mkProject({
+      id: 'w', name: 'W', status: 'Active', billingType: 'monthly', isRecurring: true, recurringFrequency: 'weekly',
+      budget: 12_000, createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01'),
+    } as any);
+    const monthly = mkProject({ ...weekly, id: 'm', recurringFrequency: 'monthly' } as any);
+    const range = { start: new Date(2026, 2, 1), end: new Date(2026, 2, 31, 23, 59, 59, 999) };
+    const res = computeProjectPnl([weekly, monthly], [], [], { range, now: new Date('2026-06-01') });
+    expect(res.rows.find(r => r.id === 'w')!.revenue).toBeCloseTo(52_000);
+    expect(res.rows.find(r => r.id === 'm')!.revenue).toBeCloseTo(12_000);
   });
 });

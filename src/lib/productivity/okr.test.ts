@@ -74,6 +74,19 @@ describe('computeAutoKRValue', () => {
     expect(computeAutoKRValue('invoicesPaid', g, { invoices }, NOW)).toBe(2);
   });
 
+  it('revenue = cash collected in the goal window (instalments on their own dates, nothing after the goal ended)', () => {
+    const invoices: Invoice[] = [
+      { id: 'p', status: 'Partial', total: 1000, createdAt: d('2026-06-01'),
+        partialPayments: [{ amount: 300, paidAt: d('2026-06-10') }, { amount: 200, paidAt: d('2026-06-25') }] } as any,
+      // Paid after the goal ended — not progress on it, even though it is in the past.
+      { id: 'late', status: 'Paid', total: 500, paidAt: d('2026-07-05'), updatedAt: d('2026-07-05') } as Invoice,
+      // Paid on the due DAY itself (later than 00:00) counts.
+      { id: 'dueDay', status: 'Paid', total: 50, paidAt: d('2026-06-30T15:00:00'), updatedAt: d('2026-06-30T15:00:00') } as Invoice,
+    ];
+    const ended = goal({ startDate: d('2026-06-01T00:00:00'), dueDate: d('2026-06-30T00:00:00') });
+    expect(computeAutoKRValue('revenue', ended, { invoices }, NOW)).toBe(300 + 200 + 50);
+  });
+
   it('leadsWon counts Won/Converted in window', () => {
     const leads: Lead[] = [
       { id: 'l1', status: 'Won', updatedAt: d('2026-07-05') } as Lead,

@@ -191,7 +191,10 @@ export async function deleteProjectCascade(
   const [tasksSnap, invoicesSnap, expensesSnap, timeSnap, commentsSnap] = await Promise.all([
     getDocs(scoped('tasks', businessId, 'projectId', project.id)),
     getDocs(scoped('invoices', businessId, 'projectId', project.id)),
-    getDocs(scoped('expenses', businessId, 'projectId', project.id)),
+    // `category != 'Salary'`: a non-approver may not read salary rows (rules), and
+    // rules are not filters — without the clause the whole query is denied. A
+    // Salary row keeps a dangling projectId, which no engine reads (payroll.ts).
+    getDocs(query(scoped('expenses', businessId, 'projectId', project.id), where('category', '!=', 'Salary'))),
     getDocs(scoped('timeEntries', businessId, 'projectId', project.id)),
     getDocs(scoped('projectComments', businessId, 'projectId', project.id)),
   ]);

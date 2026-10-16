@@ -12,7 +12,7 @@ import { Separator } from '../../components/ui/separator';
 import { FileText, Search, Eye, DollarSign, Calendar, CreditCard, Check, ExternalLink, Building2, Download } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
 import { currencySymbol } from '../../lib/utils';
-import { getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../../lib/finance/financialAnalytics';
+import { getInvoiceCollectedAll, getInvoiceOutstandingAll, getInvoiceCollectedNative, getInvoiceOutstandingNative } from '../../lib/finance/financialAnalytics';
 import { storedInvoiceTotals } from '../../lib/finance/invoiceTotals';
 import { StatCardsSkeleton, ListCardSkeleton } from './PortalSkeletons';
 import type { Invoice, InvoiceItem, Service, Customer } from '../../types';
@@ -355,6 +355,16 @@ const PortalInvoicesView: React.FC = () => {
                     <span className="text-lg font-bold">
                       {(invoice.total || invoice.amount || 0).toLocaleString()} {currencySymbol((invoice as any).currency)}
                     </span>
+                    {/* A partly-paid invoice says what was paid and what is left —
+                        the same outstanding definition as the totals above. */}
+                    {getInvoiceCollectedNative(invoice) > 0 && getInvoiceOutstandingNative(invoice) > 0 && (
+                      <span className="text-xs text-muted-foreground">
+                        Paguar {getInvoiceCollectedNative(invoice).toLocaleString()} · Mbetet{' '}
+                        <span className="font-semibold text-foreground">
+                          {getInvoiceOutstandingNative(invoice).toLocaleString()} {currencySymbol((invoice as any).currency)}
+                        </span>
+                      </span>
+                    )}
                     <Badge className={getStatusColor(invoice.status)} variant="secondary">
                       {getStatusLabel(invoice.status)}
                     </Badge>
@@ -476,6 +486,18 @@ const PortalInvoicesView: React.FC = () => {
                 <span>Totali</span>
                 <span>{(selectedInvoice.total || selectedInvoice.amount || 0).toLocaleString()} {currencySymbol((selectedInvoice as any).currency)}</span>
               </div>
+              {getInvoiceCollectedNative(selectedInvoice) > 0 && getInvoiceOutstandingNative(selectedInvoice) > 0 && (
+                <div className="space-y-1 text-sm">
+                  <div className="flex items-center justify-between text-green-700">
+                    <span>Paguar deri tani</span>
+                    <span>{getInvoiceCollectedNative(selectedInvoice).toLocaleString()} {currencySymbol((selectedInvoice as any).currency)}</span>
+                  </div>
+                  <div className="flex items-center justify-between font-semibold">
+                    <span>Mbetet për t'u paguar</span>
+                    <span>{getInvoiceOutstandingNative(selectedInvoice).toLocaleString()} {currencySymbol((selectedInvoice as any).currency)}</span>
+                  </div>
+                </div>
+              )}
 
               {/* Bank Transfer Details */}
               {selectedInvoice.paymentMethod === 'Bank' && (selectedInvoice as any).bankIBAN && (

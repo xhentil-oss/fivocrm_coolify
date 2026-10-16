@@ -39,7 +39,11 @@ import { completeTask, recurringOccurrencesInMonth } from '../lib/recurringUtils
 import { reminderAtFromOffset } from '../lib/taskReminders';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { formatCurrency, formatCompactRange, toAll, canSeeFinancials, cn } from '../lib/utils';
-import { computeProjectLabor } from '../lib/finance/laborCost';
+import { entryHours, memberBillRate } from '../lib/finance/laborCost';
+import { laborForEntries } from '../lib/finance/laborAllocation';
+import { expenseListQueryOptions } from '../lib/finance/expenseSeries';
+import { billingTypeOf, monthlyFeeOf } from '../lib/finance/projectPeriod';
+import { dayKeyOf, entryDayKey, monthKeyOfDay } from '../lib/finance/timeEntries';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import ProjectFinancePanel from '../components/projects/ProjectFinancePanel';
 import { useMemberCompensation } from '../hooks/useMemberCompensation';
@@ -49,6 +53,7 @@ import {
   getInvoiceCollectedAll,
   getInvoiceOutstandingAll,
   sumProjectDirectExpenses,
+  getExpenseDate,
 } from '../lib/finance/financialAnalytics';
 import { getInquiryCompleteness } from '../lib/inquiryBrief';
 import { archiveProjectPatch, isProjectArchived, restoreProjectPatch, resumeBillingToastLine } from '../lib/projectArchive';
@@ -266,13 +271,20 @@ const ProjectDetailView: React.FC = () => {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
   const uniqueTeamMembers = useUniqueTeamMembers(rawTeamMembers);
-  // The burn-down costs logged time at `hourlyCostRate` (falling back to
-  // monthlySalary/160), which is compensation — it now lives in
-  // `teamMemberComp`. Dual read: the comp document wins where it exists, the
-  // legacy `teamMembers` fields are the fallback until the backfill has run.
-  // A non-privileged user reads only their OWN comp row, so a colleague's rate
-  // still resolves through the legacy fallback and no figure changes today.
-  const { members: teamMembers } = useMemberCompensation(uniqueTeamMembers);
+  // Names, pickers, project members: the Active members of this team. No pay is
+  // merged in here — those screens never show a salary.
+  const teamMembers = uniqueTeamMembers;
+  // COSTING needs every member of the BUSINESS, whatever their status or team
+  // (like FinancesView): the Active, team-scoped list above costed the hours of a
+  // leaver or a colleague from another team at 0. Pay lives in `teamMemberComp`
+  // (dual read via useMemberCompensation); loaded only for people who may see the
+  // figures. The engines collapse one-row-per-team into one person themselves.
+  const canSeeProjectMoney = canSeeFinancials(permissions);
+  const { data: rawCostMembers } = useCollection<TeamMember>('teamMembers', {
+    skipTeamFilter: true,
+    skip: !canSeeProjectMoney,
+  });
+  const { members: costMembers } = useMemberCompensation(rawCostMembers, { skip: !canSeeProjectMoney });
   // Cost-rate rules + rate card (Cilësimet → Financat) for the burn-down and the plan-vs-actual panel.
   const tenantSettings = useTeamSettingsData();
   // Team-scoped (not skipTeamFilter) so we don't download every team's comments
@@ -309,7 +321,8 @@ const ProjectDetailView: React.FC = () => {
   // never reduced what was downloaded — it only gave this view its own cache key
   // and therefore its own extra listener over the whole collection. Subscribe
   // with the shared options and filter here instead.
-  const { data: allExpenses } = useCollection<Expense>('expenses', { skipTeamFilter: true });
+  // Non-approvers may not read Salary rows (rules), so their query must exclude them.
+  const { data: allExpenses } = useCollection<Expense>('expenses', expenseListQueryOptions(canSeeFinancials(permissions)) as any);
   const projectExpenses = React.useMemo(
     () => (allExpenses || []).filter(e => e.projectId === projectId),
     [allExpenses, projectId],
@@ -372,22 +385,57 @@ const ProjectDetailView: React.FC = () => {
     };
   }, [project]);
 
-  // Budget burn-down: labor cost (logged hours × member cost-rate) + expenses,
-  // compared to the project budget. Plus realization (billable value vs cost).
+  // Budget burn-down: labour cost + project-direct expenses, compared to the fee.
+  // Labour goes through laborForEntries — the SAME engine (salary in effect in the
+  // entry's month, loaded, rate card) as ProjectFinancePanel and Financat, so the
+  // page shows one labour cost, not today's salary ÷ 160 next to the real one.
+  //
+  // A RETAINER (billed monthly/weekly) is compared PER MONTH: this month's cost
+  // against the monthly fee (`monthlyFeeOf`, weekly × 52/12). All-time cost against
+  // one cycle's fee read "tejkaluar!" for every retainer after its first month.
   const budgetStats = React.useMemo(() => {
-    // Normalizo buxhetin në ALL (puna + shpenzimet janë në ALL) që krahasimi/marzhi
-    // të jenë të saktë edhe kur projekti është në EUR.
-    const budget = toAll(Number(project?.budget) || 0, project?.currency);
-    const membersByUserId = new Map<string, TeamMember>();
-    (teamMembers || []).forEach(m => { if (m.userId) membersByUserId.set(m.userId, m); });
-    const labor = computeProjectLabor(timeEntries || [], membersByUserId, tenantSettings?.financeSettings);
+    const isRetainer = project ? billingTypeOf(project) === 'monthly' : false;
+    // Normalizo në ALL (puna + shpenzimet janë në ALL).
+    const budget = isRetainer && project
+      ? toAll(monthlyFeeOf(project), project.currency)
+      : toAll(Number(project?.budget) || 0, project?.currency);
+    const monthKey = monthKeyOfDay(dayKeyOf(new Date()));
+    const inThisMonth = (dayKey: string | null) => !!dayKey && monthKeyOfDay(dayKey) === monthKey;
+    const entries = (timeEntries || []).filter(e => !isRetainer || inThisMonth(entryDayKey(e)));
+    const labor = laborForEntries(entries, costMembers, tenantSettings?.financeSettings, tenantSettings?.rateCard, projectId);
     // The SHARED predicate — a plain reduce here counted rejected rows and
     // Salary-category rows, so this page disagreed with `project.spent` (written
     // by the project-spend-rollup cron) and with projectPnl's directCost on the
     // Financat screen: three different answers to "what did this project cost".
-    const expensesTotal = sumProjectDirectExpenses(projectExpenses, projectId);
+    // All-time direct expenses feed the EAC (cumulative by law); the bar takes the
+    // month's share for a retainer.
+    const expensesToDate = sumProjectDirectExpenses(projectExpenses, projectId);
+    const expensesTotal = isRetainer
+      ? sumProjectDirectExpenses(
+          projectExpenses.filter(e => { const d = getExpenseDate(e); return !!d && inThisMonth(dayKeyOf(d)); }),
+          projectId,
+        )
+      : expensesToDate;
     const spent = labor.cost + expensesTotal;
     const pct = budget > 0 ? Math.round((spent / budget) * 100) : 0;
+    // Billable value (what the hours are worth at the bill rate) — a price, not a
+    // cost, so it stays outside the cost engine.
+    const memberByUid = new Map<string, TeamMember>();
+    // One row per TEAM in teamMembers: prefer the person's Active row for the bill rate.
+    for (const m of costMembers || []) {
+      if (!m.userId) continue;
+      const prev = memberByUid.get(m.userId);
+      if (!prev || (prev.status !== 'Active' && m.status === 'Active')) memberByUid.set(m.userId, m);
+    }
+    let billableValue = 0, billableHours = 0;
+    for (const e of entries) {
+      if (!e.isBillable) continue;
+      const h = entryHours(e);
+      if (h <= 0) continue;
+      billableHours += h;
+      const rate = (e.hourlyRate && e.hourlyRate > 0) ? e.hourlyRate : memberBillRate(memberByUid.get(e.userId), tenantSettings?.financeSettings);
+      billableValue += h * rate;
+    }
     // Optional per-task pricing: when tasks carry a `value`, their sum is an
     // alternative read of what the project is worth (and what is already earned
     // via Done tasks) next to the single project budget.
@@ -398,15 +446,18 @@ const ProjectDetailView: React.FC = () => {
       .reduce((s: number, t: any) => s + toAll(Number(t.value) || 0, project?.currency), 0);
 
     return {
-      budget, laborCost: labor.cost, expensesTotal, spent, pct,
+      isRetainer,
+      /** Suffix for the burn-down heading: a retainer's comparison is this month's. */
+      periodLabel: (isRetainer ? 'ky muaj' : null) as string | null,
+      budget, laborCost: labor.cost, expensesTotal, expensesToDate, spent, pct,
       overBudget: budget > 0 && spent > budget,
       remaining: budget - spent,
-      billableValue: labor.billableValue,
-      billableHours: labor.billableHours,
-      margin: budget > 0 ? budget - spent : labor.billableValue - spent,
+      billableValue,
+      billableHours,
+      margin: budget > 0 ? budget - spent : billableValue - spent,
       taskValueTotal, taskValueDone, valuedTaskCount: valued.length,
     };
-  }, [project?.budget, project?.currency, teamMembers, timeEntries, projectExpenses, allTasks, tenantSettings?.financeSettings]);
+  }, [project, costMembers, timeEntries, projectExpenses, projectId, allTasks, tenantSettings?.financeSettings, tenantSettings?.rateCard]);
 
   // Total hours logged for the project and per task
   const { totalHours, hoursByTask } = React.useMemo(() => {
@@ -767,6 +818,7 @@ const ProjectDetailView: React.FC = () => {
           taskTitle: title,
           value: taskValue,
           project: project ? { ...(project as any), id: projectId! } : null,
+          canEditBudget: canSeeFinancials(permissions),
         });
         toast({
           title: 'Detyra u krijua + faturë Draft ✓',
@@ -1331,13 +1383,13 @@ const ProjectDetailView: React.FC = () => {
                 iconInk="text-brand-blue-hover"
                 dangerIconBg="bg-brand-neg-tint"
                 dangerIconInk="text-brand-neg-ink"
-                label="Buxheti i shpenzuar"
+                label={budgetStats.isRetainer ? 'Kosto vs tarifa (ky muaj)' : 'Buxheti i shpenzuar'}
                 value={budgetStats.budget > 0
                   ? formatCompactRange(budgetStats.spent, budgetStats.budget)
                   : formatCurrency(budgetStats.spent, 'ALL')}
                 sub={budgetStats.budget > 0
-                  ? `${budgetStats.pct}% e buxhetit${budgetStats.overBudget ? ' — tejkaluar!' : ''}`
-                  : 'pa buxhet të caktuar'}
+                  ? `${budgetStats.pct}% e ${budgetStats.isRetainer ? 'tarifës mujore' : 'buxhetit'}${budgetStats.overBudget ? ' — tejkaluar!' : ''}`
+                  : (budgetStats.isRetainer ? 'pa tarifë të caktuar' : 'pa buxhet të caktuar')}
                 danger={budgetStats.overBudget}
               />
               <KpiTile
@@ -1705,8 +1757,8 @@ const ProjectDetailView: React.FC = () => {
               <ProjectFinancePanel
                 project={project}
                 entries={timeEntries}
-                members={teamMembers}
-                directExpensesToDate={budgetStats.expensesTotal}
+                members={costMembers}
+                directExpensesToDate={budgetStats.expensesToDate}
                 invoices={projectInvoices}
                 settings={tenantSettings?.financeSettings}
                 rateCard={tenantSettings?.rateCard}
@@ -1725,7 +1777,10 @@ const ProjectDetailView: React.FC = () => {
             <div className="grid gap-4 lg:grid-cols-2">
               <section className={cn(CARD, 'px-6 py-5', budgetStats.overBudget && 'border-brand-neg-line')}>
                 <div className="flex items-baseline justify-between gap-2.5">
-                  <h2 className="text-[15px] font-extrabold text-brand-navy">Buxheti</h2>
+                  <h2 className="text-[15px] font-extrabold text-brand-navy">
+                    {budgetStats.isRetainer ? 'Kosto vs tarifa mujore' : 'Buxheti'}
+                    {budgetStats.periodLabel && <span className="ml-1.5 text-[12px] font-bold text-brand-muted">· {budgetStats.periodLabel}</span>}
+                  </h2>
                   <span className={cn('text-[12.5px] font-bold', NUM, budgetStats.overBudget ? 'text-brand-neg-ink' : 'text-brand-ink')}>
                     {formatCurrency(budgetStats.spent, 'ALL')}
                     {budgetStats.budget > 0 && ` / ${formatCurrency(budgetStats.budget, 'ALL')} (${budgetStats.pct}%)`}
@@ -1766,7 +1821,9 @@ const ProjectDetailView: React.FC = () => {
 
                 {budgetStats.overBudget && (
                   <p className="mt-3.5 rounded-xl border border-brand-neg-line bg-brand-neg-tint px-3.5 py-2.5 text-[12.5px] font-bold leading-relaxed text-brand-neg-ink">
-                    ⚠ Projekti ka kaluar buxhetin me {formatCurrency(budgetStats.spent - budgetStats.budget, 'ALL')}.
+                    {budgetStats.isRetainer
+                      ? <>⚠ Kostoja e këtij muaji e kalon tarifën mujore me {formatCurrency(budgetStats.spent - budgetStats.budget, 'ALL')}.</>
+                      : <>⚠ Projekti ka kaluar buxhetin me {formatCurrency(budgetStats.spent - budgetStats.budget, 'ALL')}.</>}
                   </p>
                 )}
               </section>

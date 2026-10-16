@@ -21,9 +21,20 @@ export interface InvoiceTotals {
   total: number;
 }
 
+/** Round to cents (half away from zero, float-noise safe). */
+export function roundToCents(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  return Math.sign(n) * Math.round((Math.abs(n) + Number.EPSILON) * 100) / 100;
+}
+
+/**
+ * Every figure is rounded to cents: an unrounded box (e.g. 33.333… after a
+ * percentage discount) stored a total no payment could ever match exactly, so
+ * a fully-paid invoice read as 0.0033 outstanding and never flipped to Paid.
+ */
 export function computeInvoiceTotals(input: InvoiceTotalsInput): InvoiceTotals {
-  const subtotal = Number(input.subtotal) || 0;
-  const tax = Number(input.tax) || 0;
+  const subtotal = roundToCents(Number(input.subtotal) || 0);
+  const tax = roundToCents(Number(input.tax) || 0);
   const raw = Number(input.discount) || 0;
   const discountAmount = raw <= 0
     ? 0
@@ -31,7 +42,8 @@ export function computeInvoiceTotals(input: InvoiceTotalsInput): InvoiceTotals {
       ? subtotal * (Math.min(raw, 100) / 100)
       // A discount can never exceed what is being discounted.
       : Math.min(raw, Math.max(0, subtotal));
-  return { subtotal, discountAmount, tax, total: subtotal - discountAmount + tax };
+  const discount = roundToCents(discountAmount);
+  return { subtotal, discountAmount: discount, tax, total: roundToCents(subtotal - discount + tax) };
 }
 
 /**

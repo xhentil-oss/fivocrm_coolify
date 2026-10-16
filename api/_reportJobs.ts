@@ -516,6 +516,25 @@ async function resolveEscalationTargets(report: any, notifyTarget: string): Prom
 // JOB: client-health-rollup — persist a snapshot per client per month
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * True when the invoice still OWES money — mirrors `getInvoiceOutstandingAll() > 0`
+ * in src/lib/finance/financialAnalytics.ts (api/ cannot import src/): Paid,
+ * Draft and Cancelled owe nothing; otherwise total − collected, where collected
+ * is the sum of `partialPayments` when there are any, else `paidAmount`.
+ * Same currency on both sides, so no FX conversion is needed for the sign; the
+ * half-cent tolerance only absorbs float noise in summed instalments.
+ */
+function invoiceStillOwes(inv: any): boolean {
+  const status = String(inv?.status || '');
+  if (status === 'Paid' || status === 'Draft' || status === 'Cancelled') return false;
+  const total = Number(inv?.total ?? inv?.amount ?? 0) || 0;
+  const instalments = Array.isArray(inv?.partialPayments) ? inv.partialPayments : [];
+  const collected = instalments.length
+    ? instalments.reduce((s: number, p: any) => s + (Number(p?.amount) || 0), 0)
+    : (Number(inv?.paidAmount) || 0);
+  return total - collected > 0.005;
+}
+
 /** `opts.businessId` = a manual run from one tenant's Admin: only that tenant is rolled up. */
 export async function runClientHealthRollup(opts?: { businessId?: string | null }): Promise<{ written: number; tenants: number }> {
   const scopeId = opts?.businessId || null;
@@ -558,7 +577,7 @@ export async function runClientHealthRollup(opts?: { businessId?: string | null 
           .filter(d => {
             const inv = d.data() as any;
             const due = inv.dueDate?.toDate?.();
-            return inv.status !== 'Paid' && due && due.getTime() < now.getTime();
+            return !!due && due.getTime() < now.getTime() && invoiceStillOwes(inv);
           }).length;
         const openRequests = byCustomer(requests, cid)
           .filter(d => (d.data()?.status || '') !== 'Completed').length;

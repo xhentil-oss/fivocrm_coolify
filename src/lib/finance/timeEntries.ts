@@ -10,9 +10,9 @@
 import type { DailyTaskOutcome, TimeEntry } from '../../types';
 import { getTimestampMs } from '../utils';
 import { RECURRENCE_TIMEZONE, toZoned, fromZoned } from '../recurringUtils';
-import { entryHours } from './laborCost';
+import { entryHours, DURATION_ONLY_SOURCES } from './laborCost';
 
-export { entryHours };
+export { entryHours, DURATION_ONLY_SOURCES };
 
 /** `YYYY-MM-DD` of an instant in the business zone. */
 export function dayKeyOf(d: Date, tz: string = RECURRENCE_TIMEZONE): string {
@@ -20,11 +20,28 @@ export function dayKeyOf(d: Date, tz: string = RECURRENCE_TIMEZONE): string {
   return `${z.getUTCFullYear()}-${String(z.getUTCMonth() + 1).padStart(2, '0')}-${String(z.getUTCDate()).padStart(2, '0')}`;
 }
 
-/** Local noon of a `YYYY-MM-DD` day, as a real instant. */
+/**
+ * Is `dayKey` a REAL calendar day in `YYYY-MM-DD` form? The shape alone is not
+ * enough: `Date.UTC` silently rolls "2026-09-31" into 1 Oct and "2026-10-00"
+ * into 30 Sep, so a malformed key used to be booked in a different month than
+ * the one the rules' month lock keys on (`date[0:7]`). A key is valid only when
+ * it round-trips through `Date.UTC` unchanged.
+ */
+export function isValidDayKey(dayKey: unknown): dayKey is string {
+  if (typeof dayKey !== 'string') return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
+  if (!m) return false;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  const t = new Date(Date.UTC(y, mo - 1, d, 12, 0, 0, 0));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d;
+}
+
+/** Local noon of a `YYYY-MM-DD` day, as a real instant (null for a key that is not a real day). */
 export function dayKeyToNoon(dayKey: string, tz: string = RECURRENCE_TIMEZONE): Date | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey || '');
-  if (!m) return null;
-  const zoned = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0, 0));
+  if (!isValidDayKey(dayKey)) return null;
+  const [y, mo, d] = dayKey.split('-').map(Number);
+  const zoned = new Date(Date.UTC(y, mo - 1, d, 12, 0, 0, 0));
   return fromZoned(zoned, tz);
 }
 
@@ -33,13 +50,12 @@ export function monthKeyOfDay(dayKey: string): string {
   return (dayKey || '').slice(0, 7);
 }
 
-const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
-
 type EntryDateFields = Pick<TimeEntry, 'date' | 'startTime'> & { createdAt?: unknown };
 
 /** The day an entry belongs to: its stored `date`, else the start instant's local day. */
 export function entryDayKey(e: EntryDateFields): string | null {
-  if (typeof e.date === 'string' && DAY_KEY_RE.test(e.date)) return e.date;
+  // A stored date that is not a real day ("2026-09-31") is treated as absent.
+  if (isValidDayKey(e.date)) return e.date;
   const ms = entryInstantMs(e);
   return ms ? dayKeyOf(new Date(ms)) : null;
 }
@@ -56,7 +72,7 @@ export function entryDayKey(e: EntryDateFields): string | null {
  * instant is used, then `createdAt`; a row with none of them has no instant.
  */
 export function entryInstantMs(e: EntryDateFields): number | null {
-  if (typeof e.date === 'string' && DAY_KEY_RE.test(e.date)) {
+  if (isValidDayKey(e.date)) {
     const d = dayKeyToNoon(e.date);
     if (d) return d.getTime();
   }
@@ -71,9 +87,15 @@ export function entryInPeriod(e: EntryDateFields, start: Date, end: Date): boole
   return at != null && at >= start.getTime() && at <= end.getTime();
 }
 
-/** An entry still running (timer not stopped) — never costed. */
-export function entryIsOpen(e: Pick<TimeEntry, 'endTime' | 'duration'>): boolean {
-  return !e.endTime && !(typeof e.duration === 'number' && e.duration > 0);
+/**
+ * An entry still running (timer not stopped) — never costed. No `endTime` is
+ * open whatever `duration` says, unless the row is typed by hand
+ * (`source: 'manual' | 'daily-report'`, which carries a duration only) — a
+ * running timer that had a `duration` written used to be costed.
+ */
+export function entryIsOpen(e: Pick<TimeEntry, 'endTime' | 'duration' | 'source'>): boolean {
+  if (e.endTime) return false;
+  return !(DURATION_ONLY_SOURCES.has(String(e.source || '')) && typeof e.duration === 'number' && e.duration > 0);
 }
 
 // ── Daily report → time entries ─────────────────────────────────────────────

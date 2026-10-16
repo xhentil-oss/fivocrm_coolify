@@ -54,7 +54,7 @@ const FinanceSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =>
   const rateCard = useMemo(() => buildRateCard(members, draft, monthEnd, card), [members, draft, monthEnd, card]);
 
   const saveRules = async () => {
-    if (!teamId) return;
+    if (!teamId || !canEdit) return;
     const next = resolveFinanceSettings({
       ...draft,
       budgetAlertThresholds: alertsText.split(/[,\s]+/).map(Number).filter(n => Number.isFinite(n) && n > 0),
@@ -69,7 +69,7 @@ const FinanceSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =>
     } finally { setSaving(null); }
   };
   const saveCard = async () => {
-    if (!teamId) return;
+    if (!teamId || !canEdit) return;
     const clean = card.map(r => ({
       role: r.role.trim(),
       ...(r.defaultCapacityHours && r.defaultCapacityHours > 0 ? { defaultCapacityHours: r.defaultCapacityHours } : {}),
@@ -104,6 +104,9 @@ const FinanceSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =>
               Kosto/orë e një personi = paga × (1 + kontributet) ÷ orët praktike për klientë në muaj.
               Këto rregulla ushqejnë Financat → Klientët, planin e projektit dhe alarmet e buxhetit.
             </p>
+            {!canEdit && (
+              <p className="mt-1 text-xs font-medium text-muted-foreground">Vetëm pronari ose Admin mund ta ndryshojë.</p>
+            )}
           </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">

@@ -4,6 +4,7 @@ import { PUBLISHED_STATUSES } from './workflow';
 import { buildPeriod, isWithinPeriod } from './period';
 import type { ClientRequest, Customer, Invoice, Project, Report } from '../../types';
 import { getTimestampMs } from '../utils';
+import { getInvoiceOutstandingAll } from '../finance/financialAnalytics';
 
 type Period = ReturnType<typeof buildPeriod>;
 
@@ -51,8 +52,11 @@ export function buildClientHealthSignals(input: ClientHealthInputs): ClientHealt
     : projectHealths.includes('yellow') ? 'yellow'
       : projectHealths.length ? 'green' : undefined;
 
+  // Overdue = still OWES money (the one definition: `getInvoiceOutstandingAll`,
+  // which is 0 for Paid / Draft / Cancelled and for a fully-collected Partial)
+  // and is past its due date. A Draft used to count as an overdue invoice.
   const overdueInvoices = custInvoices.filter(i =>
-    i.status !== 'Paid' && i.status !== 'Cancelled' && i.dueDate && getTimestampMs(i.dueDate) < now.getTime()).length;
+    !!i.dueDate && getTimestampMs(i.dueDate) < now.getTime() && getInvoiceOutstandingAll(i) > 0).length;
 
   const hasReports = !!input.reports;
   const reportsInPeriod = custReports.filter(r => r.period?.start && isWithinPeriod(r.period.start, period));

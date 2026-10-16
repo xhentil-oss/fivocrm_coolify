@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { DailyTaskOutcome, TimeEntry } from '../../types';
-import { dayKeyOf, dayKeyToNoon, entryDayKey, entryInPeriod, entryInstantMs, entryIsOpen, timeEntriesFromOutcomes, dailyReportEntryId, hoursByDay } from './timeEntries';
+import { dayKeyOf, dayKeyToNoon, isValidDayKey, entryDayKey, entryInPeriod, entryInstantMs, entryIsOpen, timeEntriesFromOutcomes, dailyReportEntryId, hoursByDay } from './timeEntries';
 
 describe('day keys (Europe/Tirane)', () => {
   it('an evening UTC instant is still the local day', () => {
@@ -19,7 +19,29 @@ describe('day keys (Europe/Tirane)', () => {
     expect(entryInPeriod(e, new Date('2026-09-01'), new Date('2026-09-30T23:59:59'))).toBe(true);
     expect(entryInPeriod(e, new Date('2026-10-01'), new Date('2026-10-31'))).toBe(false);
     expect(entryIsOpen({ endTime: undefined, duration: undefined })).toBe(true);
-    expect(entryIsOpen({ endTime: undefined, duration: 30 })).toBe(false);
+    // A running timer with a duration written is still open; only a hand-typed row is not.
+    expect(entryIsOpen({ endTime: undefined, duration: 30 })).toBe(true);
+    expect(entryIsOpen({ endTime: undefined, duration: 30, source: 'timer' })).toBe(true);
+    expect(entryIsOpen({ endTime: undefined, duration: 30, source: 'manual' })).toBe(false);
+    expect(entryIsOpen({ endTime: undefined, duration: 30, source: 'daily-report' })).toBe(false);
+  });
+});
+
+describe('day keys must be REAL calendar days', () => {
+  it('rejects keys that Date.UTC would silently roll into another month', () => {
+    for (const bad of ['2026-09-31', '2026-10-00', '2026-13-01', '2026-00-10', '2026-02-29', '2026-10-32', '2026-9-01', '']) {
+      expect(isValidDayKey(bad)).toBe(false);
+      expect(dayKeyToNoon(bad)).toBeNull();
+    }
+    expect(isValidDayKey('2028-02-29')).toBe(true);
+    expect(isValidDayKey('2026-09-30')).toBe(true);
+    expect(isValidDayKey(20260930 as any)).toBe(false);
+  });
+  it('an invalid stored date falls back to startTime (never booked in the rolled-over month)', () => {
+    const row = { date: '2026-09-31', startTime: new Date('2026-09-10T08:00:00Z') } as any;
+    expect(entryDayKey(row)).toBe('2026-09-10');
+    expect(new Date(entryInstantMs(row)!).toISOString()).toBe('2026-09-10T08:00:00.000Z');
+    expect(entryDayKey({ date: '2026-10-00' } as any)).toBeNull();
   });
 });
 
@@ -47,7 +69,7 @@ describe('daily report → time entries', () => {
   });
   it('hoursByDay sums the grid cells', () => {
     const entries = [
-      { date: '2026-09-10', duration: 60 }, { date: '2026-09-10', duration: 90 }, { date: '2026-09-11', duration: 30 },
+      { date: '2026-09-10', duration: 60, source: 'manual' }, { date: '2026-09-10', duration: 90, source: 'daily-report' }, { date: '2026-09-11', duration: 30, source: 'manual' },
     ] as TimeEntry[];
     const m = hoursByDay(entries);
     expect(m.get('2026-09-10')).toBe(2.5);

@@ -111,6 +111,13 @@ const Customer360View: React.FC = () => {
   const { data: allExpenses } = useCollection<Expense>('expenses', { skipTeamFilter: true, skip: !canSeeFinancials(permissions) });
   const { data: rawMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true, skip: !canSeeFinancials(permissions) });
   const { members: compMembers } = useMemberCompensation(rawMembers, { skip: !canSeeFinancials(permissions) });
+  // The engine shares the company's overhead pool (unabsorbed payroll, rent, …)
+  // across ALL clients by their hours/revenue, so it must see every project and
+  // invoice of the business — fed only this customer's, this one client absorbed
+  // the whole company pool (Financat −20 000 vs Customer360 −240 000 for the same
+  // client). Same reads as FinancesView; the row for this customer is picked after.
+  const { data: allProjects } = useCollection<Project>('projects', { skipTeamFilter: true, skip: !canSeeFinancials(permissions) });
+  const { data: allInvoices } = useCollection<Invoice>('invoices', { skipTeamFilter: true, skip: !canSeeFinancials(permissions) });
   const tenantSettings = useTeamSettingsData();
   const [pnlPeriod, setPnlPeriod] = useState<'month' | 'year' | 'all'>('year');
   const activityMutation = useMutation<Activity>('activities');
@@ -274,13 +281,16 @@ const Customer360View: React.FC = () => {
       : pnlPeriod === 'year'
         ? { start: new Date(now.getFullYear(), 0, 1), end: now }
         : { start: new Date(2000, 0, 1), end: now };
+    // Every project/invoice of the business (see `allProjects`), so the overhead
+    // pool is shared exactly as on Financat; only this customer's row is read.
+    // `customers` only names rows — this one is enough for the row we pick.
     const result = computeClientProfitability({
-      customers: customer ? [customer] : [], projects: customerProjects, timeEntries, members: compMembers,
-      expenses: allExpenses, invoices: customerInvoices, period,
+      customers: customer ? [customer] : [], projects: allProjects || [], timeEntries, members: compMembers,
+      expenses: allExpenses, invoices: allInvoices || [], period,
       settings: tenantSettings?.financeSettings, rateCard: tenantSettings?.rateCard,
     });
     return { row: clientRowFor(result, customerId || ''), basis: result.basis, thresholds: result.settings.marginThresholds };
-  }, [customer, customerId, customerProjects, timeEntries, compMembers, allExpenses, customerInvoices, tenantSettings?.financeSettings, tenantSettings?.rateCard, pnlPeriod]);
+  }, [customer, customerId, allProjects, timeEntries, compMembers, allExpenses, allInvoices, tenantSettings?.financeSettings, tenantSettings?.rateCard, pnlPeriod]);
 
   // Project task progress
   const projectProgress = useMemo(() => {

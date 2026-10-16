@@ -166,6 +166,26 @@ const nameOf = (people: People, uid: unknown): string => {
 
 // ── Facts (every read scoped + capped; a failed source is null, never "0") ────
 
+/**
+ * What an invoice still owes, in its own currency. MIRRORS
+ * `getInvoiceOutstandingAll()` in src/lib/finance/financialAnalytics.ts (api/
+ * cannot import src/): Paid / Draft / Cancelled owe nothing; otherwise total −
+ * collected, where collected = Σ `partialPayments` when there are any, else
+ * `paidAmount` — for EVERY unpaid status. The old inline sum added both (double
+ * counting) and subtracted them only for `Partial`, so an Overdue invoice with
+ * an instalment reported its full total as owed.
+ */
+function invoiceOutstanding(inv: any): number {
+  const status = String(inv?.status || '');
+  if (status === 'Paid' || status === 'Draft' || status === 'Cancelled') return 0;
+  const gross = Number(inv?.total ?? inv?.amount) || 0;
+  const instalments = Array.isArray(inv?.partialPayments) ? inv.partialPayments : [];
+  const collected = instalments.length
+    ? instalments.reduce((s: number, p: any) => s + (Number(p?.amount) || 0), 0)
+    : (Number(inv?.paidAmount) || 0);
+  return Math.max(0, gross - collected);
+}
+
 export async function buildFacts(ctx: TenantCtx, now: Date, opts: { week?: boolean } = {}): Promise<NazmijeFacts> {
   const local = localParts(now, TZ);
   const todayIdx = dayIndexOf(local.date);
@@ -296,9 +316,8 @@ export async function buildFacts(ctx: TenantCtx, now: Date, opts: { week?: boole
       const inv = d.data() as any;
       const due = dateKeyOf(inv.dueDate);
       if (!due) return;
-      const gross = Number(inv.total ?? inv.amount) || 0;
-      const paid = (Number(inv.paidAmount) || 0) + (Array.isArray(inv.partialPayments) ? inv.partialPayments.reduce((s: number, p: any) => s + (Number(p?.amount) || 0), 0) : 0);
-      const outstanding = Math.max(0, gross - (inv.status === 'Partial' ? paid : 0));
+      const outstanding = invoiceOutstanding(inv);
+      if (outstanding <= 0) return; // fully collected: owes nothing, is not "overdue"
       const dueIdx = dayIndexOf(due);
       if (dueIdx < todayIdx) {
         overdueCount++;

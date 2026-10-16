@@ -41,11 +41,12 @@ export const EXPENSE_BLOCK_LABELS: Record<ExpenseGenerationBlock, string> = {
   'series-ended': 'Seria ka mbaruar (data e fundit kaloi)',
   'already-generated': 'Periudha aktuale është regjistruar',
   'stale-period': 'Ka mbetur pas — periudha e humbur nuk rishkruhet, vazhdon me periudhën aktuale',
+  'rejected': 'Refuzuar — seria nuk gjeneron derisa shpenzimi të miratohet përsëri',
 };
 
 /** Blocks that mean "something is wrong with the series", not "waiting". */
 export const EXPENSE_BLOCK_IS_PROBLEM: ReadonlyArray<ExpenseGenerationBlock> =
-  ['unsupported-frequency', 'no-next-date', 'stale-period'];
+  ['unsupported-frequency', 'no-next-date', 'stale-period', 'rejected'];
 
 export type SeriesPeriodState =
   /** At least one row is booked in the period. */
@@ -391,12 +392,50 @@ export function linkSiblingPatch(parent: Expense, row: Expense): Partial<Expense
   };
 }
 
+/**
+ * What the PARENT must learn when a hand-typed row is adopted: exactly what a
+ * backfill teaches it (`backfillParentPatch`) — the row now IS that period's
+ * occurrence. Without it, linking the current month's hand-typed row left the
+ * claim behind, and the cron (which only looked at generated children) booked
+ * a second row for the same period. Forward only: an old month moves nothing.
+ */
+export function linkSiblingParentPatch(parent: Expense, row: Expense): Partial<Expense> | null {
+  const frequency = (parent.recurringFrequency as string) || 'monthly';
+  const key = rowPeriodKey(row, frequency);
+  const at = getExpenseDate(row);
+  if (!key || !at) return null;
+  return backfillParentPatch(parent, { key, scheduledAt: at });
+}
+
+/**
+ * Is the month `at` falls in CLOSED for this tenant (`financeMonthCloses`
+ * `{bid}_{YYYY-MM}.locked`)? The one check the list, the series page and the
+ * backfill share — a closed month's rows are not created, edited or deleted.
+ */
+export function isExpenseMonthClosed(
+  at: Date | null | undefined,
+  businessId: string | null | undefined,
+  closes: Array<Pick<FinanceMonthClose, 'businessId' | 'periodKey' | 'locked'>> | undefined | null,
+): boolean {
+  if (!at) return false;
+  const z = zonedParts(at);
+  const monthKey = `${z.year}-${pad2(z.month + 1)}`;
+  return (closes || []).some(c => c.locked && c.periodKey === monthKey && (!businessId || c.businessId === businessId));
+}
+
+/** The user-facing refusal for a write into a closed month. */
+export function monthClosedMessage(at: Date | null | undefined): string {
+  if (!at) return 'Muaji është i mbyllur (Financat → Mbyllja e muajit).';
+  const z = zonedParts(at);
+  return `${MONTHS_LONG_SQ[z.month]} ${z.year} është mbyllur (Financat → Mbyllja e muajit) — shpenzimet e atij muaji nuk shtohen, ndryshohen ose fshihen. Një Admin mund ta rihapë muajin.`;
+}
+
 /** Deterministic occurrence id — must match `recurringExpenseOccurrenceId` in api/cron/run.ts. */
 export function recurringExpenseOccurrenceId(parentId: string, periodKey: string): string {
   return `rec_exp_${parentId}_${periodKey}`;
 }
 
-export type BackfillBlock = 'not-missing' | 'month-closed' | 'future' | 'approver-only';
+export type BackfillBlock = 'not-missing' | 'month-closed' | 'future' | 'approver-only' | 'parent-rejected';
 
 /**
  * Why a missing period may not be added by hand right now. `isApprover`
@@ -411,11 +450,10 @@ export function backfillBlockReason(
 ): BackfillBlock | null {
   if (period.state !== 'missing') return period.state === 'booked' ? 'not-missing' : 'future';
   if (period.scheduledAt > now) return 'future';
+  // A refused series books nothing — not by the cron (`'rejected'`), not by hand.
+  if (parent.approvalStatus === 'Rejected') return 'parent-rejected';
   if (parent.category === 'Salary' && !isApprover) return 'approver-only';
-  const z = zonedParts(period.scheduledAt);
-  const monthKey = `${z.year}-${pad2(z.month + 1)}`;
-  const locked = (closes || []).some(c => c.locked && c.periodKey === monthKey && (!parent.businessId || c.businessId === parent.businessId));
-  return locked ? 'month-closed' : null;
+  return isExpenseMonthClosed(period.scheduledAt, parent.businessId, closes) ? 'month-closed' : null;
 }
 
 export const BACKFILL_BLOCK_LABELS: Record<BackfillBlock, string> = {
@@ -423,6 +461,7 @@ export const BACKFILL_BLOCK_LABELS: Record<BackfillBlock, string> = {
   'month-closed': 'Muaji është i mbyllur (Financat → Mbyllja e muajit)',
   'future': 'Periudha nuk ka ardhur ende',
   'approver-only': 'Një rresht page e shton vetëm një aprovues (Admin/Manager)',
+  'parent-rejected': 'Seria është refuzuar — miratoje përsëri para se të shtosh periudha',
 };
 
 /**
@@ -473,7 +512,7 @@ export function backfillOccurrenceDraft(parent: Expense, period: SeriesPeriod, u
  * advances only if it was still sitting in or before this period. A backfill of
  * an OLD month never touches either (the audit script follows the same law).
  */
-export function backfillParentPatch(parent: Expense, period: SeriesPeriod): Partial<Expense> | null {
+export function backfillParentPatch(parent: Expense, period: Pick<SeriesPeriod, 'key' | 'scheduledAt'>): Partial<Expense> | null {
   const frequency = (parent.recurringFrequency as string) || 'monthly';
   const patch: Partial<Expense> = {};
   const claim = parent.lastGeneratedPeriodKey;
@@ -484,4 +523,50 @@ export function backfillParentPatch(parent: Expense, period: SeriesPeriod): Part
     patch.nextRecurringDate = nextExpenseOccurrence(period.scheduledAt, frequency, anchor);
   }
   return Object.keys(patch).length ? patch : null;
+}
+
+/** The frequency a stamped period key was written in ('W…' / 'Q…' / 'Y…' / 'YYYY-MM'). */
+export function frequencyOfPeriodKey(key: string): string {
+  if (key.startsWith('W')) return 'weekly';
+  if (key.startsWith('Q')) return 'quarterly';
+  if (key.startsWith('Y')) return 'yearly';
+  return 'monthly';
+}
+
+/**
+ * Would moving this series occurrence to `newDate` take it out of the period it
+ * IS? A generated row's id is `rec_exp_<parent>_<periodKey>`; re-stamping its
+ * `periodKey` to the new period would leave an id naming one period on a row
+ * claiming another — and the cron's own `create()` for that other period would
+ * then sit next to it as a duplicate. So an occurrence is never moved across
+ * periods: the caller refuses (`OCCURRENCE_MOVE_MESSAGE`).
+ */
+export function occurrencePeriodMoveBlocked(
+  row: Pick<Expense, 'parentExpenseId' | 'periodKey' | 'autoGenerated'>,
+  newDate: Date | null | undefined,
+): boolean {
+  if (!newDate || !row.periodKey || !(row.parentExpenseId || row.autoGenerated)) return false;
+  return expensePeriodKey(frequencyOfPeriodKey(row.periodKey), newDate) !== row.periodKey;
+}
+
+export const OCCURRENCE_MOVE_MESSAGE =
+  'Ky rresht është një periudhë e serisë dhe nuk mund të zhvendoset në një periudhë tjetër. Ndrysho datën brenda së njëjtës periudhë, ose fshije dhe shtoje periudhën e duhur nga faqja e serisë ("Shto manualisht").';
+
+/**
+ * `useCollection` options for the expense list. Rules are not filters: once a
+ * non-approver may read only `category != 'Salary'` rows, an unconstrained list
+ * is DENIED outright — so the constraint goes to the server (`teamScopedWhere`,
+ * index `expenses (businessId, category)`). Approvers keep the plain read, which
+ * shares one listener with Financat and the other finance pages.
+ *
+ * Note: Firestore's `!=` also drops rows that have NO `category` at all.
+ */
+export function expenseListQueryOptions(isApprover: boolean) {
+  return isApprover
+    ? { skipTeamFilter: true }
+    : {
+      skipTeamFilter: true,
+      teamScopedWhere: true,
+      where: [{ field: 'category', operator: '!=', value: 'Salary' }],
+    };
 }

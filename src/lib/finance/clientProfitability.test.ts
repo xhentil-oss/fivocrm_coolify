@@ -7,6 +7,7 @@ import { allocateLabor } from './laborAllocation';
 import { calculateExpensesBetween } from './financialAnalytics';
 import { payrollBetween } from './payroll';
 import { monthCoverage } from './projectPeriod';
+import { resultFromSnapshot, snapshotNetDrift } from './monthClose';
 
 const d = (iso: string) => new Date(iso);
 const period = { start: new Date(2026, 8, 1), end: new Date(2026, 8, 30, 23, 59, 59, 999) };
@@ -18,7 +19,7 @@ const member = (userId: string, monthlySalary: number, costRole: string): TeamMe
 } as TeamMember);
 const entry = (userId: string, projectId: string, hours: number, day = '2026-09-10'): TimeEntry => ({
   id: `${userId}_${projectId}_${day}_${hours}`, userId, projectId, startTime: d(`${day}T09:00:00`), endTime: d(`${day}T17:00:00`),
-  duration: hours * 60, createdAt: d(day), updatedAt: d(day),
+  duration: hours * 60, source: 'manual', createdAt: d(day), updatedAt: d(day),
 } as TimeEntry);
 const retainer = (id: string, customerId: string, fee: number, extra: Partial<Project> = {}): Project => ({
   id, name: id, status: 'Active', customerId, budget: fee, currency: 'ALL', billingType: 'monthly', isRecurring: true,
@@ -252,5 +253,132 @@ describe('a period the END cuts short ("Ky muaj" ends now)', () => {
     expect(r.company.payroll).toBeCloseTo(120_000 * share, 6);
     const sumNet = r.rows.reduce((s, x) => s + x.netProfit, 0);
     expect(sumNet + r.company.unallocatedOverhead).toBeCloseTo(r.company.operatingProfit, 5);
+  });
+});
+
+// ── Oct 2026 audit ─────────────────────────────────────────────────────────
+describe('cash columns and receivables (Oct 2026)', () => {
+  const projects = [retainer('pX', 'X', 150_000)];
+  const invoices = [
+    invoice('i1', 'X', 'pX', 150_000, 100_000),
+    invoice('i2', 'X', undefined, 30_000, 30_000),   // no project, PAID in the period
+    { ...invoice('i3', 'Y', undefined, 20_000, 0), invoiceDate: d('2026-03-05'), createdAt: d('2026-03-05') } as Invoice, // old, no row this period
+    { ...invoice('i4', 'Z', undefined, 15_000, 0), customerId: undefined } as unknown as Invoice, // no customer at all
+  ];
+  const r = computeClientProfitability({ customers, projects, timeEntries: [entry('smm', 'pX', 10)], members: [smm], expenses: [], invoices, period, settings });
+  const X = r.rows.find(x => x.customerId === 'X')!;
+
+  it('collected includes cash on invoices with no project, like invoiced always did', () => {
+    expect(X.invoiced).toBe(180_000);
+    expect(X.collected).toBe(130_000);
+    expect(r.totals.collected).toBe(130_000);
+    // on the earned basis the unlinked cash is still not revenue
+    expect(X.earned).toBe(150_000);
+  });
+
+  it('outstandingAll is EVERY invoice still owed (= Të pambledhura), totals.outstanding only the rows', () => {
+    expect(X.outstanding).toBe(50_000);
+    expect(r.totals.outstanding).toBe(50_000);
+    expect(r.rows.find(x => x.customerId === 'Y')).toBeUndefined();
+    expect(r.company.outstandingAll).toBe(50_000 + 20_000 + 15_000);
+    expect(snapshotForClose(r).company.outstandingAll).toBe(85_000);
+  });
+});
+
+describe('month close snapshot round-trip (Oct 2026)', () => {
+  const projects = [retainer('pY', 'Y', 100_000)];
+  const live = computeClientProfitability({
+    customers, projects, timeEntries: [entry('smm', 'pY', 40)], members: [smm],
+    expenses: [expense('ads', 20_000, 'Ad Spend', { projectId: 'pY' })],
+    invoices: [invoice('i2', 'Y', 'pY', 100_000, 40_000)], period,
+    settings: { ...settings, passThroughExpenseCategories: ['Ad Spend'] },
+  });
+  const snap = snapshotForClose(live);
+
+  it('records the revenue basis it was taken in', () => {
+    expect(snap.revenueBasis).toBe('earned');
+  });
+
+  it('a frozen row prints the GM % that set its status (pass-through netted)', () => {
+    const frozen = resultFromSnapshot(JSON.parse(JSON.stringify(snap)), live)!;
+    const lr = live.rows[0];
+    const fr = frozen.rows[0];
+    expect(fr.passThrough).toBe(20_000);
+    expect(fr.netRevenue).toBe(80_000);
+    expect(fr.grossMarginPct).toBeCloseTo(lr.grossMarginPct!, 1);
+    expect(fr.status).toBe(lr.status);
+    expect(frozen.totals.passThrough).toBe(20_000);
+    expect(frozen.revenueBasis).toBe('earned');
+  });
+
+  it('a collected-basis live table never shows (or drifts against) the earned snapshot', () => {
+    const cash = computeClientProfitability({
+      customers, projects, timeEntries: [entry('smm', 'pY', 40)], members: [smm], expenses: [],
+      invoices: [invoice('i2', 'Y', 'pY', 100_000, 40_000)], period, settings, revenueBasis: 'collected',
+    });
+    expect(resultFromSnapshot(snap, cash)).toBeNull();
+    expect(snapshotNetDrift(snap, cash)).toBeNull();
+    expect(snapshotNetDrift(snap, live)).toBe(0);
+  });
+});
+
+// -- 16 Oct 2026 sweep: the pool is never negative, the load is its own line --
+describe('loaded rates under the DEFAULT employer load: overhead ≥ 0, loadCredit reconciles exactly', () => {
+  // Two people at 120 000, 120 h each on client work, rent 30 000. Defaults:
+  // 16.7 % load, 120 h → 1 167 L/h, rows carry 280 080 vs 240 000 paid.
+  const a = member('a', 120_000, 'SMM');
+  const b = member('b', 120_000, 'SEO');
+  const projects = [retainer('pA', 'X', 200_000), retainer('pB', 'Y', 200_000)];
+  const entries = [entry('a', 'pA', 120), entry('b', 'pB', 120)];
+  const expenses = [expense('rent', 30_000, 'Rent')];
+  const r = computeClientProfitability({ customers, projects, timeEntries: entries, members: [a, b], expenses, invoices: [], period });
+
+  it('client overhead is the rent share (15 000 each), never negative; net ≤ gross', () => {
+    for (const row of r.rows) {
+      expect(row.overhead).toBeCloseTo(15_000, 6);
+      expect(row.netProfit).toBeLessThanOrEqual(row.grossProfit);
+    }
+    expect(r.company.poolLabor).toBe(0);
+    expect(r.company.overheadPool).toBeCloseTo(30_000, 6);
+    expect(r.company.loadCredit).toBeCloseTo(40_080, 6);
+  });
+  it('Σ client net − unallocated + loadCredit − directOutsideRows == operating profit', () => {
+    const lhs = r.totals.netProfit - r.company.unallocatedOverhead + r.company.loadCredit - r.company.directOutsideRows;
+    expect(lhs).toBeCloseTo(r.company.operatingProfit, 6);
+    expect(r.company.operatingProfit).toBeCloseTo(400_000 - 240_000 - 30_000, 6);
+  });
+  it('nothing allocated (no client rows) → the whole pool is unallocated and the identity still holds', () => {
+    const none = computeClientProfitability({ customers, projects: [], timeEntries: [entry('a', '', 10)], members: [a, b], expenses, invoices: [], period });
+    expect(none.rows).toHaveLength(0);
+    expect(none.company.overheadPool).toBeGreaterThanOrEqual(0);
+    expect(none.company.unallocatedOverhead).toBeCloseTo(none.company.overheadPool, 6);
+    expect(none.totals.netProfit - none.company.unallocatedOverhead + none.company.loadCredit).toBeCloseTo(none.company.operatingProfit, 6);
+    expect(none.company.operatingProfit).toBeCloseTo(-270_000, 6);
+  });
+  it('projectPnl and departmentPnl: pool ≥ 0, Σ profit + loadCredit == revenue − expenses − payroll', () => {
+    const labor = allocateLabor({ timeEntries: entries, members: [a, b], expenses, period, clientProjectIds: new Set(['pA', 'pB']) });
+    const pp = computeProjectPnl(projects, [a, b], expenses, { range: period, mode: 'all', labor, timeEntries: entries, now: period.end });
+    expect(pp.fixedPool.total).toBeGreaterThanOrEqual(0);
+    expect(pp.fixedPool.loadCredit).toBeCloseTo(40_080, 6);
+    expect(pp.totals.profit + pp.fixedPool.loadCredit).toBeCloseTo(400_000 - 30_000 - 240_000, 6);
+    const dp = computeDepartmentPnl(projects, [a, b], expenses, { range: period, mode: 'all', labor, timeEntries: entries, now: period.end });
+    expect(dp.loadCredit).toBeCloseTo(40_080, 6);
+    expect(dp.unallocatedLabor.members.every(m => m.cost >= 0)).toBe(true);
+    expect(dp.totals.profit - dp.unallocatedOverhead + dp.loadCredit).toBeCloseTo(400_000 - 30_000 - 240_000, 6);
+  });
+});
+
+describe('contractValue is comparable with earned', () => {
+  it('a weekly retainer: monthly fee (budget × 52/12) × months, so a full month earned == contract', () => {
+    const weekly = retainer('pW', 'X', 10_000, { recurringFrequency: 'weekly' } as any);
+    const r = computeClientProfitability({ customers, projects: [weekly], timeEntries: [], members, expenses: [], invoices: [], period, settings });
+    const X = r.rows.find(x => x.customerId === 'X')!;
+    expect(X.earned).toBeCloseTo(10_000 * 52 / 12, 6);
+    expect(X.contractValue).toBeCloseTo(X.earned, 6);
+  });
+  it('a one-time project keeps its whole budget as the contract', () => {
+    const fixed = { ...retainer('pF', 'X', 600_000), billingType: 'one-time', isRecurring: false } as Project;
+    const r = computeClientProfitability({ customers, projects: [fixed], timeEntries: [entry('smm', 'pF', 10)], members, expenses: [], invoices: [], period, settings });
+    expect(r.rows.find(x => x.customerId === 'X')!.contractValue).toBe(600_000);
   });
 });

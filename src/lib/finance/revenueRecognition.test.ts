@@ -16,7 +16,7 @@ const project = (extra: Partial<Project> = {}): Project => ({
 } as Project);
 const hours = (h: number, day: string): TimeEntry => ({
   id: `${day}-${h}`, userId: 'u', projectId: 'web', startTime: d(`${day}T09:00:00`), endTime: d(`${day}T18:00:00`),
-  duration: h * 60, createdAt: d(day), updatedAt: d(day),
+  source: 'manual', duration: h * 60, createdAt: d(day), updatedAt: d(day),
 } as TimeEntry);
 const month = (y: number, m: number) => ({ start: new Date(y, m - 1, 1), end: new Date(y, m, 0, 23, 59, 59, 999) });
 
@@ -106,5 +106,13 @@ describe('retainer month-to-date', () => {
     expect(projectEarnedToDate(ret, [], end)).toBeCloseTo(100_000 * (8 + share), 6);
     // A month end is a whole month — the legacy answer, unchanged.
     expect(projectEarnedInPeriod(ret, [], month(2026, 9))).toBe(100_000);
+  });
+});
+
+describe('weekly retainer', () => {
+  it('earns budget × 52/12 per month (the cron bills budget every WEEK)', () => {
+    const w = project({ billingType: 'monthly', isRecurring: true, recurringFrequency: 'weekly', budget: 12_000, createdAt: d('2026-01-01'), updatedAt: d('2026-01-01') });
+    expect(projectEarnedInPeriod(w, [], month(2026, 3))).toBeCloseTo(52_000);
+    expect(projectEarnedToDate(w, [], new Date(2026, 2, 31, 23, 59, 59, 999))).toBeCloseTo(3 * 52_000);
   });
 });

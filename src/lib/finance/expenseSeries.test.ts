@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Expense } from '../../types';
+import { zonedParts } from '../recurringUtils';
 import {
   buildExpenseSeriesLedger,
   expenseSeriesHealth,
@@ -11,6 +12,12 @@ import {
   backfillOccurrenceDraft,
   backfillParentPatch,
   recurringExpenseOccurrenceId,
+  linkSiblingParentPatch,
+  isExpenseMonthClosed,
+  occurrencePeriodMoveBlocked,
+  frequencyOfPeriodKey,
+  expenseListQueryOptions,
+  EXPENSE_BLOCK_LABELS,
 } from './expenseSeries';
 
 const d = (s: string) => new Date(s + 'T10:00:00');
@@ -257,6 +264,81 @@ describe('manual backfill', () => {
     const stale = { ...parent, lastGeneratedPeriodKey: '2026-05', nextRecurringDate: d('2026-06-05') };
     const patch = backfillParentPatch(stale, june)!;
     expect(patch.lastGeneratedPeriodKey).toBe('2026-06');
-    expect(patch.nextRecurringDate).toEqual(d('2026-07-05'));
+    expect(zonedParts(patch.nextRecurringDate as Date)).toMatchObject({ year: 2026, month: 6, day: 5 });
+  });
+});
+
+describe('a REJECTED series', () => {
+  const now = d('2026-10-01');
+  const ledger = buildExpenseSeriesLedger(parent, [child('2026-04')], now);
+  const june = ledger.periods.find(p => p.key === '2026-06')!;
+
+  it('is not backfilled by hand either', () => {
+    expect(backfillBlockReason(june, { ...parent, approvalStatus: 'Rejected' }, [], now)).toBe('parent-rejected');
+  });
+
+  it('reads as stopped (not running, a problem) on the series page', () => {
+    const health = expenseSeriesHealth({ ...parent, nextRecurringDate: d('2026-10-01'), approvalStatus: 'Rejected' } as Expense, d('2026-10-02'));
+    expect(health.block).toBe('rejected');
+    expect(health.running).toBe(false);
+    expect(health.isProblem).toBe(true);
+    expect(health.monthlyAll).toBe(0);
+    expect(EXPENSE_BLOCK_LABELS.rejected).toMatch(/Refuzuar/);
+  });
+});
+
+describe('linking a hand-typed row teaches the parent its period', () => {
+  it('moves the claim AND the pointer forward when the row is the current period', () => {
+    // Parent claimed September, pointer on 5 Oct; a hand-typed October row is linked.
+    const hand = exp({ id: 'hand', date: d('2026-10-03') });
+    const patch = linkSiblingParentPatch(parent, hand)!;
+    expect(patch.lastGeneratedPeriodKey).toBe('2026-10');
+    // Compared as business-zone calendar fields (CI runs UTC, the engine Europe/Tirane).
+    const next = patch.nextRecurringDate as Date;
+    expect(zonedParts(next)).toMatchObject({ year: 2026, month: 10, day: 5 });
+  });
+
+  it('an OLD row moves nothing', () => {
+    expect(linkSiblingParentPatch(parent, exp({ id: 'old', date: d('2026-06-05') }))).toBeNull();
+  });
+});
+
+describe('closed months', () => {
+  const closes = [{ businessId: 'biz', periodKey: '2026-06', locked: true }, { businessId: 'biz', periodKey: '2026-07', locked: false }];
+  it('is closed only for a locked close of the same tenant and month', () => {
+    expect(isExpenseMonthClosed(d('2026-06-15'), 'biz', closes)).toBe(true);
+    expect(isExpenseMonthClosed(d('2026-07-15'), 'biz', closes)).toBe(false);   // reopened
+    expect(isExpenseMonthClosed(d('2026-06-15'), 'other', closes)).toBe(false);
+    expect(isExpenseMonthClosed(d('2026-06-15'), null, closes)).toBe(true);     // list already tenant-scoped
+    expect(isExpenseMonthClosed(null, 'biz', closes)).toBe(false);
+  });
+});
+
+describe('an occurrence never moves to another period', () => {
+  const kid = child('2026-06');
+  it('may move inside its period, not out of it', () => {
+    expect(occurrencePeriodMoveBlocked(kid, d('2026-06-20'))).toBe(false);
+    expect(occurrencePeriodMoveBlocked(kid, d('2026-07-01'))).toBe(true);
+    // A plain row has no period identity to protect.
+    expect(occurrencePeriodMoveBlocked(exp({ id: 'plain' }), d('2026-07-01'))).toBe(false);
+  });
+  it('reads the frequency from the key shape', () => {
+    expect(frequencyOfPeriodKey('W2026-08-03')).toBe('weekly');
+    expect(frequencyOfPeriodKey('Q2026-3')).toBe('quarterly');
+    expect(frequencyOfPeriodKey('Y2026')).toBe('yearly');
+    expect(frequencyOfPeriodKey('2026-08')).toBe('monthly');
+    expect(occurrencePeriodMoveBlocked(child('W2026-08-03', { periodKey: 'W2026-08-03' }), d('2026-08-07'))).toBe(false);
+    expect(occurrencePeriodMoveBlocked(child('W2026-08-03', { periodKey: 'W2026-08-03' }), d('2026-08-10'))).toBe(true);
+  });
+});
+
+describe('expense list query', () => {
+  it('a non-approver never asks for Salary rows (rules are not filters)', () => {
+    expect(expenseListQueryOptions(false)).toEqual({
+      skipTeamFilter: true,
+      teamScopedWhere: true,
+      where: [{ field: 'category', operator: '!=', value: 'Salary' }],
+    });
+    expect(expenseListQueryOptions(true)).toEqual({ skipTeamFilter: true });
   });
 });

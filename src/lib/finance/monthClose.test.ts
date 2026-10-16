@@ -4,10 +4,14 @@ import {
   monthCloseBlockReason,
   isMonthClosable,
   closeMonthPatch,
+  closeSnapshotDoc,
+  closeSnapshotPath,
+  resolveCloseSnapshot,
   reopenMonthPatch,
   readCloseSnapshot,
   resultFromSnapshot,
   snapshotNetDrift,
+  snapshotRevenueBasis,
 } from './monthClose';
 import type { ClientProfitabilityResult } from './clientProfitability';
 
@@ -48,9 +52,27 @@ describe('close / reopen patches', () => {
     const p = closeMonthPatch({ businessId: 'b1', periodKey: '2026-08', userId: 'u1', snapshot: { totals: {} }, warnings: ['x'], at: new Date('2026-09-02T08:00:00Z') });
     expect(p).toEqual({
       businessId: 'b1', periodKey: '2026-08', locked: true, closedAt: new Date('2026-09-02T08:00:00Z'),
-      closedByUserId: 'u1', snapshot: { totals: {} }, warnings: ['x'],
+      closedByUserId: 'u1', warnings: ['x'], snapshotPrivate: true,
     });
     expect('reopenedAt' in p).toBe(false);
+  });
+  it('the snapshot is NOT on the member-readable lock doc; it goes to the private subdocument', () => {
+    const input = { businessId: 'b1', periodKey: '2026-08', userId: 'u1', snapshot: { totals: { netProfit: 5 } }, warnings: [], at: new Date('2026-09-02T08:00:00Z') };
+    expect('snapshot' in closeMonthPatch(input)).toBe(false);
+    expect(closeSnapshotDoc(input)).toEqual({
+      businessId: 'b1', periodKey: '2026-08', closedAt: new Date('2026-09-02T08:00:00Z'), closedByUserId: 'u1',
+      snapshot: { totals: { netProfit: 5 } },
+    });
+    expect(closeSnapshotPath('b1_2026-08')).toEqual(['financeMonthCloses', 'b1_2026-08', 'private', 'snapshot']);
+  });
+  it('resolveCloseSnapshot: private subdocument first, the legacy inline field for old closes, else null', () => {
+    const priv = { totals: { netProfit: 1 } };
+    const legacy = { totals: { netProfit: 2 } };
+    expect(resolveCloseSnapshot({ snapshot: priv }, { snapshot: legacy })).toBe(priv);
+    expect(resolveCloseSnapshot(null, { snapshot: legacy })).toBe(legacy);
+    expect(resolveCloseSnapshot({}, { snapshot: legacy })).toBe(legacy);
+    expect(resolveCloseSnapshot(null, {})).toBeNull();
+    expect(resolveCloseSnapshot(undefined, undefined)).toBeNull();
   });
   it('a reopen unlocks and records who, without touching closedAt/snapshot', () => {
     const p = reopenMonthPatch('u2', new Date('2026-09-05T08:00:00Z'));
@@ -121,5 +143,38 @@ describe('reading the snapshot back', () => {
     expect(snapshotNetDrift({ clients: snapshot.clients }, live)).toBe(200);
     expect(snapshotNetDrift(undefined, live)).toBeNull();
     expect(snapshotNetDrift({ totals: {} }, live)).toBeNull();
+  });
+});
+
+describe('revenue basis of a close (Oct 2026)', () => {
+  const collectedLive = { ...live, revenueBasis: 'collected' } as ClientProfitabilityResult;
+  it('a legacy snapshot without a basis reads as earned', () => {
+    expect(snapshotRevenueBasis(snapshot)).toBe('earned');
+    expect(resultFromSnapshot(snapshot, live)!.revenueBasis).toBe('earned');
+    expect(snapshotRevenueBasis(null)).toBeNull();
+  });
+  it('an earned snapshot is not rendered under the collected toggle', () => {
+    expect(resultFromSnapshot({ ...snapshot, revenueBasis: 'earned' }, collectedLive)).toBeNull();
+    expect(snapshotNetDrift({ ...snapshot, revenueBasis: 'earned' }, collectedLive)).toBeNull();
+  });
+  it('a collected snapshot is rendered only under the collected toggle', () => {
+    const s = { ...snapshot, revenueBasis: 'collected' };
+    expect(resultFromSnapshot(s, live)).toBeNull();
+    expect(resultFromSnapshot(s, collectedLive)!.revenueBasis).toBe('collected');
+    expect(snapshotNetDrift(s, collectedLive)).toBe(200);
+  });
+  it('per-row pass-through and GM % come from the snapshot when present', () => {
+    const s = {
+      ...snapshot,
+      clients: [{ ...snapshot.clients[0], passThrough: 100, grossMarginPct: 70 }, snapshot.clients[1]],
+    };
+    const r = resultFromSnapshot(s, live)!;
+    expect(r.rows[0].passThrough).toBe(100);
+    expect(r.rows[0].netRevenue).toBe(500);
+    expect(r.rows[0].grossMarginPct).toBe(70);
+    expect(r.rows[0].effectiveHourlyRevenue).toBeCloseTo(500 / 6);
+    // old row without them: derived from earned, pass-through 0
+    expect(r.rows[1].passThrough).toBe(0);
+    expect(r.rows[1].grossMarginPct).toBeCloseTo(37.5);
   });
 });

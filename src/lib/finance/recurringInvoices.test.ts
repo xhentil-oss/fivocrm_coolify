@@ -14,8 +14,10 @@ import {
   previousInvoicePeriodStart,
   nextOccurrenceInOrAfterPeriod,
   resumedInvoiceClaimPatch,
+  INVOICE_BLOCK_LABELS,
+  endOfSeriesEndDay,
 } from './recurringInvoices';
-import { zonedParts } from '../recurringUtils';
+import { zonedParts, zonedDate } from '../recurringUtils';
 
 const d = (s: string) => new Date(s + 'T12:00:00');
 
@@ -192,6 +194,37 @@ describe('invoiceBillingBlockReason', () => {
     expect(PERMANENT_INVOICE_BLOCKS).toContain('project-also-bills');
     expect(PERMANENT_INVOICE_BLOCKS).not.toContain('paused');
     expect(PERMANENT_INVOICE_BLOCKS).not.toContain('not-due');
+  });
+
+  it('a CANCELLED parent never bills again (permanent); a DRAFT one waits', () => {
+    expect(invoiceBillingBlockReason({ ...due, status: 'Cancelled' }, now)).toBe('parent-cancelled');
+    expect(PERMANENT_INVOICE_BLOCKS).toContain('parent-cancelled');
+    expect(invoiceBillingBlockReason({ ...due, status: 'Draft' }, now)).toBe('parent-draft');
+    expect(PERMANENT_INVOICE_BLOCKS).not.toContain('parent-draft');
+    // Issued statuses bill normally.
+    for (const status of ['Pending', 'Paid', 'Partial', 'Overdue']) {
+      expect(invoiceBillingBlockReason({ ...due, status }, now)).toBeNull();
+    }
+  });
+
+  it('every block reason has a label', () => {
+    for (const r of ['not-recurring', 'auto-generated', 'parent-cancelled', 'parent-draft', 'paused',
+      'unsupported-frequency', 'no-next-date', 'not-due', 'series-ended', 'already-generated',
+      'project-also-bills'] as const) {
+      expect(INVOICE_BLOCK_LABELS[r]).toBeTruthy();
+    }
+  });
+
+  it('REGRESSION: "repeat until" INCLUDES the end day (end stored as local 00:00)', () => {
+    const end = zonedDate(2026, 7, 31);              // 31 Aug 00:00 Tirane
+    const scheduled = zonedDate(2026, 7, 31, 10);    // the 31st's own occurrence
+    const at = zonedDate(2026, 7, 31, 10, 5);
+    const series = { ...due, nextRecurringDate: scheduled, recurringEndDate: end };
+    expect(invoiceBillingBlockReason(series, at)).toBeNull();
+    // The day after is past the end.
+    const next = { ...series, nextRecurringDate: zonedDate(2026, 8, 1, 10) };
+    expect(invoiceBillingBlockReason(next, zonedDate(2026, 8, 1, 10, 5))).toBe('series-ended');
+    expect(endOfSeriesEndDay(end).getTime()).toBe(zonedDate(2026, 7, 31, 23, 59, 59, 999).getTime());
   });
 
   it('accepts Firestore Timestamp-shaped dates', () => {

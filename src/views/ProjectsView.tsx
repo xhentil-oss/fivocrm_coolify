@@ -6,14 +6,17 @@ import { getNextInvoiceNumber, db } from '../lib/firebase';
 import { doc, runTransaction, Timestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { canSeeFinancials, toAll, fromAll, currencySymbol } from '../lib/utils';
-import { projectBillingPeriodKey, projectBillingPeriodEnd, stopProjectBillingPatch, projectBillingBlockLabel } from '../lib/finance/recurringBilling';
+import { canSeeFinancials, toAll, fromAll, currencySymbol, getRateToAll } from '../lib/utils';
+import { projectBillingPeriodKey, projectBillingPeriodEnd, stopProjectBillingPatch, pauseProjectBillingPatch, projectBillingBlockLabel } from '../lib/finance/recurringBilling';
 import { recurringOccurrenceId } from '../lib/finance/recurringInvoices';
 import { normalizePlannedRoles, plannedFieldsPatch } from '../lib/finance/projectBudget';
 import { buildRateCard } from '../lib/finance/costRates';
 import { resolveFinanceSettings } from '../lib/finance/profitabilityCore';
 import { projectInvoiceLines } from '../lib/finance/projectInvoiceLines';
 import { cleanServiceMixInput, projectServiceMix, labelerFor } from '../lib/finance/serviceMix';
+import { servicesTotalIn, serviceBudgetOverride, updateIdListValue } from '../lib/projectFormServices';
+import { monthlyFeeOf } from '../lib/finance/projectPeriod';
+import { updateValue } from '../lib/formValue';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { useMemberCompensation } from '../hooks/useMemberCompensation';
 import PlannedRolesEditor from '../components/projects/PlannedRolesEditor';
@@ -140,6 +143,9 @@ const ProjectsView: React.FC = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const permissions = usePermissions();
+  // Admin/Manager: the only roles the rules let write a project's money,
+  // billing, bank and staffing-plan keys (projectFinanceKeys in firestore.rules).
+  const canManageProjectFinance = canSeeFinancials(permissions);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<{ id: string; name: string } | null>(null);
   const [projectToEdit, setProjectToEdit] = useState<Project | null>(null);
@@ -404,11 +410,18 @@ const ProjectsView: React.FC = () => {
       recurringEndDate: isRecurring ? recurringEndDate : undefined,
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
       serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
-      serviceMix: serviceMix.length > 0 ? serviceMix : undefined,
       endDate,
-      recognitionMethod,
-      targetMarginPct,
-      ...plannedFieldsPatch(plannedRoles, plannedDirectExpenses),
+      // Explicit split, recognition method, target margin and the staffing plan
+      // are Admin/Manager input (projCreateFinanceOk in firestore.rules) — a
+      // Member's create OMITS them instead of sending empty placeholders.
+      ...(canManageProjectFinance
+        ? {
+            serviceMix: serviceMix.length > 0 ? serviceMix : undefined,
+            recognitionMethod,
+            targetMarginPct,
+            ...plannedFieldsPatch(plannedRoles, plannedDirectExpenses),
+          }
+        : {}),
     });
 
     // Only auto-create an invoice when there is something to bill: an explicit
@@ -536,11 +549,12 @@ const ProjectsView: React.FC = () => {
       // Same function as the recurring cron (api/_projectInvoiceLines.ts).
       for (const line of projectInvoiceLines({
         total: billableTotal, projectName: name,
-        serviceIds: selectedServiceIds, serviceMix, services: services || [],
+        serviceIds: selectedServiceIds, serviceMix, services: services || [], rateToAll: getRateToAll,
       })) {
         await invoiceItemMutation.create({
           invoiceId: occurrenceId,
           ...(line.serviceId ? { serviceId: line.serviceId } : {}),
+          ...(line.serviceLine ? { serviceLine: line.serviceLine } : {}),
           description: line.description,
           quantity: 1,
           unitPrice: line.amount,
@@ -590,11 +604,12 @@ const ProjectsView: React.FC = () => {
       // Same function as the recurring cron (api/_projectInvoiceLines.ts).
       for (const line of projectInvoiceLines({
         total: billableTotal, projectName: name,
-        serviceIds: selectedServiceIds, serviceMix, services: services || [],
+        serviceIds: selectedServiceIds, serviceMix, services: services || [], rateToAll: getRateToAll,
       })) {
         await invoiceItemMutation.create({
           invoiceId: (newInvoice as any).id,
           ...(line.serviceId ? { serviceId: line.serviceId } : {}),
+          ...(line.serviceLine ? { serviceLine: line.serviceLine } : {}),
           description: line.description,
           quantity: 1,
           unitPrice: line.amount,
@@ -748,21 +763,17 @@ const ProjectsView: React.FC = () => {
     const billingType = formData.get('billingType') === 'monthly' ? 'monthly' : 'one-time';
     const startDateStr = formData.get('startDate') as string;
     const startDate = startDateStr ? new Date(startDateStr + 'T12:00:00') : undefined;
-    const department = (formData.get('department') as string) || undefined;
+    // "Pa departament" must CLEAR the field: null, not undefined (formValue.ts).
+    const department = updateValue(formData.get('department'));
     const billingDayRaw = formData.get('billingDayOfMonth') as string;
     const billingDayNum = billingDayRaw ? parseInt(billingDayRaw, 10) : NaN;
     const billingDayOfMonth = !isNaN(billingDayNum) && billingDayNum >= 1 && billingDayNum <= 31
       ? billingDayNum : undefined;
-    const memberUserIdsStr = formData.get('memberUserIds') as string;
-    let memberUserIds: string[] | undefined;
-    if (memberUserIdsStr) {
-      try { memberUserIds = JSON.parse(memberUserIdsStr); } catch { memberUserIds = undefined; }
-    }
-    const selectedServiceIdsStr = formData.get('selectedServiceIds') as string;
-    let selectedServiceIds: string[] | undefined;
-    if (selectedServiceIdsStr) {
-      try { selectedServiceIds = JSON.parse(selectedServiceIdsStr); } catch { selectedServiceIds = undefined; }
-    }
+    // `[]` CLEARS an emptied list (undefined would be stripped and keep the old ids
+    // — and with them the derived service split and the recurring invoice lines);
+    // `undefined` only when the form did not send the list at all.
+    const memberUserIds = updateIdListValue(formData.get('memberUserIds'));
+    const selectedServiceIds = updateIdListValue(formData.get('selectedServiceIds'));
     // Explicit split across service lines (department P&L). Only sent by a form
     // that showed the editor (canSeeBudget) — absent means "leave it as it is".
     const serviceMixSent = formData.has('serviceMix');
@@ -859,25 +870,18 @@ const ProjectsView: React.FC = () => {
             ? resumeRecurringBillingPatch(billingSubject, { at: editedAt })
             : {};
 
-    await projectMutation.update(projectToEdit.id, {
-      name,
-      description,
-      status,
-      ...(completedNow ? { lastCompletedAt: new Date() } : {}),
-      teamId: teamId && teamId !== '__none__' ? teamId : undefined,
+    // Money / billing / bank / plan keys (`projectFinanceKeys()` in
+    // firestore.rules) are Admin/Manager input. For anyone else they are OMITTED
+    // from the patch — only the SAFE billing moves the rules allow a Member are
+    // sent: stopping a running series and pausing it (the archive/restore/resume
+    // patches below go through projectArchive and are kept as they are).
+    const financeFields: Record<string, unknown> = {
       budget,
       currency,
       billingType,
-      startDate,
-      department,
       // Explicit null CLEARS the field (removeUndefined strips undefined, so an
       // emptied billing day used to keep the old one forever).
       billingDayOfMonth: billingDayOfMonth ?? null,
-      // '' (not undefined): the mutation layer strips undefined, so "Pa klient"
-      // silently kept the OLD customer — and with it the old client's portal
-      // access to the project and its tasks.
-      customerId: custId && custId !== '__none__' ? custId : '',
-      responsibleUserId: resolvedResponsible,
       // `isRecurring || undefined` was the whole bug: the write layer strips
       // undefined (src/lib/formValue.ts), so switching "Projekt Periodik" OFF
       // wrote NOTHING and the retainer kept billing — the owner's only real
@@ -903,21 +907,55 @@ const ProjectsView: React.FC = () => {
         : (projectToEdit.isRecurring
             ? { ...stopProjectBillingPatch(), recurringEndDate: null }
             : { isRecurring: false })),
-      memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
-      serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
       // null CLEARS an emptied split; not sent at all (no editor shown) = untouched.
       ...(serviceMixSent ? { serviceMix: serviceMix.length > 0 ? serviceMix : null } : {}),
       // Explicit null CLEARS (removeUndefined strips undefined — see formValue.ts).
-      endDate: endDate ?? null,
       recognitionMethod: recognitionMethod ?? null,
       targetMarginPct: targetMarginPct ?? null,
       ...plannedFieldsPatch(plannedRoles, plannedDirectExpenses),
-      // The manual revenue split is retired: staff are cost allocated by logged
-      // hours (laborAllocation.ts), not shareholders of a project's revenue.
-      profitSplit: [],
       // The claim re-expressed in the frequency being saved (no-op unless the
       // frequency actually changed).
       ...reExpressedClaim,
+    };
+    const memberBillingFields: Record<string, unknown> =
+      projectToEdit.isRecurring && !isRecurring
+        ? { ...stopProjectBillingPatch(), recurringEndDate: null }
+        : projectToEdit.isRecurring && isRecurring && isRecurringPaused && !projectToEdit.isRecurringPaused
+          ? pauseProjectBillingPatch()
+          : {};
+    // A Member who switched a series ON, resumed a pause or changed the cycle
+    // is told why it did not stick, instead of a silent no-op.
+    if (!canManageProjectFinance && (
+      (!projectToEdit.isRecurring && isRecurring)
+      || (projectToEdit.isRecurring && isRecurring && projectToEdit.isRecurringPaused && !isRecurringPaused)
+      || (projectToEdit.isRecurring && isRecurring && previousFrequency !== nextFrequency)
+    )) {
+      toast({
+        title: 'Faturimi nuk u ndryshua',
+        description: 'Aktivizimi, rifillimi ose ndryshimi i ciklit të faturimit bëhet vetëm nga Admin ose Manager.',
+      });
+    }
+
+    await projectMutation.update(projectToEdit.id, {
+      name,
+      description,
+      status,
+      ...(completedNow ? { lastCompletedAt: new Date() } : {}),
+      teamId: teamId && teamId !== '__none__' ? teamId : undefined,
+      startDate,
+      department,
+      // '' (not undefined): the mutation layer strips undefined, so "Pa klient"
+      // silently kept the OLD customer — and with it the old client's portal
+      // access to the project and its tasks.
+      customerId: custId && custId !== '__none__' ? custId : '',
+      responsibleUserId: resolvedResponsible,
+      ...(canManageProjectFinance ? financeFields : memberBillingFields),
+      memberUserIds,
+      serviceIds: selectedServiceIds,
+      endDate: endDate ?? null,
+      // The manual revenue split is retired: staff are cost allocated by logged
+      // hours (laborAllocation.ts), not shareholders of a project's revenue.
+      profitSplit: [],
       // Last, so the archive rules win over the plain form fields above — and so a
       // restore's own claim re-point wins over the frequency one (it was computed
       // from it).
@@ -953,7 +991,8 @@ const ProjectsView: React.FC = () => {
     // invoices are never rewritten — the user is told to issue a difference instead.
     const oldBudget = Number(projectToEdit.budget) || 0;
     const newBudget = Number(budget) || 0;
-    const budgetChanged = newBudget !== oldBudget || currency !== (projectToEdit.currency || 'ALL');
+    const budgetChanged = canManageProjectFinance
+      && (newBudget !== oldBudget || currency !== (projectToEdit.currency || 'ALL'));
     if (budgetChanged) {
       const linked = (allInvoices || []).filter(i => i.projectId === projectToEdit.id);
       const drafts = linked.filter(i => i.status === 'Draft');
@@ -1593,7 +1632,14 @@ const ProjectForm: React.FC<{
     return d && !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : '';
   });
   const [memberUserIds, setMemberUserIds] = useState<string[]>(initialData?.memberUserIds || []);
-  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
+  // Preloaded from the record: the edit path now writes this list back verbatim
+  // (an emptied list CLEARS serviceIds), so starting from [] would wipe the
+  // project's services on every edit.
+  const initialServiceIds = React.useMemo<string[]>(
+    () => (Array.isArray((initialData as any)?.serviceIds) ? (initialData as any).serviceIds : []),
+    [initialData],
+  );
+  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>(initialServiceIds);
   const [budgetInput, setBudgetInput] = useState(initialData?.budget ? String(initialData.budget) : '');
   const [currency, setCurrency] = useState<'ALL' | 'EUR'>((initialData as any)?.currency === 'EUR' ? 'EUR' : 'ALL');
   const [billingType, setBillingType] = useState<'one-time' | 'monthly'>(
@@ -1652,24 +1698,35 @@ const ProjectForm: React.FC<{
     return services.filter(s => s.category === serviceCategory);
   }, [services, serviceCategory]);
 
-  const serviceBudget = React.useMemo(() => {
-    if (!services || selectedServiceIds.length === 0) return null;
-    return services
-      .filter(s => selectedServiceIds.includes(s.id))
-      .reduce((sum, s) => sum + (s.price || 0), 0);
-  }, [services, selectedServiceIds]);
+  // Catalogue total of the picked services, each converted into the PROJECT's
+  // currency (a €500 service on an ALL project is not 500 L).
+  const servicesTotal = React.useMemo(
+    () => servicesTotalIn(services as any, selectedServiceIds, currency),
+    [services, selectedServiceIds, currency],
+  );
+  // On CREATE the total always sets the budget (a Member/Sales who cannot see the
+  // field would otherwise save 0 and the recurring cron would bill 0). On EDIT it
+  // REPLACES the budget only for someone who may see the budget, and only when they
+  // changed the selection — an untouched edit keeps the negotiated fee.
+  const isCreate = !initialData;
+  const serviceBudget = React.useMemo(
+    () => serviceBudgetOverride({
+      canSeeBudget, services: services as any, selectedIds: selectedServiceIds,
+      initialIds: initialServiceIds, currency, isCreate,
+    }),
+    [canSeeBudget, services, selectedServiceIds, initialServiceIds, currency, isCreate],
+  );
 
   // What the split would be WITHOUT explicit rows — shown as the placeholder, so
   // the owner sees what "automatik" means before overriding it.
   const derivedMix = React.useMemo(() => {
-    const ids = selectedServiceIds.length > 0 ? selectedServiceIds : ((initialData as any)?.serviceIds || []);
     const dept = department !== '__none__' ? department : undefined;
     return projectServiceMix(
-      { id: 'draft', serviceIds: ids, department: dept } as Project,
+      { id: 'draft', serviceIds: selectedServiceIds, department: dept } as Project,
       new Map((services || []).map(s => [s.id, s])),
       labelerFor(services, []),
     );
-  }, [selectedServiceIds, initialData, department, services]);
+  }, [selectedServiceIds, department, services]);
   const serviceMixTotal = serviceMixRows.reduce((t, r) => t + (parseFloat(r.pct) || 0), 0);
   const serviceMixLineOptions = React.useMemo(
     () => [...new Set([...serviceCategories, ...serviceMixRows.map(r => r.line).filter(Boolean)])],
@@ -1706,7 +1763,9 @@ const ProjectForm: React.FC<{
     formData.set('plannedRoles', JSON.stringify(normalizePlannedRoles(plannedRoles)));
     if (plannedDirectExpenses) formData.set('plannedDirectExpenses', plannedDirectExpenses);
     if (targetMarginPct) formData.set('targetMarginPct', targetMarginPct);
-    // Override budget with computed service total if services are selected
+    // Override budget with the computed service total — only when serviceBudgetOverride
+    // allows it (create, or canSeeBudget AND the selection changed); otherwise the budget field
+    // (or the hidden one for users who cannot see it) is sent as it is.
     if (serviceBudget !== null) {
       formData.set('budget', String(serviceBudget));
     }
@@ -1842,7 +1901,10 @@ const ProjectForm: React.FC<{
 
           {selectedServiceIds.length > 0 && (
             <p className="text-xs text-primary font-medium mt-1">
-              {selectedServiceIds.length} shërbim{selectedServiceIds.length !== 1 ? 'e' : ''} zgjedhur · Total: {serviceBudget?.toLocaleString()} {currencySymbol(services[0]?.currency)}
+              {selectedServiceIds.length} shërbim{selectedServiceIds.length !== 1 ? 'e' : ''} zgjedhur · Total: {servicesTotal?.toLocaleString()} {currencySymbol(currency)}
+              {canSeeBudget && serviceBudget === null && servicesTotal !== null && initialData && (
+                <span className="text-muted-foreground font-normal"> · buxheti mbetet siç është (shërbimet s'u ndryshuan)</span>
+              )}
             </p>
           )}
         </div>
@@ -1955,7 +2017,13 @@ const ProjectForm: React.FC<{
           rateCard={rateCard}
           members={compMembers}
           settings={financeSettings}
-          contractValueAll={toAll(parseFloat(serviceBudget !== null ? String(serviceBudget) : budgetInput) || 0, currency)}
+          contractValueAll={(() => {
+            // A retainer's plan is priced against its MONTHLY fee (weekly × 52/12),
+            // the same figure plannedEconomics / the engines use.
+            const fee = parseFloat(serviceBudget !== null ? String(serviceBudget) : budgetInput) || 0;
+            const monthly = billingType === 'monthly' ? monthlyFeeOf({ budget: fee, recurringFrequency } as any) : fee;
+            return toAll(monthly, currency);
+          })()}
           directExpenses={plannedDirectExpenses}
           onDirectExpensesChange={setPlannedDirectExpenses}
           targetMarginPct={targetMarginPct}

@@ -60,21 +60,35 @@ export function createLineLabeler(seed: Iterable<unknown> = []): LineLabeler {
 
 /**
  * The labeler every engine must use, seeded in ONE fixed order (catalogue
- * categories, then project departments). The department P&L and the collected
+ * categories, then project departments, then every project's explicit
+ * `serviceMix` lines, in project order). The department P&L and the collected
  * column are merged by label on Financat; seeding them differently would let
  * "seo" win in one and "SEO" in the other, and the row would split in two.
+ * The split lines are seeded too: they are free text ("ADS" on one project,
+ * "ads" on another), and labelling them lazily made the winner depend on which
+ * engine happened to read which project first.
  */
 export function labelerFor(
   services: Array<Pick<Service, 'category'>> | null | undefined,
-  projects: Array<Pick<Project, 'department'>> | null | undefined,
+  projects: Array<Pick<Project, 'department'> & { serviceMix?: Project['serviceMix'] | null }> | null | undefined,
 ): LineLabeler {
+  const splitLines: unknown[] = [];
+  for (const p of projects || []) {
+    const mix = (p as any)?.serviceMix;
+    if (Array.isArray(mix)) for (const m of mix) splitLines.push(m?.line);
+  }
   return createLineLabeler([
     ...(services || []).map(s => s.category),
     ...(projects || []).map(p => (p as any)?.department),
+    ...splitLines,
   ]);
 }
 
-/** Merge duplicate lines and normalise to Σ weight = 1. Empty / zero input → []. */
+/**
+ * Merge duplicate lines and normalise to Σ weight = 1. Empty / zero input → [].
+ * WEIGHTS only: non-positive parts are dropped, so never feed it signed money
+ * you mean to keep (a refund) — apply the sign to the amount after weighting.
+ */
 export function normalizeMix(parts: Array<{ line: string; amount: number }>): LineShare[] {
   const byLine = new Map<string, number>();
   for (const p of parts) {
@@ -131,10 +145,16 @@ export function projectServiceMix(
   return departmentMix(project, label);
 }
 
-/** Amount a line item stands for (its total, else quantity × unit price). */
+/**
+ * Amount a line item stands for: its `totalPrice`; quantity × unit price ONLY
+ * when the total is missing (null / undefined / not a number). An explicit
+ * `totalPrice: 0` is a free line and weighs nothing — falling back to
+ * qty × unitPrice there credited a department with a line nobody paid for.
+ */
 export function invoiceItemAmount(item: Pick<InvoiceItem, 'totalPrice' | 'quantity' | 'unitPrice'>): number {
-  const total = Number(item.totalPrice);
-  if (Number.isFinite(total) && total !== 0) return total;
+  const raw = (item as any).totalPrice;
+  const total = raw == null || raw === '' ? NaN : Number(raw);
+  if (Number.isFinite(total)) return total;
   return (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
 }
 
@@ -144,27 +164,47 @@ export function invoiceItemAmount(item: Pick<InvoiceItem, 'totalPrice' | 'quanti
  * Weights, not amounts: an invoice's lines often do not add up to its total (a
  * project priced by budget writes the catalogue prices as lines, a discount is
  * applied to the whole), so each line contributes its SHARE of the lines and the
- * caller multiplies the money actually collected by it. A line with no service
- * (a free-text "Projekti X – Gusht" line) is spread by `fallback` — the project's
- * mix — rather than dumped on one department.
+ * caller multiplies the money actually collected by it — a REFUND (negative
+ * collected) included, so the sign is applied by the caller, after the weights.
+ *
+ * Per line, most explicit first:
+ *   1. `serviceLine` — the label `projectInvoiceLines()` wrote (the split line);
+ *   2. the service's category;
+ *   3. a sold service with NO category → `ownLine` (the project's own department,
+ *      exactly where `projectServiceMix` puts it), when the caller passes it;
+ *   4. otherwise (free text, unknown service) → spread by `fallback`, the project's mix.
+ *
+ * Weights come from the POSITIVE lines (a discount line does not move money
+ * between departments). A credit note whose lines are all negative is weighted
+ * by their absolute amounts instead.
  */
 export function invoiceServiceMix(
   items: InvoiceItem[] | undefined | null,
   servicesById: Map<string, Service>,
   label: LineLabeler,
   fallback: LineShare[],
+  ownLine?: string,
 ): LineShare[] {
+  const list = items || [];
+  const amounts = list.map(invoiceItemAmount);
+  const creditNote = !amounts.some(a => a > 0) && amounts.some(a => a < 0);
   const parts: Array<{ line: string; amount: number }> = [];
-  for (const it of items || []) {
-    const amount = invoiceItemAmount(it);
-    if (!(amount > 0)) continue;
+  list.forEach((it, i) => {
+    const amount = creditNote ? -amounts[i] : amounts[i];
+    if (!(amount > 0)) return;
+    if (lineKey((it as any).serviceLine)) {
+      parts.push({ line: label((it as any).serviceLine), amount });
+      return;
+    }
     const svc = it.serviceId ? servicesById.get(it.serviceId) : undefined;
     if (svc && lineKey(svc.category)) {
       parts.push({ line: label(svc.category), amount });
+    } else if (svc && ownLine) {
+      parts.push({ line: ownLine, amount });
     } else {
       for (const f of fallback) parts.push({ line: f.line, amount: amount * f.weight });
     }
-  }
+  });
   const mix = normalizeMix(parts);
   return mix.length ? mix : fallback;
 }
@@ -189,7 +229,9 @@ export function memberServiceLines(m: Pick<TeamMember, 'serviceLines' | 'service
 export function memberLaborSplit(memberLines: string[], projectMix: LineShare[]): LineShare[] {
   if (projectMix.length <= 1 || memberLines.length === 0) return projectMix;
   const own = new Set(memberLines);
-  const overlap = projectMix.filter(s => own.has(s.line));
+  // Only lines that carry weight: a 0-weight line (cash basis, a line that only
+  // received refunds) must not swallow a person's whole cost into nothing.
+  const overlap = projectMix.filter(s => own.has(s.line) && s.weight > 0);
   if (overlap.length === 0) return projectMix;
   return normalizeMix(overlap.map(s => ({ line: s.line, amount: s.weight })));
 }

@@ -112,7 +112,9 @@ export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; ht
                 <td style="padding: 10px 14px; color: #6b7280; font-size: 14px;">Totali i faturës</td>
                 <td style="padding: 10px 14px; color: #111827;">${amountStr}</td>
               </tr>` : '';
-  const dueDateStr = dueDate.toLocaleDateString('sq-AL', { day: '2-digit', month: 'long', year: 'numeric' });
+  // The server runs in UTC: a local-midnight due date printed without the
+  // business zone read as the PREVIOUS day ("skadon më 30" for the 31st).
+  const dueDateStr = dueDate.toLocaleDateString('sq-AL', { day: '2-digit', month: 'long', year: 'numeric', timeZone: 'Europe/Tirane' });
 
   // Bank details HTML block (reused across email types)
   const bankDetailsHtml = paymentMethod === 'Bank' && bankIBAN ? `

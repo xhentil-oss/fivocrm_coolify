@@ -10,7 +10,15 @@
  * the salary — and therefore the rate — that applied then.
  */
 import type { TeamMember } from '../../types';
-import { memberSalaryForMonth } from './salaryHistory';
+import {
+  groupMembersByPerson,
+  personHourlyCostOverride,
+  personIsActive,
+  personOf,
+  personSalaryForMonth,
+  personSalaryRowForMonth,
+  type PersonRecord,
+} from './salaryHistory';
 import {
   costRateFor,
   resolveFinanceSettings,
@@ -51,17 +59,35 @@ export function memberCapacityHours(
   return settings.defaultClientCapacityHours;
 }
 
-/** Cost per hour for `member` in the month ending at `monthEnd`. */
+/** Cost per hour for ONE member row in the month ending at `monthEnd`. */
 export function memberCostRate(
   member: TeamMember,
   monthEnd: Date,
   settings: FinanceSettings,
   rateCard?: RateCardRole[] | null,
 ): CostRate {
+  return personCostRate(personOf(member), monthEnd, settings, rateCard);
+}
+
+/**
+ * Cost per hour for a PERSON (all their rows) in the month ending at `monthEnd`:
+ * that month's salary (the highest of their rows that month — salaryHistory.ts),
+ * an explicit override from any row (an active row first), and the capacity of
+ * the row that pays the salary that month (the profile otherwise). The rate in
+ * month M is therefore always built from month M's salary.
+ */
+export function personCostRate(
+  person: PersonRecord,
+  monthEnd: Date,
+  settings: FinanceSettings,
+  rateCard?: RateCardRole[] | null,
+): CostRate {
+  const payer = personSalaryRowForMonth(person, monthEnd);
+  const capacityFrom = payer && payer.clientCapacityHours && payer.clientCapacityHours > 0 ? payer : person.profile;
   return costRateFor({
-    monthlySalary: memberSalaryForMonth(member, monthEnd),
-    hourlyCostRateOverride: member.hourlyCostRate,
-    capacityHours: memberCapacityHours(member, settings, rateCard),
+    monthlySalary: personSalaryForMonth(person, monthEnd),
+    hourlyCostRateOverride: personHourlyCostOverride(person),
+    capacityHours: memberCapacityHours(capacityFrom, settings, rateCard),
     settings,
   });
 }
@@ -107,11 +133,13 @@ export function buildRateCard(
   const settings = resolveFinanceSettings(rawSettings);
   const rows = new Map<string, RateCardRow>();
   const cardByRole = new Map((rateCard || []).map(r => [r.role.trim().toLowerCase(), r]));
-  for (const m of members || []) {
-    if (!m.userId) continue;
-    if (m.status !== 'Active' && m.status !== 'Inactive') continue;
-    const rate = memberCostRate(m, monthEnd, settings, rateCard);
-    if (m.status === 'Inactive' && rate.basis !== 'override' && rate.rate === 0) continue; // a leaver already off payroll
+  // One row per PERSON — a member on two teams would otherwise be two heads.
+  for (const person of groupMembersByPerson(members)) {
+    const m = person.profile;
+    if (!person.userId) continue;
+    if (!person.rows.some(r => r.status === 'Active' || r.status === 'Inactive')) continue;
+    const rate = personCostRate(person, monthEnd, settings, rateCard);
+    if (!personIsActive(person) && rate.basis !== 'override' && rate.rate === 0) continue; // a leaver already off payroll
     const role = memberCostRole(m);
     const row = rows.get(role) || {
       role, headcount: 0, monthlyCost: 0, capacityHours: 0, costRate: 0,
@@ -122,7 +150,7 @@ export function buildRateCard(
     if (rate.basis === 'none') row.withoutRate += 1;
     else { row.monthlyCost += loaded; row.capacityHours += rate.capacityHours; }
     row.members.push({
-      userId: m.userId, name: m.displayName || m.email || 'Pa emër',
+      userId: person.userId, name: m.displayName || m.email || 'Pa emër',
       rate: rate.rate, basis: rate.basis, capacityHours: rate.capacityHours, loadedMonthlyCost: loaded,
     });
     rows.set(role, row);

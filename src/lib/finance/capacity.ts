@@ -5,9 +5,10 @@
  * "cost 1 000 L/h" describe the same hours.
  */
 import type { TeamMember } from '../../types';
-import type { LaborAllocation } from './laborAllocation';
+import { memberEmployedMonthsBetween, type LaborAllocation } from './laborAllocation';
 import { memberCapacityHours, memberCostRole, type RateCardRole } from './costRates';
 import { memberOnPayrollBetween } from './projectPeriod';
+import { groupMembersByPerson } from './salaryHistory';
 import { utilizationStatus, type UtilizationStatus } from './profitabilityCore';
 
 export interface CapacityRow {
@@ -38,18 +39,26 @@ export function computeCapacity(
   rateCard?: RateCardRole[] | null,
 ): CapacityResult {
   const s = labor.settings;
-  const { start, end, months } = labor.period;
+  const { start, end } = labor.period;
   const rows: CapacityRow[] = [];
-  for (const m of members || []) {
-    if (!m.userId) continue;
-    if (!memberOnPayrollBetween(m, start, end)) continue;
-    const l = labor.byMember.get(m.userId);
-    const capacity = memberCapacityHours(m, s, rateCard) * months;
+  // One row per PERSON (a member on two teams has two rows — that counted 240 h
+  // for one person), and capacity only over the months they were employed: a
+  // November hire is not idle capacity in September.
+  for (const person of groupMembersByPerson(members)) {
+    if (!person.userId) continue;
+    const m = person.profile;
+    const l = labor.byMember.get(person.userId);
+    // Employment is resolved over ALL the person's rows (salaryHistory.ts): an old
+    // Inactive row next to their current team's row neither hides nor doubles them.
+    const employedMonths = memberEmployedMonthsBetween(person, start, end);
+    if (!person.rows.some(r => memberOnPayrollBetween(r, start, end))) continue;
+    if (employedMonths <= 0 && !l) continue;
+    const capacity = memberCapacityHours(m, s, rateCard) * employedMonths;
     const clientHours = l?.clientHours || 0;
     const internalHours = l?.internalHours || 0;
     const utilizationPct = capacity > 0 ? (clientHours / capacity) * 100 : null;
     rows.push({
-      key: m.userId, name: m.displayName || m.email || 'Pa emër', role: memberCostRole(m), headcount: 1,
+      key: person.userId, name: m.displayName || m.email || 'Pa emër', role: memberCostRole(m), headcount: 1,
       capacityHours: capacity, clientHours, internalHours,
       idleHours: Math.max(0, capacity - clientHours - internalHours),
       utilizationPct, status: utilizationStatus(utilizationPct, s.utilizationBands),

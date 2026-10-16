@@ -24,18 +24,19 @@
 import type { Project, TeamMember, Expense, Invoice, Service, InvoiceItem } from '../../types';
 import { toAll } from '../utils';
 import { parseDate, monthsElapsedInYear, MONTH_LABELS_SQ, getInvoiceCollectedBetween } from './financialAnalytics';
-import { memberSalaryForMonth } from './salaryHistory';
+import { groupMembersByPerson, personSalaryForMonth, type PersonRecord } from './salaryHistory';
 import { payrollBetween } from './payroll';
 import {
   retainerEarningEnd,
   retainerRevenueInPeriod,
   memberOnPayrollBetween,
+  monthlyFeeOf,
   isProjectCompleted as isCompleted,
   projectDate,
   monthsBetween,
   billingTypeOf,
 } from './projectPeriod';
-import { allocateLabor, laborOutsideRows, proratePlanPayroll, type LaborAllocation } from './laborAllocation';
+import { allocateLabor, laborOutsideRows, loadCreditOf, proratePlanPayroll, type LaborAllocation } from './laborAllocation';
 import type { FinanceSettings } from './profitabilityCore';
 import type { RateCardRole } from './costRates';
 import { projectEarnedInPeriod } from './revenueRecognition';
@@ -131,8 +132,21 @@ export interface DepartmentPnlResult {
   unallocatedOverhead: number;
   /** Hours model: labour NO row carries (no project / project outside the period), pooled into overhead. */
   laborOutsideRows: number;
+  /**
+   * Hours model: labour charged to rows above the unloaded payroll (employer load
+   * at the loaded rate) — `allocateLabor().overAbsorbed`. A reconciliation line,
+   * never a (negative) cost: Σ department profit − unallocatedOverhead + loadCredit
+   * == revenue − expenses − payroll of the period.
+   */
+  loadCredit: number;
   /** Projects whose revenue/cost were split across more than one department. */
   splitProjects: number;
+  /**
+   * Invoices (collected in the window) whose `projectId` resolves to NO project
+   * — deleted, or a stale id. Their cash cannot reach any department row, so it
+   * is counted here instead of disappearing. Only tracked when `invoices` are given.
+   */
+  unresolvedInvoices: { count: number; amount: number };
   totals: { revenue: number; directCost: number; labor: number; overhead: number; cost: number; profit: number };
 }
 
@@ -158,7 +172,9 @@ export function computeDepartmentPnl(
     allocationBasis: 'revenue',
     unallocatedOverhead: 0,
     laborOutsideRows: 0,
+    loadCredit: 0,
     splitProjects: 0,
+    unresolvedInvoices: { count: 0, amount: 0 },
     totals: { revenue: 0, directCost: 0, labor: 0, overhead: 0, cost: 0, profit: 0 },
   };
   if (!projects) return empty;
@@ -203,20 +219,27 @@ export function computeDepartmentPnl(
   const projectByIdAll = new Map(projects.map(p => [p.id, p]));
   /** Collected cash per project per line — each invoice split by its OWN lines. */
   const invoicedLinesByProject = new Map<string, Map<string, number>>();
+  const unresolvedInvoices = { count: 0, amount: 0 };
 
-  if (useInvoiced) {
-    for (const inv of opts.invoices || []) {
-      const pid = inv.projectId;
-      if (!pid) continue;
-      const amt = getInvoiceCollectedBetween(inv, invWindow.start, invWindow.end);
-      if (amt) invoicedByProject.set(pid, (invoicedByProject.get(pid) || 0) + amt);
-      const proj = projectByIdAll.get(pid);
-      if (!amt || !proj) continue;
-      const mix = invoiceServiceMix(itemsByInvoice.get(inv.id), servicesById, label, baseMixOf(proj));
-      const byLine = invoicedLinesByProject.get(pid) || new Map<string, number>();
-      for (const s of mix) byLine.set(s.line, (byLine.get(s.line) || 0) + amt * s.weight);
-      invoicedLinesByProject.set(pid, byLine);
+  for (const inv of opts.invoices || []) {
+    const pid = inv.projectId;
+    if (!pid) continue;
+    const amt = getInvoiceCollectedBetween(inv, invWindow.start, invWindow.end);
+    if (!amt) continue;
+    const proj = projectByIdAll.get(pid);
+    if (!proj) {
+      // A projectId that resolves to nothing: no department can own the cash.
+      unresolvedInvoices.count += 1; unresolvedInvoices.amount += amt;
+      continue;
     }
+    if (!useInvoiced) continue;
+    invoicedByProject.set(pid, (invoicedByProject.get(pid) || 0) + amt);
+    // Weights from the invoice's own lines; the SIGN comes from `amt`, so a
+    // refund reduces the line it was billed on (same as attributeCollectedRevenue).
+    const mix = invoiceServiceMix(itemsByInvoice.get(inv.id), servicesById, label, baseMixOf(proj), label((proj as any).department));
+    const byLine = invoicedLinesByProject.get(pid) || new Map<string, number>();
+    for (const s of mix) byLine.set(s.line, (byLine.get(s.line) || 0) + amt * s.weight);
+    invoicedLinesByProject.set(pid, byLine);
   }
 
   const inPeriod = (d: Date | null) => {
@@ -225,6 +248,7 @@ export function computeDepartmentPnl(
     return !!d && d.getFullYear() === opts.year;
   };
   const mode = opts.mode ?? 'all';
+  const hoursLabor = opts.labor && opts.labor.basis === 'hours' ? opts.labor : null;
   const periodProjects = projects.filter(p => {
     if (mode === 'completed' && !isCompleted(p)) return false;
     if (useInvoiced && (invoicedByProject.get(p.id) || 0) !== 0) return true;
@@ -239,7 +263,15 @@ export function computeDepartmentPnl(
       const end = retainerEarningEnd(p, periodEnd);
       return start <= periodEnd && end >= periodStart;
     }
-    return inPeriod(projectDate(p));
+    if (inPeriod(projectDate(p))) return true;
+    // Hours model: a one-time project earns by effort in every period its people
+    // log hours on it, not only in the period of its last update — the same
+    // rule as computeProjectPnl (and clientProfitability). See projectPnl.ts.
+    if (hoursLabor && !useInvoiced) {
+      if ((hoursLabor.byProject.get(p.id)?.hours || 0) > 0) return true;
+      if (projectEarnedInPeriod(p, opts.timeEntries || [], { start: periodStart, end: periodEnd }) !== 0) return true;
+    }
+    return false;
   });
 
   // ── Members: period salary (history + DATE aware) and lookup ──
@@ -250,20 +282,24 @@ export function computeDepartmentPnl(
   // `memberSalaryForMonth` was fixed for, one layer up. See
   // `memberOnPayrollBetween` (projectPnl.ts), which owns none of the rule
   // itself and defers to salaryHistory.ts.
-  const payrollMembers = (teamMembers ?? []).filter(m => memberOnPayrollBetween(m, periodStart, periodEnd));
-  const memberById = new Map<string, TeamMember>();
-  payrollMembers.forEach(m => { if (m.userId) memberById.set(norm(m.userId), m); });
+  // One entry per PERSON (all their team rows; salary resolved per month as the
+  // highest of their rows — salaryHistory.ts), so a person on two teams is
+  // neither two heads in the equal split nor costed from the wrong row.
+  const payrollMembers = groupMembersByPerson(teamMembers ?? [])
+    .filter(p => p.rows.some(r => memberOnPayrollBetween(r, periodStart, periodEnd)));
+  const memberById = new Map<string, PersonRecord>();
+  payrollMembers.forEach(p => { if (p.userId) memberById.set(norm(p.userId), p); });
 
-  /** What the member PROFILES say this member costs over the period. Used as an
+  /** What the member PROFILES say this person costs over the period. Used as an
    *  allocation weight, not as the amount — see `memberPeriodSalary`. */
-  const memberPlanSalary = (m: TeamMember): number => {
+  const memberPlanSalary = (m: PersonRecord): number => {
     let sum = 0;
     const cur = new Date(periodStart.getFullYear(), periodStart.getMonth(), 1);
     const last = new Date(periodEnd.getFullYear(), periodEnd.getMonth(), 1);
     let guard = 0;
     while (cur.getTime() <= last.getTime() && guard < 600) {
       const monthEnd = new Date(cur.getFullYear(), cur.getMonth() + 1, 0, 23, 59, 59, 999);
-      sum += memberSalaryForMonth(m, monthEnd);
+      sum += personSalaryForMonth(m, monthEnd);
       cur.setMonth(cur.getMonth() + 1);
       guard++;
     }
@@ -296,12 +332,12 @@ export function computeDepartmentPnl(
   // `unallocatedDirect` and `unmatchedDepartmentFixed`.
   const unattributablePayroll = payrollMembers.length === 0 && actualPayroll > 0 ? actualPayroll : 0;
 
-  const memberPeriodSalary = (m: TeamMember): number => (
+  const memberPeriodSalary = (m: PersonRecord): number => (
     planTotal > 0 ? memberPlanSalary(m) * payrollScale : equalShare
   );
 
   // ── Hours-based labour (opt-in): the cost of the hours actually logged. ──
-  const hoursLabor = opts.labor && opts.labor.basis === 'hours' ? opts.labor : null;
+  // (`hoursLabor` is resolved above, before the period filter.)
   const laborBasis: 'hours' | 'legacy' = hoursLabor ? 'hours' : 'legacy';
 
   const participantsOf = (p: Project): string[] => {
@@ -322,11 +358,25 @@ export function computeDepartmentPnl(
   // On the cash basis, the mix of what was actually billed and collected (each
   // invoice by its own lines); otherwise the project's own mix — explicit split,
   // services sold, or the whole project in `project.department`.
+  //
+  // On the cash basis the line's REVENUE is exactly what its invoices collected
+  // there (`billedByLine`, signed — a refund reduces its own line), while the
+  // WEIGHTS that slice cost/overhead come from the lines' positive totals. A
+  // line that only received refunds gets a 0-weight slice so its negative
+  // revenue still lands somewhere: Σ slices == the project's collected cash.
   const mixByProject = new Map<string, LineShare[]>();
+  const billedByLine = new Map<string, Map<string, number>>();
   for (const p of periodProjects) {
     const billed = useInvoiced ? invoicedLinesByProject.get(p.id) : undefined;
     const fromInvoices = billed ? normalizeMix([...billed].map(([line, amount]) => ({ line, amount }))) : [];
-    mixByProject.set(p.id, fromInvoices.length ? fromInvoices : baseMixOf(p));
+    const mix = fromInvoices.length ? fromInvoices : baseMixOf(p);
+    if (billed) {
+      billedByLine.set(p.id, billed);
+      const extra = [...billed.keys()].filter(line => !mix.some(s => s.line === line) && (billed.get(line) || 0) !== 0);
+      mixByProject.set(p.id, extra.length ? [...mix, ...extra.map(line => ({ line, weight: 0 }))] : mix);
+    } else {
+      mixByProject.set(p.id, mix);
+    }
   }
   const departmentsInPeriod = new Set([...mixByProject.values()].flatMap(m => m.map(s => s.line)));
 
@@ -396,8 +446,9 @@ export function computeDepartmentPnl(
       return (!!done && done >= periodStart && done <= periodEnd) ? fee : 0;
     }
     // Retainer: the shared rule (projectPeriod.ts) — a dead span earns nothing,
-    // the month the period end cuts short earns its elapsed share.
-    return retainerRevenueInPeriod(p, fee, periodStart, periodEnd, periodMonths).revenue;
+    // the month the period end cuts short earns its elapsed share. The fee is
+    // PER MONTH: a weekly retainer bills `budget` every week (monthlyFeeOf).
+    return retainerRevenueInPeriod(p, toAll(monthlyFeeOf(p), (p as any).currency), periodStart, periodEnd, periodMonths).revenue;
   };
   const revenueByProject = new Map<string, number>(periodProjects.map(p => [p.id, revenueOf(p)]));
   const totalRevenue = periodProjects.reduce((s, p) => s + (revenueByProject.get(p.id) || 0), 0);
@@ -411,7 +462,10 @@ export function computeDepartmentPnl(
   // project outside this period (`laborOutsideRows`). Pooling `unabsorbed`
   // alone dropped the latter from every department and from the pool.
   const outside = hoursLabor ? laborOutsideRows(hoursLabor, absorbable) : null;
-  const sharedPool = otherFixedPool + (hoursLabor ? Math.max(0, hoursLabor.unabsorbed) + (outside?.total || 0) : 0);
+  // Never negative: the loaded-rate excess over payroll is reported apart
+  // (`loadCredit`), not credited into the pool — see laborAllocation.ts.
+  const sharedPool = otherFixedPool + (hoursLabor ? hoursLabor.unabsorbed + (outside?.total || 0) : 0);
+  const loadCredit = loadCreditOf(hoursLabor);
   const useHoursWeight = !!hoursLabor && hoursLabor.settings.overheadBasis === 'labor-hours' && totalLaborHours > 0;
   // Nobody earned anything (a month of pure delivery, a fresh tenant)? The
   // pool is still real cost: split it equally, as projectPnl does — the old
@@ -425,7 +479,7 @@ export function computeDepartmentPnl(
   // ── Build project lines ──
   const memberName = (id: string) => {
     const m = memberById.get(id);
-    return m ? (m.displayName || (m as any).email || 'Pa emër') : 'I panjohur';
+    return m ? (m.profile.displayName || (m.profile as any).email || 'Pa emër') : 'I panjohur';
   };
   // ── Slice every project into its department lines ──
   // A project sold as SEO + Ads becomes two lines: each takes its weight of the
@@ -472,6 +526,7 @@ export function computeDepartmentPnl(
     }
     const projectHours = parts.reduce((t, x) => t + x.hours, 0);
     const splitAcross = mix.map(s => s.line);
+    const billedLines = billedByLine.get(p.id);
     for (const s of mix) {
       const lineParts = partsByLine.get(s.line) || [];
       const lineHours = lineParts.reduce((t, x) => t + x.hours, 0);
@@ -479,7 +534,7 @@ export function computeDepartmentPnl(
       slices.push({
         department: s.line,
         id: p.id, name: p.name, customerId: p.customerId,
-        revenue: revenue * s.weight,
+        revenue: billedLines ? (billedLines.get(s.line) || 0) : revenue * s.weight,
         directCost: directCost * s.weight,
         labor: lineParts.reduce((t, x) => t + x.cost, 0),
         globalOverhead: globalOverhead * overheadShare,
@@ -545,12 +600,14 @@ export function computeDepartmentPnl(
     // shared overhead pool above; it is listed here for the reader, not added.
     ? [
         ...(hoursLabor.unabsorbed > 0 ? [{ name: 'Punë e paabsorbuar (orë të paregjistruara / bench)', cost: hoursLabor.unabsorbed }] : []),
+        // The loaded-rate excess over payroll is NOT a cost line here — it is
+        // `loadCredit` on the result (a reconciliation line, never a negative cost).
         ...(outside && outside.internal > 0 ? [{ name: 'Orë pa projekt', cost: outside.internal }] : []),
         ...(outside && outside.absentProjects > 0 ? [{ name: 'Orë në projekte jashtë periudhës', cost: outside.absentProjects }] : []),
       ]
     : payrollMembers
       .filter(m => (projectCountByMember.get(norm(m.userId || '')) || 0) === 0)
-      .map(m => ({ name: m.displayName || (m as any).email || 'Pa emër', cost: memberPeriodSalary(m) }))
+      .map(m => ({ name: m.profile.displayName || (m.profile as any).email || 'Pa emër', cost: memberPeriodSalary(m) }))
       .filter(x => x.cost > 0)
       .sort((a, b) => b.cost - a.cost);
   if (!hoursLabor && unattributablePayroll > 0) {
@@ -574,7 +631,9 @@ export function computeDepartmentPnl(
     allocationBasis,
     unallocatedOverhead,
     laborOutsideRows: outside?.total || 0,
+    loadCredit,
     splitProjects,
+    unresolvedInvoices,
     totals,
   };
 }

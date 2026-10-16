@@ -141,6 +141,10 @@ const ADMIN_ONLY_TABS = ['integrations', 'automation', 'roles', 'modules'];
 // ─── SettingsView ──────────────────────────────────────────────────────────────
 const SettingsView: React.FC = () => {
   const { teamId: permTeamId, isAdmin, isOwner, isSuperAdmin } = usePermissions();
+  // bankAccounts / financeSettings / rateCard are owner/Admin-only in the rules
+  // (teamSettingsFinanceKeys): a Manager runs a department, not the IBAN clients
+  // pay into or every colleague's cost rate.
+  const canEditFinanceSettings = !!(isAdmin || isOwner || isSuperAdmin);
   // A super-admin has no permissions.teamId (null); fall back to the resolved
   // global active team so team-scoped saves here (WhatsApp, bank, Meta, Stripe)
   // still work for them.
@@ -636,6 +640,7 @@ const SettingsView: React.FC = () => {
   };
 
   const handleSaveBankSettings = () => {
+    if (!canEditFinanceSettings) return;
     localStorage.setItem('bank_accounts', JSON.stringify(bankAccounts));
     // Keep backward-compatible keys for first bank (used by invoice auto-fill)
     const first = bankAccounts[0];
@@ -805,7 +810,7 @@ const SettingsView: React.FC = () => {
           <TabsContent value="finance" className="space-y-6">
             {/* Cost rates, margin thresholds, overhead basis, rate card — the rules
                 behind Financat → Klientët and every project budget. */}
-            <FinanceSettingsPanel teamId={teamId} settings={firestoreSettings} canEdit={isAdmin || isOwner} />
+            <FinanceSettingsPanel teamId={teamId} settings={firestoreSettings} canEdit={canEditFinanceSettings} />
           </TabsContent>
         )}
 
@@ -1685,10 +1690,15 @@ const SettingsView: React.FC = () => {
                   <p className="text-xs text-muted-foreground">Detajet bankare që shfaqen në faturat me pagesë bankare</p>
                 </div>
               </div>
-              <Button variant="outline" size="sm" onClick={addBankAccount}>
-                <Plus className="w-4 h-4 mr-1" /> Shto Bankë
-              </Button>
+              {canEditFinanceSettings && (
+                <Button variant="outline" size="sm" onClick={addBankAccount}>
+                  <Plus className="w-4 h-4 mr-1" /> Shto Bankë
+                </Button>
+              )}
             </div>
+            {!canEditFinanceSettings && (
+              <p className="text-xs text-muted-foreground">Vetëm pronari ose Admin mund ta ndryshojë.</p>
+            )}
 
             {bankAccounts.length === 0 && (
               <div className="text-center py-6 text-muted-foreground text-sm border border-dashed rounded-lg">
@@ -1696,11 +1706,12 @@ const SettingsView: React.FC = () => {
               </div>
             )}
 
+            <fieldset disabled={!canEditFinanceSettings} className="space-y-4 min-w-0">
             {bankAccounts.map((bank, index) => (
               <div key={bank.id} className="p-4 border border-border rounded-lg space-y-3">
                 <div className="flex items-center justify-between">
                   <h4 className="text-sm font-semibold text-foreground">Banka {index + 1}</h4>
-                  {bankAccounts.length > 1 && (
+                  {bankAccounts.length > 1 && canEditFinanceSettings && (
                     <Button variant="ghost" size="sm" className="text-error hover:text-error" onClick={() => removeBankAccount(bank.id)}>
                       <Trash2 className="w-4 h-4" />
                     </Button>
@@ -1741,6 +1752,7 @@ const SettingsView: React.FC = () => {
                 </div>
               </div>
             ))}
+            </fieldset>
 
             <div className="flex items-center justify-between">
               {bankSaved && (
@@ -1750,7 +1762,7 @@ const SettingsView: React.FC = () => {
                 </div>
               )}
               <div className="ml-auto">
-                <Button onClick={handleSaveBankSettings} disabled={bankAccounts.length === 0 || !bankAccounts.some(b => b.iban)}>
+                <Button onClick={handleSaveBankSettings} disabled={!canEditFinanceSettings || bankAccounts.length === 0 || !bankAccounts.some(b => b.iban)}>
                   Ruaj Detajet Bankare
                 </Button>
               </div>

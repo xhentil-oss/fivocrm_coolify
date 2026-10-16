@@ -7,6 +7,7 @@
 import type { Project, ProjectPlannedRole } from '../../types';
 import { toAll } from '../utils';
 import type { ProjectLabor } from './laborAllocation';
+import { billingTypeOf, monthlyFeeOf } from './projectPeriod';
 import {
   budgetAlertLevel,
   estimateAtCompletion,
@@ -79,14 +80,22 @@ export interface PlannedEconomics {
   suggestedPrice: number;
 }
 
-/** What the plan says the deal is worth — before anyone logs an hour. */
-export function plannedEconomics(p: Pick<Project, 'budget' | 'currency' | 'plannedRoles' | 'plannedHours' | 'plannedLaborCost' | 'plannedDirectExpenses' | 'targetMarginPct'>, settings: FinanceSettings): PlannedEconomics {
+/**
+ * What the plan says the deal is worth — before anyone logs an hour.
+ *
+ * `contractValue` is the one-time contract, or — for a RETAINER — the fee per
+ * MONTH (`monthlyFeeOf`: `budget` is the fee per billing cycle, so a weekly
+ * retainer earns budget × 52/12 a month). Taking the raw weekly `budget` made a
+ * weekly retainer's planned margin look ~4× worse than the engines' figure.
+ */
+export function plannedEconomics(p: Pick<Project, 'budget' | 'currency' | 'plannedRoles' | 'plannedHours' | 'plannedLaborCost' | 'plannedDirectExpenses' | 'targetMarginPct'> & Partial<Pick<Project, 'billingType' | 'isRecurring' | 'recurringFrequency'>>, settings: FinanceSettings): PlannedEconomics {
   const s = plannedRolesSummary(p.plannedRoles);
   const plannedHours = p.plannedHours && p.plannedHours > 0 ? p.plannedHours : s.hours;
   const plannedLaborCost = p.plannedLaborCost && p.plannedLaborCost > 0 ? p.plannedLaborCost : s.laborCost;
   const plannedDirectExpenses = Math.max(0, p.plannedDirectExpenses || 0);
   const plannedDirectCost = plannedLaborCost + plannedDirectExpenses;
-  const contractValue = toAll(p.budget || 0, p.currency);
+  const fee = billingTypeOf(p as Project) === 'monthly' ? monthlyFeeOf(p) : (Number(p.budget) || 0);
+  const contractValue = toAll(fee, p.currency);
   const plannedGrossProfit = contractValue - plannedDirectCost;
   const plannedMarginPct = pct(plannedGrossProfit, contractValue);
   return {

@@ -101,8 +101,12 @@ export function attributeCollectedRevenue(
 
   for (const inv of invoices) {
     // Same collected basis as the headline number, so the columns reconcile.
+    // A REFUND (negative collected: a credit note, a reversed instalment) is
+    // kept and reduces the department / person it came from — the department
+    // P&L on the cash basis counts it, so skipping it here made the two columns
+    // of one row disagree by exactly the refund.
     const collected = getInvoiceCollectedBetween(inv, window.start, window.end);
-    if (collected <= 0) continue;
+    if (!collected) continue;
     result.total += collected;
 
     const pid = inv.projectId;
@@ -114,8 +118,11 @@ export function attributeCollectedRevenue(
       continue;
     }
 
+    // Weights from the invoice's own lines (never signed), the sign applied by
+    // multiplying the collected amount — identical to computeDepartmentPnl.
     const mix = invoiceServiceMix(
       itemsByInvoice.get(inv.id), servicesById, label, projectServiceMix(project, servicesById, label),
+      label((project as any).department),
     );
     for (const s of mix) {
       result.byDepartment.set(s.line, (result.byDepartment.get(s.line) || 0) + collected * s.weight);

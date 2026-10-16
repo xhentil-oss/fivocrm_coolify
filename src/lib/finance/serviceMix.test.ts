@@ -9,6 +9,7 @@ import {
   memberServiceLines,
   memberLaborSplit,
   weightOf,
+  invoiceItemAmount,
 } from './serviceMix';
 import { computeDepartmentPnl } from './departmentPnl';
 import { attributeCollectedRevenue } from './revenueAttribution';
@@ -182,7 +183,7 @@ describe('computeDepartmentPnl — one project, two service lines', () => {
     const adsGal = member('adsGal', 120_000, ['Ads']);
     const entry = (userId: string, hours: number): TimeEntry => ({
       id: `${userId}-${hours}`, userId, projectId: 'ret', date: '2026-09-10', startTime: new Date('2026-09-10T09:00:00'),
-      duration: hours * 60, createdAt: new Date('2026-09-10'), updatedAt: new Date('2026-09-10'),
+      source: 'manual', duration: hours * 60, createdAt: new Date('2026-09-10'), updatedAt: new Date('2026-09-10'),
     } as TimeEntry);
     const retainer = mkP({ id: 'ret', status: 'Active', billingType: 'monthly', budget: 100_000, serviceIds: ['seo', 'ads'], createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01') });
     const labor = allocateLabor({ timeEntries: [entry('seoGuy', 10), entry('adsGal', 30)], members: [seoGuy, adsGal], expenses: [], period, settings, clientProjectIds: new Set(['ret']) });
@@ -194,5 +195,112 @@ describe('computeDepartmentPnl — one project, two service lines', () => {
     // Payroll 240k: 40k absorbed, 200k unabsorbed → shared pool, spread 10h : 30h.
     expect(seo.overhead / ads.overhead).toBeCloseTo(1 / 3);
     expect(res.totals.labor + res.totals.overhead).toBeCloseTo(240_000);
+  });
+});
+
+describe('regressions — finance audit 16 Oct 2026', () => {
+  const label = () => labelerFor(SERVICES, []);
+
+  it('labelerFor seeds every project serviceMix line, so both engines spell a split line the same', () => {
+    const projects = [
+      { department: 'Web', serviceMix: [{ line: 'ADS', pct: 50 }, { line: 'Web', pct: 50 }] },
+      { department: 'Web', serviceMix: [{ line: 'ads', pct: 100 }] },
+    ] as any;
+    // Whatever is read first afterwards, the seeded spelling wins.
+    const a = labelerFor([], projects);
+    expect(a('ads')).toBe('ADS');
+    const b = labelerFor([], projects);
+    expect(b('ADS')).toBe('ADS');
+    expect(b('ads')).toBe('ADS');
+  });
+
+  it('invoiceServiceMix: a labelled line (serviceLine) wins over service and fallback', () => {
+    const items = [
+      { ...item('i', undefined, 40_000), serviceLine: 'seo' },
+      { ...item('i', 'seo', 60_000), serviceLine: 'Ads' },
+    ] as InvoiceItem[];
+    const mix = invoiceServiceMix(items, BY_ID, label(), [{ line: 'Web', weight: 1 }]);
+    expect(weightOf(mix, 'SEO')).toBeCloseTo(0.4);
+    expect(weightOf(mix, 'Ads')).toBeCloseTo(0.6);
+    expect(weightOf(mix, 'Web')).toBe(0);
+  });
+
+  it('invoiceServiceMix: a sold service with NO category goes to the project department (ownLine), like projectServiceMix', () => {
+    const l = label();
+    const p = mkP({ department: 'Web', serviceIds: ['seo', 'misc'] });
+    const projMix = projectServiceMix(p, BY_ID, l);
+    const mix = invoiceServiceMix([item('i', 'seo', 50_000), item('i', 'misc', 50_000)], BY_ID, l, projMix, l(p.department));
+    expect(weightOf(mix, 'SEO')).toBeCloseTo(0.5);
+    expect(weightOf(mix, 'Web')).toBeCloseTo(0.5);
+    // Without ownLine (legacy callers) it is still spread by the fallback.
+    const legacy = invoiceServiceMix([item('i', 'misc', 50_000)], BY_ID, l, [{ line: 'SEO', weight: 1 }]);
+    expect(legacy).toEqual([{ line: 'SEO', weight: 1 }]);
+  });
+
+  it('invoiceItemAmount: an explicit totalPrice 0 is a free line (weight 0); only a MISSING total falls back', () => {
+    expect(invoiceItemAmount({ totalPrice: 0, quantity: 2, unitPrice: 500 } as any)).toBe(0);
+    expect(invoiceItemAmount({ quantity: 2, unitPrice: 500 } as any)).toBe(1_000);
+    expect(invoiceItemAmount({ totalPrice: null, quantity: 2, unitPrice: 500 } as any)).toBe(1_000);
+    expect(invoiceItemAmount({ totalPrice: NaN, quantity: 2, unitPrice: 500 } as any)).toBe(1_000);
+    const free = { ...item('i', 'ads', 0), quantity: 1, unitPrice: 60_000 } as InvoiceItem;
+    expect(invoiceServiceMix([item('i', 'seo', 40_000), free], BY_ID, label(), [])).toEqual([{ line: 'SEO', weight: 1 }]);
+  });
+
+  it('invoiceServiceMix: a credit note (all lines negative) is weighted by its absolute lines', () => {
+    const mix = invoiceServiceMix([item('cn', 'seo', -10_000), item('cn', 'ads', -30_000)], BY_ID, label(), []);
+    expect(weightOf(mix, 'SEO')).toBeCloseTo(0.25);
+    expect(weightOf(mix, 'Ads')).toBeCloseTo(0.75);
+  });
+
+  it('memberLaborSplit ignores a 0-weight line instead of dropping the person', () => {
+    const mix = [{ line: 'Ads', weight: 1 }, { line: 'SEO', weight: 0 }];
+    expect(memberLaborSplit(['SEO'], mix)).toBe(mix);
+  });
+
+  const paid = (id: string, total: number, day: number) => ({
+    id, projectId: 'acme', total, status: 'Paid',
+    invoiceDate: new Date(2026, 2, day), paidAt: new Date(2026, 2, day), createdAt: new Date(2026, 2, day),
+    // A refund is a recorded NEGATIVE payment (a Paid invoice with a negative total
+    // alone collects nothing — getInvoiceCollectedBetween floors its remainder at 0).
+    ...(total < 0 ? { partialPayments: [{ amount: total, paidAt: new Date(2026, 2, day) }] } : {}),
+  });
+
+  it('refunds: department collected revenue == attributeCollectedRevenue byDepartment, refund included', () => {
+    const project = mkP({ id: 'acme', department: 'SEO', budget: 100_000, serviceIds: ['seo', 'ads'] });
+    // A refund of part of the Ads work: negative collected in the same window.
+    const invoices = [paid('inv', 100_000, 5), paid('cn', -30_000, 20)] as any;
+    const items = [item('inv', 'seo', 40_000), item('inv', 'ads', 60_000), item('cn', 'ads', -30_000)];
+    const res = computeDepartmentPnl([project], [], [], { ...OPTS, revenueBasis: 'invoiced', invoices, services: SERVICES, invoiceItems: items });
+    const cash = attributeCollectedRevenue(invoices, [project], { start: OPTS.range.start, end: OPTS.range.end }, { services: SERVICES, invoiceItems: items });
+    const seo = res.rows.find(r => r.department === 'SEO')!.revenue;
+    const ads = res.rows.find(r => r.department === 'Ads')!.revenue;
+    expect(seo).toBeCloseTo(40_000);
+    expect(ads).toBeCloseTo(30_000);
+    expect(cash.byDepartment.get('SEO')).toBeCloseTo(seo);
+    expect(cash.byDepartment.get('Ads')).toBeCloseTo(ads);
+    const sumCash = [...cash.byDepartment.values()].reduce((t, v) => t + v, 0);
+    expect(sumCash).toBeCloseTo(res.totals.revenue);
+    expect(cash.total).toBeCloseTo(70_000);
+  });
+
+  it('refunds: a line that only received refunds still lands in its department (Σ slices == collected)', () => {
+    const project = mkP({ id: 'acme', department: 'SEO', budget: 100_000, serviceIds: ['seo', 'ads'] });
+    const invoices = [paid('inv', 40_000, 5), paid('cn', -10_000, 20)] as any;
+    const items = [item('inv', 'seo', 40_000), item('cn', 'ads', -10_000)];
+    const res = computeDepartmentPnl([project], [], [], { ...OPTS, revenueBasis: 'invoiced', invoices, services: SERVICES, invoiceItems: items });
+    expect(res.rows.find(r => r.department === 'SEO')!.revenue).toBeCloseTo(40_000);
+    expect(res.rows.find(r => r.department === 'Ads')!.revenue).toBeCloseTo(-10_000);
+    expect(res.totals.revenue).toBeCloseTo(30_000);
+    const cash = attributeCollectedRevenue(invoices, [project], { start: OPTS.range.start, end: OPTS.range.end }, { services: SERVICES, invoiceItems: items });
+    expect(cash.byDepartment.get('Ads')).toBeCloseTo(-10_000);
+  });
+
+  it('unresolved projectId: departmentPnl reports it instead of dropping it silently', () => {
+    const project = mkP({ id: 'acme', department: 'SEO', budget: 100_000 });
+    const invoices = [{ ...paid('ghost', 25_000, 5), projectId: 'deleted' }] as any;
+    const res = computeDepartmentPnl([project], [], [], { ...OPTS, revenueBasis: 'invoiced', invoices });
+    expect(res.unresolvedInvoices).toEqual({ count: 1, amount: 25_000 });
+    const budget = computeDepartmentPnl([project], [], [], { ...OPTS, invoices });
+    expect(budget.unresolvedInvoices).toEqual({ count: 1, amount: 25_000 });
   });
 });

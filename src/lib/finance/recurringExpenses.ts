@@ -64,7 +64,14 @@ export type ExpenseGenerationBlock =
   | 'series-ended'
   | 'already-generated'
   /** The due date's period is already behind the current one — missed, never backfilled. */
-  | 'stale-period';
+  | 'stale-period'
+  /**
+   * The parent itself was REJECTED. A rejected cost is out of every total, yet the
+   * series kept generating a fresh `Submitted` child every period — re-queuing
+   * the very charge the approver had refused. Not permanent: re-approving the
+   * parent resumes it.
+   */
+  | 'rejected';
 
 /** Blocks that end the series for good — the caller should clear `isRecurring`. */
 export const PERMANENT_EXPENSE_BLOCKS: ReadonlyArray<ExpenseGenerationBlock> = ['series-ended'];
@@ -156,17 +163,41 @@ export function firstGenerationDate(createdAt: Date, frequency: string, picked?:
 }
 
 /**
- * Due date to seed onto a series that is marked recurring but has no
+ * Heal plan for a series that is marked recurring but has no
  * `nextRecurringDate` — it never generated anything at all.
  *
- * Seeded FORWARD from `now`, never from the parent's own date: backfilling the
- * months the series missed would rewrite closed books (and re-open every P&L,
- * cashflow alarm and report built on them). Which is the owner's call, not a
- * cron job's — the missing months are surfaced in the UI instead.
+ * Never BACKWARDS: the periods it missed before the current one are not
+ * generated (backfilling rewrites closed books — the owner's call, offered as
+ * "Shto manualisht" on the series page). But the CURRENT period is a period like
+ * any other: the old heal claimed it and seeded `now + 1 cycle`, so the month
+ * the heal ran in was never booked and never reported anywhere. Now the pointer
+ * lands on the series' occurrence INSIDE the current period, and the engine's
+ * own law ("only the period containing now is generated") decides: due day
+ * passed → generated on this run; still ahead → generated on its day.
+ *
+ * The parent row covers its own period, so when that period is the current one
+ * (or later) the series starts after it, exactly like `firstGenerationDate`.
+ * The claim only ever moves FORWARD — never onto a period nobody booked.
+ * Mirrored by the `no-next-date` heal in `api/cron/run.ts`.
  */
+export function healMissingNextDate(
+  ownDate: Date,
+  now: Date,
+  frequency: string,
+  anchorDay?: number,
+  claim?: string | null,
+): { next: Date; claim: string } {
+  const anchor = anchorDay || zonedParts(ownDate).day;
+  const ownKey = expensePeriodKey(frequency, ownDate);
+  const floor = claim && sameKeyShape(claim, ownKey) && claim > ownKey ? claim : ownKey;
+  const first = nextExpenseOccurrence(ownDate, frequency, anchor);
+  const next = advanceToCurrentPeriod(first, frequency, anchor, now, floor);
+  return { next, claim: floor };
+}
+
+/** The due date `healMissingNextDate` seeds. Kept for callers that only need the date. */
 export function seedNextRecurringDate(ownDate: Date, now: Date, frequency: string): Date {
-  const anchor = ownDate > now ? ownDate : now;
-  return nextExpenseOccurrence(anchor, frequency, zonedParts(ownDate).day);
+  return healMissingNextDate(ownDate, now, frequency).next;
 }
 
 export interface RecurringExpenseCandidate {
@@ -179,6 +210,7 @@ export interface RecurringExpenseCandidate {
   nextRecurringDate?: unknown;
   recurringEndDate?: unknown;
   lastGeneratedPeriodKey?: string;
+  approvalStatus?: string;
 }
 
 /**
@@ -211,6 +243,8 @@ export function expenseGenerationBlockReason(
   // cash-flow gap. Treated like a pause — reversible, and it never touches the
   // occurrences already booked.
   if (expense.status && expense.status !== 'Active') return 'inactive';
+  // A refused parent must not keep re-submitting itself every period.
+  if (expense.approvalStatus === 'Rejected') return 'rejected';
   if (nextDate > now) return 'not-due';
 
   // The period key — not a timestamp — decides whether this cycle was covered.
@@ -294,6 +328,63 @@ export function togglePausePlan(
     patch.recurringAnchorDay = expense.recurringAnchorDay || zonedParts(resumedNext).day;
   }
   return { paused, patch, resumedNext, moved };
+}
+
+/** The period key one cycle BEFORE the one containing `now`. */
+export function previousExpensePeriodKey(frequency: string, now: Date): string {
+  const back = frequency === 'weekly' ? addZonedDays(now, -7)
+    : frequency === 'yearly' ? addMonthsClamped(now, -12)
+      : frequency === 'quarterly' ? addMonthsClamped(now, -3)
+        : addMonthsClamped(now, -1);
+  return expensePeriodKey(frequency, back);
+}
+
+/** Keys of one frequency share a shape ('2026-08' / 'W…' / 'Q…' / 'Y…'). */
+function sameKeyShape(a: string, b: string): boolean {
+  const shape = (k: string) => (/^[WQY]/.test(k) ? k[0] : 'M');
+  return shape(a) === shape(b);
+}
+
+/**
+ * Turning recurrence ON for a row that is not (or no longer) a series — the
+ * edit form's switch, including RE-ENABLING a series that was stopped.
+ *
+ * The next date used to be computed from the PARENT's own date, so a series
+ * stopped in February and re-enabled in October pointed at March: the cron then
+ * walked the "missed" periods and told the owner "8 periudhë pa shpenzim" for
+ * months the series had been deliberately off. Same law as resume: the start is
+ * the LAST COVERED period (the parent's own, or its newest occurrence), pulled
+ * forward to the current period, and the claim is the PREVIOUS period (or the
+ * last covered one, if newer) so nothing older reads as skipped and the current
+ * period books once — unless it is already covered.
+ */
+export function reenableRecurrencePlan(input: {
+  frequency: string;
+  ownDate: Date;
+  /** Booking dates of the series' existing occurrences (any origin). */
+  occurrenceDates?: Array<Date | null | undefined>;
+  /** Period keys the occurrences carry (`periodKey`). */
+  occurrenceKeys?: Array<string | null | undefined>;
+  /** A stored claim — honoured only when it is in the same frequency. */
+  storedClaim?: string | null;
+  picked?: Date | null;
+  anchorDay?: number | null;
+  now: Date;
+}): { nextDate: Date; claim: string; anchorDay: number } {
+  const { frequency: freq, ownDate, now } = input;
+  let lastCovered = ownDate;
+  for (const dt of input.occurrenceDates || []) if (dt && dt > lastCovered) lastCovered = dt;
+  let claim = expensePeriodKey(freq, lastCovered);
+  const candidates = [...(input.occurrenceKeys || []), input.storedClaim];
+  for (const k of candidates) if (k && sameKeyShape(k, claim) && k > claim) claim = k;
+  const prev = previousExpensePeriodKey(freq, now);
+  if (prev > claim) claim = prev;
+  const anchor = input.picked ? zonedParts(input.picked).day : (input.anchorDay || zonedParts(ownDate).day);
+  const from = input.picked
+    ? firstGenerationDate(lastCovered, freq, input.picked)
+    : nextExpenseOccurrence(lastCovered, freq, anchor);
+  const nextDate = advanceToCurrentPeriod(from, freq, anchor, now, claim);
+  return { nextDate, claim, anchorDay: anchor };
 }
 
 // ── Known monthly commitment ────────────────────────────────────────────────
@@ -412,11 +503,37 @@ type DuplicateCandidate = Pick<Expense, 'id' | 'title' | 'amount' | 'currency'> 
   date?: unknown;
   createdAt?: unknown;
   approvalStatus?: string;
+  memberId?: string | null;
+  projectId?: string | null;
+  category?: string | null;
 };
 
 /**
- * Rows that look like the same expense recorded twice in one period: same
- * normalised title, same amount, same currency, same period.
+ * The identity two rows must share to be "the same expense twice": normalised
+ * title, amount, currency, period — AND who/where it is for (`memberId`,
+ * `projectId`, `category`). Without the last three, two people on the same
+ * salary ("Paga" 60 000 for Ana and for Besa) or one subscription billed to two
+ * different projects were flagged as a double entry, and the dedupe script then
+ * deleted a REAL salary. `scripts/dedupe-expenses.mjs` builds the same key.
+ */
+export function duplicateExpenseKey(exp: DuplicateCandidate, frequency: string = 'monthly'): string | null {
+  if (exp.approvalStatus === 'Rejected') return null;
+  const d = toExpenseDate((exp as any).date) || toExpenseDate((exp as any).createdAt);
+  if (!d) return null;
+  const title = (exp.title || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!title) return null;
+  const amount = Number(exp.amount) || 0;
+  if (amount <= 0) return null;
+  const currency = (exp as any).currency || 'ALL';
+  return [
+    title, amount, currency, expensePeriodKey(frequency, d),
+    exp.memberId || '', exp.projectId || '', exp.category || '',
+  ].join('|');
+}
+
+/**
+ * Rows that look like the same expense recorded twice in one period (see
+ * `duplicateExpenseKey` for what "the same" means).
  *
  * A `Rejected` row is excluded — it is already neutralised in every total, so
  * flagging it would be noise. The comparison is deliberately strict (exact
@@ -430,15 +547,8 @@ export function findDuplicateExpenseGroups<T extends DuplicateCandidate>(
   const groups = new Map<string, T[]>();
 
   (expenses || []).forEach(exp => {
-    if (exp.approvalStatus === 'Rejected') return;
-    const d = toExpenseDate((exp as any).date) || toExpenseDate((exp as any).createdAt);
-    if (!d) return;
-    const title = (exp.title || '').trim().toLowerCase().replace(/\s+/g, ' ');
-    if (!title) return;
-    const amount = Number(exp.amount) || 0;
-    if (amount <= 0) return;
-    const currency = (exp as any).currency || 'ALL';
-    const key = [title, amount, currency, expensePeriodKey(frequency, d)].join('|');
+    const key = duplicateExpenseKey(exp, frequency);
+    if (!key) return;
     const bucket = groups.get(key);
     if (bucket) bucket.push(exp); else groups.set(key, [exp]);
   });
@@ -446,7 +556,11 @@ export function findDuplicateExpenseGroups<T extends DuplicateCandidate>(
   const out: DuplicateExpenseGroup<T>[] = [];
   groups.forEach((list, key) => {
     if (list.length < 2) return;
-    const [, amountRaw, currency, periodKey] = key.split('|');
+    // The title is the only field that may contain '|', so read the tail from the end.
+    const parts = key.split('|');
+    const amountRaw = parts[parts.length - 6];
+    const currency = parts[parts.length - 5];
+    const periodKey = parts[parts.length - 4];
     const amountAll = toAll(Number(amountRaw), currency);
     out.push({
       key,

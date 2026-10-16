@@ -35,6 +35,13 @@ describe('planning (§5–§6)', () => {
     expect(e.plannedMarginStatus).toBe('watch');
     expect(Math.round(e.suggestedPrice)).toBe(374_000);
   });
+  it('a retainer is valued at its MONTHLY fee (weekly x 52/12), a one-time project at its contract', () => {
+    expect(plannedEconomics(project(), S).contractValue).toBe(300_000);
+    expect(plannedEconomics(project({ billingType: 'monthly', isRecurring: true, recurringFrequency: 'monthly', budget: 50_000 }), S).contractValue).toBe(50_000);
+    const weekly = plannedEconomics(project({ billingType: 'monthly', isRecurring: true, recurringFrequency: 'weekly', budget: 12_000 }), S);
+    expect(weekly.contractValue).toBeCloseTo(12_000 * 52 / 12, 6);
+    expect(weekly.plannedGrossProfit).toBeCloseTo(12_000 * 52 / 12 - 168_300, 6);
+  });
   it('plannedFieldsPatch denormalises the sums the cron reads', () => {
     expect(plannedFieldsPatch(normalizePlannedRoles(roles), 20_000)).toMatchObject({ plannedHours: 121, plannedLaborCost: 148_300, plannedDirectExpenses: 20_000 });
     expect(plannedFieldsPatch([], undefined)).toEqual({ plannedRoles: [], plannedHours: 0, plannedLaborCost: 0, plannedDirectExpenses: 0 });

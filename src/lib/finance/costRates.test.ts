@@ -54,3 +54,22 @@ describe('costRates', () => {
     expect(rows).toEqual([]);
   });
 });
+
+describe('one person, several team rows (per-month resolution)', () => {
+  it('buildRateCard prices a mover at the CURRENT row (60k), one head, not the old Inactive 80k row', () => {
+    const rows = buildRateCard([
+      m('ana', { id: 'tA_ana', costRole: 'SMM', monthlySalary: 80_000, status: 'Inactive', leftAt: d('2026-03-01T00:00:00') } as any),
+      m('ana', { id: 'tB_ana', costRole: 'SMM', monthlySalary: 60_000, hiredAt: d('2026-03-01T00:00:00') } as any),
+    ], { employerCostPct: 0, defaultClientCapacityHours: 120 }, sept);
+    const smm = rows.find(r => r.role === 'SMM')!;
+    expect(smm.headcount).toBe(1);
+    expect(smm.costRate).toBe(500);
+  });
+  it('the override on any row wins over the derived rate', () => {
+    const rows = buildRateCard([
+      m('ana', { id: 'tA_ana', costRole: 'SMM', monthlySalary: 120_000 }),
+      m('ana', { id: 'tB_ana', costRole: 'SMM', hourlyCostRate: 1_400 }),
+    ], { employerCostPct: 0, defaultClientCapacityHours: 120 }, sept);
+    expect(rows.find(r => r.role === 'SMM')!.members[0]).toMatchObject({ rate: 1_400, basis: 'override' });
+  });
+});

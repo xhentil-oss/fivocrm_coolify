@@ -560,8 +560,53 @@ service cloud.firestore {
       // every P&L, cash-flow alarm and WHMCS push reads. The check is on the
       // CHANGED keys only, so an edit that spreads those fields unchanged passes.
       allow update: if canManageBusinessDoc() && keepsBusinessId() && !isViewerRole()
-        && invoiceSettlementAllowed();
-      allow delete: if canManageBusinessDoc() && !isViewerRole();
+        && invoiceSettlementAllowed()
+        && invoiceAmountsAllowed()
+        && invoiceBankAllowed();
+      // Only a Draft was never issued: once an invoice has gone to the client
+      // (or been paid / cancelled) it is an accounting document, and deleting
+      // it is the settlement audience's call (Admin/Manager), not a Member's.
+      // A legacy row with no status is treated as a Draft.
+      allow delete: if canManageBusinessDoc() && !isViewerRole()
+        && (isSuperAdmin()
+            || isBusinessAdmin(resource.data.businessId)
+            || resource.data.get('status', 'Draft') == 'Draft');
+    }
+    // The amounts of a SETTLED invoice (Paid / Partial / Cancelled) are frozen
+    // for a Member: re-pricing an invoice that was paid rewrites the
+    // received-vs-owed figure that every P&L, the outstanding total and the
+    // WHMCS push read — the same audience as the settlement itself. Checked on
+    // the CHANGED keys only, so an edit that spreads them unchanged passes.
+    // Where the client is told to PAY. A Member re-pointing an issued invoice's
+    // IBAN is the payment-redirect the Oct 2026 audit found on projects; the bank
+    // block is the settlement audience's (Admin/Manager), on any status. Changed
+    // keys only — an edit that spreads them unchanged passes.
+    function invoiceBankKeys() {
+      return ['paymentMethod', 'paymentUrl', 'bankName', 'bankIBAN', 'bankSWIFT', 'bankAccountHolder', 'bankCountry'];
+    }
+    function invoiceBankAllowed() {
+      return isSuperAdmin()
+        || isBusinessAdmin(resource.data.businessId)
+        || !request.resource.data.diff(resource.data).affectedKeys().hasAny(invoiceBankKeys());
+    }
+    function invoiceAmountKeys() {
+      return ['total', 'amount', 'subtotal', 'tax', 'discount', 'discountType', 'currency'];
+    }
+    function invoiceAmountsAllowed() {
+      return isSuperAdmin()
+        || isBusinessAdmin(resource.data.businessId)
+        || !(resource.data.get('status', '') in invoiceSettlementStatuses())
+        || !request.resource.data.diff(resource.data).affectedKeys().hasAny(invoiceAmountKeys());
+    }
+    // Is the invoice behind a line item settled? One get() on the parent
+    // (cached per request). A missing / unknown parent is not settled.
+    function invoiceSettledById(invoiceId) {
+      return invoiceId is string && invoiceId != ''
+        && exists(/databases/$(database)/documents/invoices/$(invoiceId))
+        && get(/databases/$(database)/documents/invoices/$(invoiceId)).data.get('status', '') in invoiceSettlementStatuses();
+    }
+    function invoiceItemWriteAllowed(invoiceId, businessId) {
+      return isSuperAdmin() || isBusinessAdmin(businessId) || !invoiceSettledById(invoiceId);
     }
     function invoiceSettlementKeys() {
       return ['paidAt', 'paidAmount', 'partialPayments', 'payments', 'whmcsPendingPayments',
@@ -1149,8 +1194,54 @@ service cloud.firestore {
     function expenseApprovalUnchanged() {
       return request.resource.data.get('approvalStatus', '') == resource.data.get('approvalStatus', '');
     }
+    // Booking MONTH of an expense, for the month-close lock (monthLockedFor).
+    // `expense.date` is a Timestamp (getExpenseDate() = date || createdAt) and
+    // the books are kept in Europe/Tirane, but rules only do UTC calendar math —
+    // so the instant is shifted by +2 h (Tirane's MAX offset, CEST) before the
+    // month is read. Every date the app writes is a day at 00:00 UTC
+    // (`new Date('YYYY-MM-DD')`) or local midnight (22:00/23:00 UTC the day
+    // before), and both land in the right month that way. The one
+    // approximation: a real instant between 22:00 and 22:59 UTC on the last day
+    // of a WINTER month (23:xx local) is read as the next month. A legacy
+    // string date uses its own 'YYYY-MM'.
+    function tsMonthKey(t) {
+      return string(t.year()) + '-' + (t.month() < 10 ? '0' + string(t.month()) : string(t.month()));
+    }
+    function expenseMonthKey(data) {
+      let d = data.get('date', null) != null ? data.get('date', null) : data.get('createdAt', null);
+      return d is timestamp ? tsMonthKey(d + duration.value(2, 'h'))
+        : (d is string && d.matches('^[0-9]{4}-[0-9]{2}.*') ? d[0:7] : '');
+    }
+    // Did this edit change what the closed month's books say about the row —
+    // how much, when, where, and whether it counts (the approval verdict)?
+    // Status / paid flag / notes / attachments / a recurring PARENT's series
+    // pointers are not booking facts, so they stay editable in a closed month
+    // (a bill booked in a closed month is still paid later; a series whose
+    // parent row is old is still paused / resumed / backfilled forward).
+    function expenseBookingUnchanged() {
+      return expenseValueUnchanged() && expenseApprovalUnchanged();
+    }
+    function expenseMonthOpen(businessId, data) {
+      return !monthLockedFor(businessId, expenseMonthKey(data));
+    }
     match /expenses/{docId} {
-      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      // Salary rows (`category: 'Salary'`) ARE the payroll — every colleague's pay.
+      // Only an approver (Admin/Manager) reads them, plus the person the row
+      // pays (`memberId`). A non-approver's LIST must therefore carry
+      // `where('category', '!=', 'Salary')` (or `where('memberId', '==', uid)`)
+      // so the rule is provable from the query; an unconstrained list is denied.
+      //
+      // NOT `resource.data.get('category', '') != 'Salary'`: when a list query
+      // does not constrain the field, the rules engine evaluates `.get()` with
+      // its DEFAULT — '' != 'Salary' is then "proven" and the bare list (salaries
+      // included) is ALLOWED (verified in the emulator). Direct field access is
+      // unprovable for an unconstrained field and denies, as it must. A row with
+      // no `category` is therefore an approver's read; the form always writes one.
+      allow read: if (isBusinessMember(resource.data.businessId)
+          && (('category' in resource.data && resource.data.category != 'Salary')
+              || resource.data.memberId == request.auth.uid
+              || isExpenseApprover(resource.data.businessId, resource.data.get('teamId', ''))))
+        || isSuperAdmin();
 
       // A non-approver may only submit; self-approving on the way in is refused.
       // `teamId` names the department whose Admin/Manager may approve
@@ -1161,15 +1252,26 @@ service cloud.firestore {
             || businessOfTeam(request.resource.data.get('teamId', '')) == request.resource.data.businessId)
         && (isExpenseApprover(request.resource.data.businessId, request.resource.data.get('teamId', ''))
             || (request.resource.data.get('approvalStatus', 'Submitted') == 'Submitted'
-                && request.resource.data.get('category', '') != 'Salary'));
+                && request.resource.data.get('category', '') != 'Salary'))
+        // Nothing is booked INTO a closed month (financeMonthCloses lock).
+        && expenseMonthOpen(request.resource.data.businessId, request.resource.data);
 
       allow update: if canManageBusinessDoc() && !isViewerRole()
         // The tenant key is immutable — no moving a cost into another business.
         && keepsBusinessId()
+        // A closed month's booking facts are frozen — for the row's OLD month
+        // and the month it would move to (see expenseBookingUnchanged).
+        && (expenseBookingUnchanged()
+            || (expenseMonthOpen(resource.data.businessId, resource.data)
+                && expenseMonthOpen(resource.data.businessId, request.resource.data)))
         && (
           isExpenseApprover(resource.data.businessId, resource.data.get('teamId', ''))
-          // A non-approver never touches payroll (see expenseTouchesSalary) …
-          || (!expenseTouchesSalary()
+          // A non-approver edits only rows they submitted themselves — never a
+          // colleague's cost (and never hands their own row to someone else) …
+          || (resource.data.get('createdByUserId', '') == request.auth.uid
+              && request.resource.data.get('createdByUserId', '') == request.auth.uid
+          // … never touches payroll (see expenseTouchesSalary) …
+              && !expenseTouchesSalary()
               // … may never re-route the row to another department (the approver
               // set is derived from `teamId`) …
               && request.resource.data.get('teamId', '') == resource.data.get('teamId', '')
@@ -1186,8 +1288,10 @@ service cloud.firestore {
               ))
         );
 
-      // A booked, approved cost is not a member's to delete.
+      // A booked, approved cost is not a member's to delete; nothing booked in
+      // a closed month is anyone's to delete.
       allow delete: if canManageBusinessDoc() && !isViewerRole()
+        && expenseMonthOpen(resource.data.businessId, resource.data)
         && (isExpenseApprover(resource.data.businessId, resource.data.get('teamId', ''))
             || (resource.data.get('createdByUserId', '') == request.auth.uid
                 && resource.data.get('approvalStatus', '') != 'Approved'));
@@ -1215,7 +1319,10 @@ service cloud.firestore {
     // slipped past a closed month — it simply never matched the lock's id.
     function timeEntryDateOk() {
       return request.resource.data.get('date', '') is string
-        && request.resource.data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+        // A real month (01-12) and day (01-31). Rules cannot know that September
+        // has 30 days; src/lib/finance/timeEntries.ts (isValidDayKey) treats a
+        // key that does not round-trip ("2026-09-31") as no date at all.
+        && request.resource.data.date.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$');
     }
     match /timeEntries/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
@@ -1260,6 +1367,27 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Private part of a month close: the client-table SNAPSHOT (per-client and
+    // per-person cost lines) moved out of the parent, which every member of the
+    // business reads. Readable and writable ONLY by the audience that writes the
+    // close itself (owner/Admin, never a Manager or Member). Authorised on the
+    // subdoc's OWN data, not a get() on the parent: the first close writes the
+    // parent and this doc in ONE batch, and a get() would not see the parent yet.
+    // The id binding is the same as the parent's (`{businessId}_{periodKey}`),
+    // and an update can never move it to another business or month. Never deleted.
+    match /financeMonthCloses/{closeId}/private/{docId} {
+      allow read: if isSuperAdmin() || isBusinessOwnerOrAdmin(resource.data.businessId);
+      allow create: if (isSuperAdmin() || isBusinessOwnerOrAdmin(request.resource.data.businessId))
+        && tenantActive(request.resource.data.businessId)
+        && closeId == request.resource.data.businessId + '_' + request.resource.data.get('periodKey', '');
+      allow update: if (isSuperAdmin() || isBusinessOwnerOrAdmin(resource.data.businessId))
+        && tenantActive(resource.data.businessId)
+        && keepsBusinessId()
+        && request.resource.data.get('periodKey', '') == resource.data.get('periodKey', '')
+        && closeId == request.resource.data.businessId + '_' + request.resource.data.get('periodKey', '');
+      allow delete: if false;
+    }
+
     // Monthly report idempotency (cron-written).
     match /financeReportRuns/{docId} {
       allow read: if isBusinessAdmin(resource.data.businessId) || isSuperAdmin();
@@ -1269,6 +1397,113 @@ service cloud.firestore {
     // Server-owned project rollup fields (see the projects rule below).
     function projectRollupKeys() {
       return ['spent', 'laborCost', 'hoursByRole', 'spendRolledUpAt', 'budgetAlertsSent'];
+    }
+
+    // ── Project MONEY fields (audit Oct 2026) ──
+    // The recurring-billing cron (api/cron/run.ts, Part 2) bills `budget` in
+    // `currency` on the project's cycle and emails the client the project's
+    // `bank*` details; the plan fields drive the EAC, earned revenue and the
+    // department split. Any non-Viewer could rewrite all of them from the
+    // browser console — re-price a retainer, switch billing on, or redirect the
+    // client's payment to another IBAN. They are now Admin/Manager (the
+    // `canSeeBudget` = canSeeFinancials audience: isAdmin || isManager; owner
+    // and super-admin included) via the signed `roles` claim (isBusinessAdmin).
+    //
+    // `customerId` and `serviceIds` stay writable: ProjectsView re-assigns a
+    // project's client, and a Member picks the services of a project they run
+    // (neither moves an amount — the fee is `budget`, the split is `serviceMix`).
+    //
+    // A Member may still do what the UI lets every editor do, all in the SAFE
+    // direction: archive / stop a retainer (isRecurring true → false, setting
+    // the `wasRecurringBeforeArchive` token), pause it, restore a series that
+    // was running before it was archived/cancelled (consuming the token), and
+    // write the FIRST period claim right after creating a recurring project.
+    // Resuming a PAUSED series, re-pricing, re-scheduling and the plan are not.
+    function projectBankKeys() {
+      return ['paymentMethod', 'bankName', 'bankIBAN', 'bankSWIFT', 'bankAccountHolder', 'bankCountry'];
+    }
+    function projectPlanKeys() {
+      return ['serviceMix', 'plannedRoles', 'plannedHours', 'plannedLaborCost', 'plannedDirectExpenses',
+              'targetMarginPct', 'recognitionMethod', 'remainingHoursEstimate'];
+    }
+    function projectFinanceKeys() {
+      return projectBankKeys().concat(projectPlanKeys()).concat([
+        'budget', 'currency', 'isRecurring', 'isRecurringPaused', 'recurringFrequency',
+        'recurringEndDate', 'billingType', 'billingDayOfMonth', 'lastInvoicePeriodKey',
+        'wasRecurringBeforeArchive']);
+    }
+    function projectFinanceManager(businessId) {
+      return isSuperAdmin() || isBusinessAdmin(businessId);
+    }
+    // "Nothing" in every shape the write layer produces for an empty form field
+    // (null, '', 0, false, [], {}) — the edit form writes `billingDayOfMonth:
+    // null`, `plannedRoles: []`, `isRecurring: false` onto projects that never
+    // had the key, and that must not read as a money change.
+    function isEmptyValue(v) {
+      return v == null || v == '' || v == 0 || v == false || v == [] || v == {};
+    }
+    function projKeySame(k) {
+      return request.resource.data.get(k, null) == resource.data.get(k, null)
+        || (isEmptyValue(resource.data.get(k, null)) && isEmptyValue(request.resource.data.get(k, null)));
+    }
+    function projMoneyUnchanged() {
+      return projKeySame('budget')
+        && request.resource.data.get('currency', 'ALL') == resource.data.get('currency', 'ALL')
+        && request.resource.data.get('recurringFrequency', 'monthly') == resource.data.get('recurringFrequency', 'monthly')
+        // billingType absent = inferred from isRecurring (the form's own default).
+        && request.resource.data.get('billingType', 'x') == resource.data.get('billingType',
+             resource.data.get('isRecurring', false) == true ? 'monthly' : 'one-time')
+        && projKeySame('billingDayOfMonth')
+        && projKeySame('paymentMethod') && projKeySame('bankName') && projKeySame('bankIBAN')
+        && projKeySame('bankSWIFT') && projKeySame('bankAccountHolder') && projKeySame('bankCountry')
+        && projKeySame('serviceMix') && projKeySame('plannedRoles') && projKeySame('plannedHours')
+        && projKeySame('plannedLaborCost') && projKeySame('plannedDirectExpenses')
+        && projKeySame('targetMarginPct') && projKeySame('recognitionMethod')
+        && projKeySame('remainingHoursEstimate');
+    }
+    function projBillingTransitionOk() {
+      let oldRec = resource.data.get('isRecurring', false) == true;
+      let newRec = request.resource.data.get('isRecurring', false) == true;
+      // The restore token may always be CONSUMED (→ false); only a stop may set it.
+      let tokenKeptOrDropped = projKeySame('wasRecurringBeforeArchive')
+        || request.resource.data.get('wasRecurringBeforeArchive', false) == false;
+      return (oldRec == newRec
+              && tokenKeptOrDropped
+              && projKeySame('recurringEndDate')
+              // pause yes, resume-from-pause no
+              && (projKeySame('isRecurringPaused') || request.resource.data.get('isRecurringPaused', false) == true)
+              // the first claim (ProjectsView, right after create) or none
+              && (projKeySame('lastInvoicePeriodKey') || isEmptyValue(resource.data.get('lastInvoicePeriodKey', null))))
+        // STOP / ARCHIVE (archiveProjectPatch, stopProjectBillingPatch)
+        || (oldRec && !newRec
+            && (tokenKeptOrDropped || request.resource.data.get('wasRecurringBeforeArchive', false) == true)
+            && (projKeySame('recurringEndDate') || request.resource.data.get('recurringEndDate', null) == null)
+            && (projKeySame('isRecurringPaused') || request.resource.data.get('isRecurringPaused', false) == false)
+            && projKeySame('lastInvoicePeriodKey'))
+        // RESUME a series that was running before an archive/cancel
+        // (resumeRecurringBillingPatch): the token must be there and consumed;
+        // the claim re-point it carries is free (the occurrence id is
+        // deterministic, so moving it can never produce a second invoice).
+        || (!oldRec && newRec
+            && resource.data.get('wasRecurringBeforeArchive', false) == true
+            && request.resource.data.get('wasRecurringBeforeArchive', true) == false
+            && projKeySame('recurringEndDate')
+            && projKeySame('isRecurringPaused'));
+    }
+    // CREATE by a Member: the form computes `budget` from the picked services
+    // and may make the project recurring, but bank details, an explicit service
+    // split and the staffing plan (cost rates) are Admin/Manager input.
+    function projCreateKeyEmpty(k) {
+      return isEmptyValue(request.resource.data.get(k, null));
+    }
+    function projCreateFinanceOk() {
+      return projectFinanceManager(request.resource.data.businessId)
+        || (projCreateKeyEmpty('paymentMethod') && projCreateKeyEmpty('bankName') && projCreateKeyEmpty('bankIBAN')
+            && projCreateKeyEmpty('bankSWIFT') && projCreateKeyEmpty('bankAccountHolder') && projCreateKeyEmpty('bankCountry')
+            && projCreateKeyEmpty('serviceMix') && projCreateKeyEmpty('plannedRoles') && projCreateKeyEmpty('plannedHours')
+            && projCreateKeyEmpty('plannedLaborCost') && projCreateKeyEmpty('plannedDirectExpenses')
+            && projCreateKeyEmpty('targetMarginPct') && projCreateKeyEmpty('remainingHoursEstimate')
+            && projCreateKeyEmpty('wasRecurringBeforeArchive'));
     }
     match /projects/{docId} {
       // Portal clients reach projects either as the customer OR as an explicit
@@ -1286,7 +1521,8 @@ service cloud.firestore {
       // shape) and nothing else; update may spread them UNCHANGED only.
       allow create: if canCreateBusinessDoc() && !isViewerRole()
         && !request.resource.data.keys().hasAny(['laborCost', 'hoursByRole', 'spendRolledUpAt', 'budgetAlertsSent'])
-        && request.resource.data.get('spent', 0) == 0;
+        && request.resource.data.get('spent', 0) == 0
+        && projCreateFinanceOk();
       // STAFF ONLY. No portal view writes `projects` (PortalProjectsView /
       // PortalProjectDetailView only read), and the old `|| isPortalClientFor(...)`
       // let a client rename, re-budget, archive or DELETE the project — and the
@@ -1295,7 +1531,12 @@ service cloud.firestore {
       allow update: if canManageBusinessDoc() && keepsBusinessId() && !isViewerRole()
         && (isSuperAdmin()
             || !request.resource.data.diff(resource.data).affectedKeys()
-                .hasAny(projectRollupKeys()));
+                .hasAny(projectRollupKeys()))
+        // Money fields: Admin/Manager, or a Member edit that leaves them as they
+        // are / moves billing in the SAFE direction (see projectFinanceKeys).
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(projectFinanceKeys())
+            || projectFinanceManager(resource.data.businessId)
+            || (projMoneyUnchanged() && projBillingTransitionOk()));
       allow delete: if canManageBusinessDoc() && !isViewerRole();
     }
 
@@ -1580,13 +1821,20 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
-      allow create: if canCreateBusinessDoc() && !isViewerRole();
+      // The lines of a SETTLED invoice (Paid / Partial / Cancelled) are frozen
+      // for a Member exactly like its amounts (invoiceAmountsAllowed), and a line
+      // can never be moved to another invoice or tenant.
+      allow create: if canCreateBusinessDoc() && !isViewerRole()
+        && invoiceItemWriteAllowed(request.resource.data.get('invoiceId', ''), request.resource.data.businessId);
       // STAFF ONLY — the same hole that was closed on /invoices was left open here:
       // `isPortalClientFor(...)` let a client rewrite or delete the line items of
       // their own invoice from the browser console. The itemisation is part of the
       // accounting record; a portal client has no legitimate write to it.
-      allow update: if canManageBusinessDoc() && keepsBusinessId() && !isViewerRole();
-      allow delete: if canManageBusinessDoc() && !isViewerRole();
+      allow update: if canManageBusinessDoc() && keepsBusinessId() && !isViewerRole()
+        && (isSuperAdmin() || request.resource.data.get('invoiceId', null) == resource.data.get('invoiceId', null))
+        && invoiceItemWriteAllowed(resource.data.get('invoiceId', ''), resource.data.businessId);
+      allow delete: if canManageBusinessDoc() && !isViewerRole()
+        && invoiceItemWriteAllowed(resource.data.get('invoiceId', ''), resource.data.businessId);
     }
 
     match /taskComments/{docId} {
@@ -2783,7 +3031,32 @@ service cloud.firestore {
           resource == null
             ? !request.resource.data.keys().hasAny(teamSettingsSecretKeys())
             : !request.resource.data.diff(resource.data).affectedKeys().hasAny(teamSettingsSecretKeys())
-        );
+        )
+        // The company's MONEY configuration — the bank accounts printed on every
+        // invoice (and emailed to clients), the employer-cost / capacity settings
+        // and the rate card behind every cost/hour — is owner/Admin only. A
+        // Manager runs a department; changing the IBAN clients pay into or the
+        // cost rate of every colleague is a company-level decision.
+        && (isTeamSettingsFinanceWriter(teamId)
+            || (resource == null
+                ? !request.resource.data.keys().hasAny(teamSettingsFinanceKeys())
+                : !request.resource.data.diff(resource.data).affectedKeys().hasAny(teamSettingsFinanceKeys())));
+    }
+    function teamSettingsFinanceKeys() {
+      return ['bankAccounts', 'financeSettings', 'rateCard'];
+    }
+    // Owner/Admin of the team's business: the signed claim (isBusinessOwnerOrAdmin),
+    // the business doc's owner, the team's creator, or an active `Admin`
+    // membership row (tokens that predate the `roles` claim).
+    function isTeamSettingsFinanceWriter(teamId) {
+      return isSuperAdmin()
+        || isBusinessOwnerOrAdmin(businessOfTeam(teamId))
+        || isBusinessOwner(businessOfTeam(teamId))
+        || isTeamOwner(teamId)
+        || (isAuth() && teamId is string
+            && exists(membershipRef(teamId, request.auth.uid))
+            && get(membershipRef(teamId, request.auth.uid)).data.get('role', '') == 'Admin'
+            && get(membershipRef(teamId, request.auth.uid)).data.get('status', 'Active') != 'Inactive');
     }
 
     // ── counters: atomic invoice number sequences ──

@@ -6,6 +6,8 @@ import {
   buildCashflowByMonth,
   buildExpensesByMonth,
   buildRevenueByMonth,
+  getInvoiceCollectedNative,
+  getInvoiceOutstandingNative,
   buildRevenueByMonthAccrual,
   buildRevenueByMonthByBasis,
   calculateAccountsReceivable,
@@ -606,5 +608,31 @@ describe('getInvoiceCollectedBetween dates a legacy instalment by the invoice', 
     const inv = mkInvoice({ status: 'Pending', total: 1000, currency: 'ALL', paidAmount: 250, createdAt: new Date('2026-03-05T10:00:00Z') });
     expect(getInvoiceCollectedBetween(inv, march[0], march[1])).toBe(250);
     expect(getInvoiceCollectedBetween(inv, june[0], june[1])).toBe(0);
+  });
+});
+
+describe('buildRevenueByMonth pending = outstanding', () => {
+  it('counts a Partial invoice by its remainder, never the paid part twice', () => {
+    const invoices = [
+      { id: 'a', status: 'Partial', total: 100_000, currency: 'ALL', invoiceDate: new Date(2026, 2, 10),
+        partialPayments: [{ amount: 40_000, paidAt: new Date(2026, 2, 12) }] },
+      { id: 'b', status: 'Pending', total: 50_000, currency: 'ALL', invoiceDate: new Date(2026, 2, 5) },
+      { id: 'c', status: 'Overdue', total: 30_000, currency: 'ALL', invoiceDate: new Date(2026, 2, 6), paidAt: new Date(2026, 2, 7), paidAmount: 10_000 },
+      { id: 'd', status: 'Cancelled', total: 999, currency: 'ALL', invoiceDate: new Date(2026, 2, 6) },
+    ] as unknown as Invoice[];
+    const march = buildRevenueByMonth(invoices, 2026)[2];
+    expect(march.pending).toBe(60_000 + 50_000 + 20_000);
+    expect(march.paid).toBe(40_000 + 10_000);
+  });
+});
+
+describe('native settlement twins', () => {
+  it('match the ALL definitions without FX', () => {
+    const partial = { status: 'Partial', total: 300, currency: 'EUR', partialPayments: [{ amount: 100 }, { amount: 50 }] } as unknown as Invoice;
+    expect(getInvoiceCollectedNative(partial)).toBe(150);
+    expect(getInvoiceOutstandingNative(partial)).toBe(150);
+    const overdue = { status: 'Overdue', total: 200, currency: 'EUR', paidAmount: 80 } as unknown as Invoice;
+    expect(getInvoiceOutstandingNative(overdue)).toBe(120);
+    expect(getInvoiceOutstandingNative({ status: 'Cancelled', total: 5 } as unknown as Invoice)).toBe(0);
   });
 });

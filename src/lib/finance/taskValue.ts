@@ -79,6 +79,10 @@ export async function applyValuedTaskSideEffects(opts: {
   taskTitle: string;
   value: number;
   project?: (Pick<Project, 'billingType' | 'isRecurring' | 'customerId' | 'teamId' | 'name'> & { id: string; businessId?: string; currency?: string }) | null;
+  /** May this user change `project.budget`? The rules make it Admin/Manager only
+   *  (a project's money fields), so a Member's increment would be DENIED after the
+   *  draft invoice was already written. Unset = true (legacy callers). */
+  canEditBudget?: boolean;
 }): Promise<ValuedTaskResult> {
   const decision = taskValueDecision(opts.value, opts.project);
   if (!decision.createDraftInvoice) return { appliedToBudget: false, skipped: true };
@@ -127,7 +131,10 @@ export async function applyValuedTaskSideEffects(opts: {
     updatedAt: issuedAt,
   }));
 
-  if (decision.applyToBudget && opts.project?.id) {
+  // A Member cannot grow the budget: the draft invoice stands, the task stays
+  // un-applied (`valueAppliedToBudget` false) so a manager's backfill can add it.
+  const applyToBudget = decision.applyToBudget && opts.canEditBudget !== false;
+  if (applyToBudget && opts.project?.id) {
     // increment() is atomic — two tasks added at once both land, which a
     // read-then-write of `project.budget` would silently lose.
     await updateDoc(doc(db, 'projects', opts.project.id), { budget: increment(opts.value), updatedAt: new Date() });
@@ -135,7 +142,9 @@ export async function applyValuedTaskSideEffects(opts: {
   // Mark it counted so a later backfill can't add the same value twice. A
   // recurring project's task counts as "applied" too: its draft invoice IS the
   // billing artefact, and the backfill must never push it into the fee.
-  await updateDoc(doc(db, 'tasks', opts.taskId), { valueAppliedToBudget: true, updatedAt: new Date() });
+  if (applyToBudget || !decision.applyToBudget) {
+    await updateDoc(doc(db, 'tasks', opts.taskId), { valueAppliedToBudget: true, updatedAt: new Date() });
+  }
 
-  return { invoiceNumber, appliedToBudget: decision.applyToBudget, skipped: false };
+  return { invoiceNumber, appliedToBudget: applyToBudget, skipped: false };
 }

@@ -16,7 +16,7 @@ import type { Project, TimeEntry, Invoice } from '../../types';
 import { toAll } from '../utils';
 import { parseDate, getInvoiceBilledBetween, getInvoiceCollectedBetween } from './financialAnalytics';
 import { entryHours, entryDayKey, entryInstantMs } from './timeEntries';
-import { billingTypeOf, retainerRevenueInPeriod, monthsBetween } from './projectPeriod';
+import { billingTypeOf, retainerRevenueInPeriod, monthsBetween, monthlyFeeOf } from './projectPeriod';
 import {
   earnedCumulative,
   earnedInPeriod,
@@ -41,6 +41,14 @@ export function declaredRecognitionMethod(p: Project): RecognitionMethod {
 export function plannedHoursOf(p: Project): number {
   if (p.plannedHours && p.plannedHours > 0) return p.plannedHours;
   return (p.plannedRoles || []).reduce((s, r) => s + (Number(r.plannedHours) || 0), 0);
+}
+
+/**
+ * A retainer's fee PER MONTH in ALL. `budget` is per billing cycle and the Part 2
+ * cron bills it every WEEK for a weekly retainer (see `monthlyFeeOf`).
+ */
+export function monthlyFeeAll(p: Project): number {
+  return toAll(monthlyFeeOf(p), p.currency);
 }
 
 /** Everything the core needs about a project, in ALL and milliseconds. */
@@ -87,7 +95,7 @@ export function projectEarnedInPeriod(p: Project, entries: TimeEntry[] | null | 
   const facts = recognitionFacts(p);
   if (facts.method === 'monthly') {
     const months = monthsBetween(period.start, period.end);
-    return retainerRevenueInPeriod(p, facts.contractValue, period.start, period.end, months).revenue;
+    return retainerRevenueInPeriod(p, monthlyFeeAll(p), period.start, period.end, months).revenue;
   }
   const startMs = period.start.getTime();
   const endMs = period.end.getTime();
@@ -106,7 +114,7 @@ export function projectEarnedToDate(p: Project, entries: TimeEntry[] | null | un
   if (facts.method === 'monthly') {
     const start = parseDate(p.createdAt) || asOf;
     const months = monthsBetween(start, asOf);
-    return retainerRevenueInPeriod(p, facts.contractValue, start, asOf, months).revenue;
+    return retainerRevenueInPeriod(p, monthlyFeeAll(p), start, asOf, months).revenue;
   }
   return earnedCumulative(facts, asOf.getTime(), projectHoursUpTo(entries, p.id, asOf.getTime()));
 }

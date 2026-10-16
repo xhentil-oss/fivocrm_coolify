@@ -60,7 +60,7 @@ function getTeamDeptIcon(department?: string) {
 }
 import { usePermissions } from '../contexts/PermissionsContext';
 import { cn } from '../lib/utils';
-import { appendSalaryChange } from '../lib/finance/salaryHistory';
+import { appendSalaryChange, leftAtForStatusChange } from '../lib/finance/salaryHistory';
 import { useMemberCompensation, saveMemberCompensation } from '../hooks/useMemberCompensation';
 import { readTenantClaims } from '../lib/tenantClaims';
 import { parseDate } from '../lib/finance/financialAnalytics';
@@ -1500,10 +1500,17 @@ const EditMemberForm: React.FC<{
       );
     }
 
-    // Termination date: only meaningful for someone off payroll. Going back to
-    // Active clears it (an explicit `null`, because `undefined` is stripped by
-    // the mutation helper and would leave the old date in place).
-    const leftAtValue = status === 'Inactive' ? updateDateValue(leftAt ? `${leftAt}T12:00:00` : '') : null;
+    // Termination date: only meaningful for someone off payroll. Going Inactive
+    // ALWAYS stamps a date (the picked one, else today — "Bosh = nga sot e
+    // tutje"), because the `updatedAt` fallback moves with every later edit and
+    // resurrected the leaver's past salaries. Going back to Active clears it (an
+    // explicit `null`: `undefined` is stripped by the mutation helper and would
+    // leave the old date in place). Rules: leftAtForStatusChange (salaryHistory.ts).
+    const leftAtValue = leftAtForStatusChange(
+      member as any,
+      status,
+      status === 'Inactive' ? updateDateValue(leftAt ? `${leftAt}T12:00:00` : '') : null,
+    );
 
     onSubmit({
       role,
@@ -1530,7 +1537,7 @@ const EditMemberForm: React.FC<{
       // Only include when we changed it, so unrelated edits don't clobber history.
       ...(salaryHistory !== member.salaryHistory ? { salaryHistory } : {}),
       // Skip the key entirely when there is nothing to say (no date now, none before).
-      ...(leftAtValue !== null || (member as any).leftAt ? { leftAt: leftAtValue } : {}),
+      ...(leftAtValue !== undefined ? { leftAt: leftAtValue as any } : {}),
     });
   };
 

@@ -89,6 +89,27 @@ export function getInvoiceOutstandingAll(inv: Invoice): number {
   return Math.max(0, getInvoiceTotalAll(inv) - getInvoiceCollectedAll(inv));
 }
 
+/**
+ * The SAME two definitions in the invoice's OWN currency (no FX) — for showing a
+ * client "paguar deri tani / mbetet" on the invoice itself. Must stay the
+ * native twin of `getInvoiceCollectedAll` / `getInvoiceOutstandingAll`.
+ */
+export function getInvoiceCollectedNative(inv: Invoice): number {
+  if (inv.status === 'Draft' || inv.status === 'Cancelled') return 0;
+  const total = Number(inv.total ?? inv.amount ?? 0) || 0;
+  if (inv.status === 'Paid') return total;
+  if (inv.partialPayments?.length) {
+    return inv.partialPayments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  }
+  return Number(inv.paidAmount) || 0;
+}
+
+export function getInvoiceOutstandingNative(inv: Invoice): number {
+  if (inv.status === 'Paid' || inv.status === 'Draft' || inv.status === 'Cancelled') return 0;
+  const total = Number(inv.total ?? inv.amount ?? 0) || 0;
+  return Math.max(0, total - getInvoiceCollectedNative(inv));
+}
+
 export function getExpenseDate(exp: Expense): Date | null {
   return parseDate(exp.date) || parseDate(exp.createdAt);
 }
@@ -275,8 +296,11 @@ export function buildRevenueByMonth(invoices: Invoice[] | undefined, year: numbe
     // This one read `createdAt`, so one chart carried three different date bases
     // (payment date, creation date, invoice date) and a back-dated invoice landed
     // in the month it was typed rather than the month it belongs to.
+    // Partial invoices owe their remainder too; each contributes only what is
+    // still OUTSTANDING (the one definition, `getInvoiceOutstandingAll`) — the
+    // full total double-counted the part already shown as `paid`.
     const pendingInvs = invoices.filter(inv => {
-      if (inv.status !== 'Pending' && inv.status !== 'Overdue') return false;
+      if (inv.status !== 'Pending' && inv.status !== 'Overdue' && inv.status !== 'Partial') return false;
       const rd = getInvoiceRecognitionDate(inv);
       if (!rd) return false;
       return rd.getMonth() === i && rd.getFullYear() === year;
@@ -288,7 +312,7 @@ export function buildRevenueByMonth(invoices: Invoice[] | undefined, year: numbe
     const mStart = new Date(year, i, 1, 0, 0, 0, 0);
     const mEnd = new Date(year, i + 1, 0, 23, 59, 59, 999);
     const paid = invoices.reduce((s, inv) => s + getInvoiceCollectedBetween(inv, mStart, mEnd), 0);
-    const pending = pendingInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, inv.currency), 0);
+    const pending = pendingInvs.reduce((s, inv) => s + getInvoiceOutstandingAll(inv), 0);
     return { label, value: paid, paid, pending, count: paidInvs.length };
   });
 }

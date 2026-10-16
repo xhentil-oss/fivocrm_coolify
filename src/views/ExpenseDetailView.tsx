@@ -41,6 +41,10 @@ import {
   expenseSeriesHealth,
   findUnlinkedSiblings,
   linkSiblingPatch,
+  linkSiblingParentPatch,
+  isExpenseMonthClosed,
+  monthClosedMessage,
+  expenseListQueryOptions,
   backfillBlockReason,
   backfillOccurrenceDraft,
   backfillParentPatch,
@@ -148,7 +152,8 @@ const ExpenseDetailView: React.FC = () => {
 
   // Same query options as ExpensesView, so the module-level listener is SHARED
   // when the user comes from the list — no second subscription over the same rows.
-  const { data: rawExpenses, loading } = useCollection<Expense>('expenses', { skipTeamFilter: true });
+  // A non-approver's read carries `category != 'Salary'` (rules are not filters).
+  const { data: rawExpenses, loading } = useCollection<Expense>('expenses', expenseListQueryOptions(isApprover));
   const expenses = useFilteredByOwner(rawExpenses);
   const { data: teams } = useCollection<Team>('teams');
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
@@ -213,6 +218,14 @@ const ExpenseDetailView: React.FC = () => {
     console.error(`[ExpenseDetail] ${title}:`, err);
     toast({ title, description: err?.message || 'Nuk ke leje për këtë veprim ose ndodhi një gabim.', variant: 'destructive' });
   };
+  /** A row dated in a CLOSED month is part of the closed books — refuse, and say why. */
+  const refuseClosedRows = (rows: Expense[]): boolean => {
+    const locked = rows.find(r => isExpenseMonthClosed(getExpenseDate(r), r.businessId, closes));
+    if (!locked) return false;
+    const at = getExpenseDate(locked);
+    toast({ title: 'Muaji është i mbyllur', description: monthClosedMessage(at), variant: 'destructive' });
+    return true;
+  };
 
   const handleTogglePause = async () => {
     if (!entity) return;
@@ -236,6 +249,7 @@ const ExpenseDetailView: React.FC = () => {
   };
 
   const handleApproval = async (row: Expense, verdict: 'Approved' | 'Rejected') => {
+    if (refuseClosedRows([row])) return;
     try { await expenseMutation.update(row.id, { approvalStatus: verdict, approvedByUserId: user?.uid } as any); }
     catch (err: any) { fail(err, verdict === 'Approved' ? 'Nuk u miratua' : 'Nuk u refuzua'); return; }
     toast({ title: verdict === 'Approved' ? 'U miratua ✓' : 'U refuzua' });
@@ -247,6 +261,7 @@ const ExpenseDetailView: React.FC = () => {
   const handleTogglePaid = async (period: SeriesPeriod) => {
     const rows = period.rows.filter(r => r.approvalStatus !== 'Rejected');
     if (!rows.length) return;
+    if (refuseClosedRows(rows)) return;
     const value = period.paid ? null : new Date();
     setBusyKey(period.key);
     const results = await Promise.allSettled(rows.map(r => expenseMutation.update(r.id, { paidDate: value } as any)));
@@ -282,9 +297,17 @@ const ExpenseDetailView: React.FC = () => {
     toast({ title: `${period.label} u regjistrua ✓`, description: 'Me të njëjtin id që do shkruante cron-i — nuk dyfishohet.' });
   };
 
+  // Adopting a hand-typed row makes it THAT period's occurrence, so the parent's
+  // claim/pointer move forward exactly as for a backfill — otherwise the cron
+  // books a second row for the same period.
   const handleLink = async (row: Expense) => {
     if (!entity) return;
-    try { await expenseMutation.update(row.id, linkSiblingPatch(entity, row) as any); }
+    if (refuseClosedRows([row])) return;
+    try {
+      await expenseMutation.update(row.id, linkSiblingPatch(entity, row) as any);
+      const parentPatch = linkSiblingParentPatch(entity, row);
+      if (parentPatch) await expenseMutation.update(entity.id, parentPatch as any);
+    }
     catch (err: any) { fail(err, 'Rreshti nuk u lidh'); return; }
     logActivity('expense_updated', `Rresht i lidhur me serinë: ${fmtDate(getExpenseDate(row))}`, { entityType: 'expense', entityId: entity.id });
     toast({ title: 'Rreshti u lidh me serinë ✓' });
@@ -364,7 +387,11 @@ const ExpenseDetailView: React.FC = () => {
   const committedAll = toAll(Number(entity.amount) || 0, entity.currency);
   const nextDue = health?.nextDueAt ?? null;
   const dueIn = nextDue ? daysBetween(nextDue, now) : null;
-  const canEdit = permissions.canEdit;
+  // A non-approver may only change rows they created (`createdByUserId == uid`
+  // in the expenses update/delete rules) — hide the action instead of failing.
+  const canModify = (e: Expense) => isApprover || (!!user?.uid && (e as any).createdByUserId === user.uid);
+  const canEdit = permissions.canEdit && canModify(entity);
+  const canEditRows = (rows: Expense[]) => permissions.canEdit && rows.length > 0 && rows.every(canModify);
   const missing = ledger?.periods.filter(p => p.state === 'missing') ?? [];
 
   return (
@@ -550,7 +577,7 @@ const ExpenseDetailView: React.FC = () => {
                         <td className="px-5 py-3"><ApprovalBadge status={p.approval} /></td>
                         <td className="px-5 py-3">
                           <div className="flex flex-wrap gap-1.5">
-                            {p.state === 'booked' && canEdit && p.approval !== 'Rejected' && (
+                            {p.state === 'booked' && canEditRows(p.rows) && p.approval !== 'Rejected' && (
                               <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" disabled={busyKey === p.key} onClick={() => handleTogglePaid(p)}>
                                 <BadgeCheck className="h-3 w-3" /> {p.paid ? 'Hiq pagesën' : 'Paguar'}
                               </Button>
@@ -561,7 +588,7 @@ const ExpenseDetailView: React.FC = () => {
                                 <Button variant="outline" size="sm" className="h-7 gap-1 border-red-200 text-xs text-red-700" onClick={() => p.rows.filter(r => r.approvalStatus === 'Submitted').forEach(r => handleApproval(r, 'Rejected'))}><ThumbsDown className="h-3 w-3" /> Refuzo</Button>
                               </>
                             )}
-                            {p.state === 'booked' && canEdit && p.rows.length === 1 && (
+                            {p.state === 'booked' && canEditRows(p.rows) && p.rows.length === 1 && (
                               <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => navigate(`/app/expenses?edit=${p.rows[0].id}`)}><Pencil className="h-3 w-3" /> Ndrysho</Button>
                             )}
                             {p.state === 'missing' && canEdit && (
@@ -609,15 +636,15 @@ const ExpenseDetailView: React.FC = () => {
                       )}
                       <ApprovalBadge status={p.approval} />
                     </div>
-                    {canEdit && (
+                    {permissions.canEdit && (
                       <div className="flex flex-wrap gap-1.5">
-                        {p.state === 'booked' && p.approval !== 'Rejected' && (
+                        {p.state === 'booked' && canEditRows(p.rows) && p.approval !== 'Rejected' && (
                           <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" disabled={busyKey === p.key} onClick={() => handleTogglePaid(p)}><BadgeCheck className="h-3 w-3" /> {p.paid ? 'Hiq pagesën' : 'Paguar'}</Button>
                         )}
-                        {p.state === 'booked' && p.rows.length === 1 && (
+                        {p.state === 'booked' && canEditRows(p.rows) && p.rows.length === 1 && (
                           <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => navigate(`/app/expenses?edit=${p.rows[0].id}`)}><Pencil className="h-3 w-3" /> Ndrysho</Button>
                         )}
-                        {p.state === 'missing' && (
+                        {p.state === 'missing' && canEdit && (
                           <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" disabled={!!block || busyKey === p.key} onClick={() => handleBackfill(p)}><Plus className="h-3 w-3" /> Shto manualisht</Button>
                         )}
                         {p.state === 'missing' && block && <span className="self-center text-[11px] text-muted-foreground">{BACKFILL_BLOCK_LABELS[block]}</span>}
@@ -682,7 +709,7 @@ const ExpenseDetailView: React.FC = () => {
                   {siblings.slice(0, 8).map(r => (
                     <li key={r.id} className="flex items-center justify-between gap-2 text-sm">
                       <span className="truncate">{fmtDate(getExpenseDate(r))} · {fmtMoney(Number(r.amount) || 0, r.currency)}</span>
-                      {canEdit && <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleLink(r)}><Link2 className="h-3 w-3" /> Lidhe</Button>}
+                      {canEdit && canModify(r) && <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => handleLink(r)}><Link2 className="h-3 w-3" /> Lidhe</Button>}
                     </li>
                   ))}
                 </ul>

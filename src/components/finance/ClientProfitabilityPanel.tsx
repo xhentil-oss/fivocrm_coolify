@@ -30,6 +30,8 @@ interface Props {
     fromSnapshot?: boolean;
     /** Live net total − closed net total; `null` when there is no snapshot to compare. */
     liveNetDrift?: number | null;
+    /** The revenue basis the close's snapshot is in (a close is always 'earned'). */
+    snapshotBasis?: 'earned' | 'collected' | null;
   } | null;
   canClose: boolean;
   /** Why the month cannot be closed yet (monthClose.ts); `null` = closable. */
@@ -70,6 +72,9 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
   const T = result.totals;
   const C = result.company;
   const s = result.settings;
+  const collectedBasis = result.revenueBasis === 'collected';
+  // A locked month whose snapshot is in the OTHER basis: the table is live, and says why.
+  const basisMismatch = !!closeState?.locked && !closeState.fromSnapshot && !!closeState.snapshotBasis && closeState.snapshotBasis !== result.revenueBasis;
 
   const rows = useMemo(() => {
     const list = onlyRisk ? result.rows.filter(r => r.status === 'investigate' || r.netProfit < 0 || r.projectsOverBudget > 0) : result.rows;
@@ -77,7 +82,7 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
   }, [result.rows, sort, onlyRisk]);
 
   const exportCsv = () => {
-    const head = ['Klienti', 'Kategori', 'Të ardhura të fituara', 'Pass-through', 'Punë direkte', 'Orë', 'Kosto direkte', 'Fitimi bruto', 'Marzhi bruto %', 'Overhead', 'Fitimi neto', 'Marzhi neto %', 'L/orë', 'Faturuar', 'Arkëtuar', 'Pa arkëtuar', 'Punë e pafaturuar'];
+    const head = ['Klienti', 'Kategori', collectedBasis ? 'Të ardhura (arkëtuar)' : 'Të ardhura të fituara', 'Pass-through', 'Punë direkte', 'Orë', 'Kosto direkte', 'Fitimi bruto', 'Marzhi bruto %', 'Overhead', 'Fitimi neto', 'Marzhi neto %', 'L/orë', 'Faturuar', 'Arkëtuar', 'Pa arkëtuar', 'Punë e pafaturuar'];
     const body = result.rows.map(r => [
       r.name, r.category || '', Math.round(r.earned), Math.round(r.passThrough), Math.round(r.directLabor), h1(r.hours), Math.round(r.directExpenses),
       Math.round(r.grossProfit), r.grossMarginPct == null ? '' : Math.round(r.grossMarginPct), Math.round(r.overhead), Math.round(r.netProfit),
@@ -109,11 +114,16 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
                 {closeState?.reopenedAt ? ` Rihapur më ${closeState.reopenedAt.toLocaleDateString('sq-AL')} dhe mbyllur sërish.` : ''}
               </p>
             )}
+            {basisMismatch && (
+              <p className="mt-0.5 text-[12px] font-semibold text-[#9a6b0a]">
+                Mbyllja është në bazën {closeState?.snapshotBasis === 'collected' ? 'Arkëtuar' : 'Fituar'} — kjo tabelë tregon shifrat live në bazën {collectedBasis ? 'Arkëtuar' : 'Fituar'}. Kalo te «{closeState?.snapshotBasis === 'collected' ? 'Arkëtuar' : 'Fituar'}» për shifrat e mbylljes.
+              </p>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {closeState?.locked ? (
               <>
-                <span className="inline-flex items-center gap-1 rounded-full border border-[#e3e9f2] bg-[#f4f7fb] px-2.5 py-1 text-[11.5px] font-bold text-[#08183A]" title={closeState.fromSnapshot ? 'Tabela tregon shifrat e ruajtura në mbyllje (snapshot).' : 'Nuk u gjet snapshot — tabela tregon shifrat live.'}>
+                <span className="inline-flex items-center gap-1 rounded-full border border-[#e3e9f2] bg-[#f4f7fb] px-2.5 py-1 text-[11.5px] font-bold text-[#08183A]" title={closeState.fromSnapshot ? 'Tabela tregon shifrat e ruajtura në mbyllje (snapshot).' : basisMismatch ? 'Snapshot-i është në bazën tjetër të të ardhurave — tabela tregon shifrat live.' : 'Nuk u gjet snapshot — tabela tregon shifrat live.'}>
                   <Lock className="h-3 w-3" /> Muaj i mbyllur{closeState.closedAt ? ` · ${closeState.closedAt.toLocaleDateString('sq-AL')}` : ''}{closeState.fromSnapshot ? ' · snapshot' : ' · live'}
                 </span>
                 {canClose && onReopenMonth && (
@@ -150,7 +160,10 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
           <Tile label="Overhead" value={T.overhead} sub={C.unallocatedOverhead > 0 ? `pa alokuar ${formatALL(Math.round(C.unallocatedOverhead))}` : `pool ${formatALL(Math.round(C.overheadPool))}`} />
           <Tile label="Fitimi neto" value={T.netProfit} sub={pctTxt(T.netMarginPct)} tone={T.netProfit >= 0 ? 'pos' : 'neg'} strong />
           <Tile label="Punë e pafaturuar" value={T.unbilledEarned} sub="e fituar, jo në faturë" />
-          <Tile label="Pa arkëtuar (gjithsej)" value={T.outstanding} sub="borxhi total, jo vetëm periudha" tone={T.outstanding > 0 ? 'warn' : undefined} />
+          {/* Company-wide, like the KPI "Të pambledhura": every invoice still owed,
+              including clients with no row this period and invoices with no client.
+              The table's Σ column stays the per-client figure. */}
+          <Tile label="Pa arkëtuar (gjithsej)" value={C.outstandingAll ?? T.outstanding} sub={(C.outstandingAll ?? T.outstanding) > T.outstanding ? `te klientët e tabelës ${formatALL(Math.round(T.outstanding))}` : 'borxhi total, jo vetëm periudha'} tone={(C.outstandingAll ?? T.outstanding) > 0 ? 'warn' : undefined} />
         </div>
         <details className="mt-3 text-[12.5px] text-[#7286a3]">
           <summary className="cursor-pointer font-semibold text-[#08183A]">Si lidhet me Financat (rezultati operativ i periudhës)</summary>
@@ -159,6 +172,10 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
             <Line k="— në rreshtat e klientëve (orë × kosto/orë)" v={-T.directLabor} />
             <Line k="— pa rresht klienti → overhead (bench, orë pa projekt, projekte të brendshme / jashtë periudhës)" v={-C.poolLabor} />
             {C.internalProjectLabor > 0 && <Line k="   nga të cilat: punë në projekte të brendshme" v={C.internalProjectLabor} />}
+            {/* Rows are costed at the LOADED rate (salary + employer contributions),
+                payroll is what was paid: the difference is a reconciliation line,
+                never a negative overhead (clientProfitability.ts `loadCredit`). */}
+            {(C.loadCredit || 0) > 0 && <Line k="+ Kontributet e punëdhënësit të ngarkuara mbi pagën e regjistruar" v={C.loadCredit} />}
             <Line k="Shpenzime pa projekt → overhead" v={C.otherFixed} />
             {C.directOutsideRows > 0 && <Line k="Shpenzime direkte të projekteve pa rresht klienti (vetëm te rezultati operativ)" v={C.directOutsideRows} />}
             {C.overAbsorbedLabor > 0 && <Line k="⚠ Orët × tarifat mbi pagën reale" v={C.overAbsorbedLabor} />}
@@ -166,9 +183,9 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
           </div>
           <p className="mt-2">
             Çdo lek page është ose në një rresht klienti, ose në pool-in e overhead-it — asnjë orë nuk humbet.
-            {' '}Σ fitimi neto i klientëve + overhead i paalokuar{C.directOutsideRows > 0 ? ' − shpenzimet direkte të projekteve pa rresht' : ''} = fitimi operativ
+            {' '}Σ fitimi neto i klientëve{C.unallocatedOverhead > 0 ? ' − overhead i paalokuar' : ''}{(C.loadCredit || 0) > 0 ? ' + kontributet e punëdhënësit të ngarkuara mbi pagën e regjistruar' : ''}{C.directOutsideRows > 0 ? ' − shpenzimet direkte të projekteve pa rresht' : ''} = fitimi operativ
             {result.revenueBasis === 'collected' ? ' (me bazën "arkëtuar" ndryshojnë vetëm arkëtimet pa klient)' : ''}.
-            {C.overAbsorbedLabor > 0 ? ' Teprica e orëve × tarifave mbi pagën reale e prish barazimin — kontrollo tarifat.' : ''}
+            {C.overAbsorbedLabor > 0 ? ' Orët × tarifat e ngarkuara kalojnë pagën + kontributet — kontrollo tarifat/kapacitetin.' : ''}
           </p>
         </details>
       </section>
@@ -248,7 +265,7 @@ const ClientProfitabilityPanel: React.FC<Props> = ({ result, periodLabel, monthK
                   {open === r.customerId && !frozen && (
                     <tr className="bg-[#f9fbfe]">
                       <td colSpan={12} className="px-5 pb-4 pt-1 sm:px-6">
-                        <ClientDetail row={r} openProject={openProject} setOpenProject={setOpenProject} thresholds={s.marginThresholds} />
+                        <ClientDetail row={r} openProject={openProject} setOpenProject={setOpenProject} thresholds={s.marginThresholds} collectedBasis={collectedBasis} />
                       </td>
                     </tr>
                   )}
@@ -311,7 +328,7 @@ const Cell: React.FC<{ v: number; sub?: string; tone?: 'pos' | 'neg'; strong?: b
   </td>
 );
 
-const ClientDetail: React.FC<{ row: ClientRow; openProject: string | null; setOpenProject: (id: string | null) => void; thresholds: { healthy: number; watch: number } }> = ({ row, openProject, setOpenProject }) => (
+const ClientDetail: React.FC<{ row: ClientRow; openProject: string | null; setOpenProject: (id: string | null) => void; thresholds: { healthy: number; watch: number }; collectedBasis?: boolean }> = ({ row, openProject, setOpenProject, collectedBasis }) => (
   <div className="grid gap-3 lg:grid-cols-[1fr_300px]">
     <div className="rounded-[14px] border border-[#e3e9f2] bg-white">
       <table className="w-full text-[12.5px]">
@@ -356,7 +373,9 @@ const ClientDetail: React.FC<{ row: ClientRow; openProject: string | null; setOp
             </React.Fragment>
           ))}
           {row.unlinkedInvoiced > 0 && (
-            <tr><td colSpan={7} className="px-3 py-2 text-[11.5px] text-[#9a6b0a]">+ {formatALL(Math.round(row.unlinkedInvoiced))} faturuar pa projekt (nuk hyn te të ardhurat e fituara).</td></tr>
+            <tr><td colSpan={7} className="px-3 py-2 text-[11.5px] text-[#9a6b0a]">+ {formatALL(Math.round(row.unlinkedInvoiced))} faturuar pa projekt {collectedBasis
+              ? '(asnjë projekt nuk e fiton; te të ardhurat e arkëtuara hyn vetëm paraja e mbledhur prej tyre në periudhë).'
+              : '(nuk hyn te të ardhurat e fituara — asnjë projekt nuk e fiton).'}</td></tr>
           )}
         </tbody>
       </table>
@@ -374,7 +393,7 @@ const ClientDetail: React.FC<{ row: ClientRow; openProject: string | null; setOp
         </ul>
       )}
       <p className="mt-3 text-[10.5px] font-extrabold uppercase tracking-[.08em] text-[#94a5bd]">Kontrata</p>
-      <p className={cn('text-[12.5px]', NUM)}>{formatALL(Math.round(row.contractValue))} <span className="text-[#94a5bd]">vlerë · </span>{formatALL(Math.round(row.earned))} <span className="text-[#94a5bd]">fituar në periudhë</span></p>
+      <p className={cn('text-[12.5px]', NUM)}>{formatALL(Math.round(row.contractValue))} <span className="text-[#94a5bd]">vlerë · </span>{formatALL(Math.round(row.earned))} <span className="text-[#94a5bd]">{collectedBasis ? 'arkëtuar në periudhë' : 'fituar në periudhë'}</span></p>
     </div>
   </div>
 );

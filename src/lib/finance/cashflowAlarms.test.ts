@@ -24,8 +24,8 @@ function mkMember(p: Partial<TeamMember>): TeamMember {
 describe('computeCashflowHealth', () => {
   it('normalises recurring inflow and fixed outflow to per-month', () => {
     const invoices = [
-      mkInvoice({ id: 'r', total: 50_000, status: 'Pending', isRecurring: true, recurringFrequency: 'monthly' }),
-      mkInvoice({ id: 'y', total: 120_000, status: 'Pending', isRecurring: true, recurringFrequency: 'yearly' }), // → 10k/mo
+      mkInvoice({ id: 'r', total: 50_000, status: 'Pending', isRecurring: true, recurringFrequency: 'monthly', nextRecurringDate: new Date('2026-08-05') }),
+      mkInvoice({ id: 'y', total: 120_000, status: 'Pending', isRecurring: true, recurringFrequency: 'yearly', nextRecurringDate: new Date('2026-08-05') }), // → 10k/mo
     ];
     const members = [mkMember({ monthlySalary: 40_000 })];
     const res = computeCashflowHealth(invoices, [], members, [], NOW);
@@ -76,7 +76,7 @@ describe('computeCashflowHealth', () => {
   });
 
   it('raises a red alarm when fixed costs exceed recurring income', () => {
-    const invoices = [mkInvoice({ id: 'r', total: 30_000, status: 'Pending', isRecurring: true, recurringFrequency: 'monthly' })];
+    const invoices = [mkInvoice({ id: 'r', total: 30_000, status: 'Pending', isRecurring: true, recurringFrequency: 'monthly', nextRecurringDate: new Date('2026-08-05') })];
     const members = [mkMember({ monthlySalary: 100_000 })];
     const res = computeCashflowHealth(invoices, [], members, [], NOW);
     expect(res.gap).toBe(-70_000);
@@ -130,5 +130,15 @@ describe('computeCashflowHealth', () => {
     const c = res.alarms.find(a => a.id === 'concentration');
     expect(c?.customerId).toBe('small');   // 40k of the 50k collected in May–Jul
     expect(c?.amount).toBe(40_000);
+  });
+
+  it('a tenant whose cash ALL comes from one client alarms once the cash is meaningful', () => {
+    const one = [mkInvoice({ id: 'a', total: 120_000, status: 'Paid', customerId: 'only', paidAt: new Date('2026-06-01') })];
+    const c = computeCashflowHealth(one, [], [], [], NOW).alarms.find(a => a.id === 'concentration');
+    expect(c?.customerId).toBe('only');
+    expect(c?.amount).toBe(120_000);
+    // A single small test payment is not a business at risk yet.
+    const tiny = [mkInvoice({ id: 't', total: 5_000, status: 'Paid', customerId: 'only', paidAt: new Date('2026-06-01') })];
+    expect(computeCashflowHealth(tiny, [], [], [], NOW).alarms.find(a => a.id === 'concentration')).toBeUndefined();
   });
 });
