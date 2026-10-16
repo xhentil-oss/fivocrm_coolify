@@ -8,6 +8,7 @@ import type { Project, TeamMember } from '../../types';
 import { parseDate } from './financialAnalytics';
 import { memberEndDate, memberSalaryForMonth } from './salaryHistory';
 import { TERMINAL_PROJECT_STATUSES } from './recurringBilling';
+import { monthlyFeeFromCycleFee } from './projectCycles';
 
 export function isProjectCompleted(p: Project): boolean {
   return p.status === 'Completed' || (!!(p as any).isRecurring && !!(p as any).lastCompletedAt);
@@ -83,7 +84,9 @@ export const WEEKS_PER_MONTH = 52 / 12;
  */
 export function monthlyFeeOf(p: Pick<Project, 'budget' | 'recurringFrequency'>): number {
   const budget = Number(p.budget) || 0;
-  return (p as any).recurringFrequency === 'weekly' ? budget * WEEKS_PER_MONTH : budget;
+  // weekly × 52/12; quarterly ÷ 3 and yearly ÷ 12 — a year paid up front in
+  // January is EARNED 1/12 per month, the rest is "paguar përpara" (deferred).
+  return monthlyFeeFromCycleFee(budget, (p as any).recurringFrequency || 'monthly');
 }
 
 /**

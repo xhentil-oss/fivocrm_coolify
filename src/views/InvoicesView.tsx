@@ -335,7 +335,7 @@ const InvoicesView: React.FC = () => {
   };
 
   const handleStopSeries = async (project: Project) => {
-    await seriesProjectMutation.update(project.id, stopProjectBillingPatch() as any);
+    await seriesProjectMutation.update(project.id, stopProjectBillingPatch(new Date(), project as any) as any);
     setSeriesToStop(null);
     toast({
       title: '⏹ Faturimi periodik u ndërpre',

@@ -83,6 +83,7 @@ export const NOTIFICATION_TYPES = {
   project_status_changed:   { category: 'projects', priority: 'info' },
   project_open_reminder:    { category: 'projects', priority: 'warning',  groupLabel: 'kujtesa projektesh' },
   project_cycle_reset:      { category: 'projects', priority: 'neutral' },
+  project_renewal_upcoming: { category: 'projects', priority: 'neutral' },
   // Budget consumed crossed 70 / 85 / 100 % of the staffing plan (project-spend-rollup).
   project_budget_alert:     { category: 'projects', priority: 'warning',  groupLabel: 'alarme buxheti projektesh' },
   lead_created:             { category: 'projects', priority: 'info',     groupLabel: 'lead të rinj' },

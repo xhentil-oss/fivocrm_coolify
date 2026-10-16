@@ -21,8 +21,8 @@
 import type { Project } from '../types';
 // The claim (`lastInvoicePeriodKey`) is the billing engine's idempotency token, so
 // restore has to speak the engine's own vocabulary rather than invent keys here.
-import { projectBillingPeriodKey, TERMINAL_PROJECT_STATUSES } from './finance/recurringBilling';
-import { addZonedDays, zonedDate, zonedParts } from './recurringUtils';
+import { projectBillingAnchor, projectBillingPeriodKey, TERMINAL_PROJECT_STATUSES } from './finance/recurringBilling';
+import { materializeWorkCyclePatch, previousBillingPeriodStart } from './finance/projectCycles';
 
 /** The subset an archive/restore decision actually needs. */
 export type ArchivableProject = Pick<Project, 'status'> &
@@ -35,6 +35,10 @@ export type ArchivableProject = Pick<Project, 'status'> &
       | 'statusBeforeArchive'
       | 'wasRecurringBeforeArchive'
       | 'recurringEndDate'
+      | 'workCycle'
+      | 'billingAnchorAt'
+      | 'startDate'
+      | 'createdAt'
     >
   >;
 
@@ -67,6 +71,10 @@ export function archiveProjectPatch(
     statusBeforeArchive: previous && previous !== 'Archived' ? previous : DEFAULT_RESTORED_STATUS,
     ...(project.isRecurring
       ? {
+          // An archived project does no work either (terminal status), but the
+          // cycle must survive the round trip: restore gives back a retainer
+          // whose tasks still repeat.
+          ...materializeWorkCyclePatch(project),
           isRecurring: false,
           wasRecurringBeforeArchive: true,
           recurringBillingStoppedReason: 'archived',
@@ -80,13 +88,6 @@ export function isTerminalProjectStatus(status: Project['status'] | undefined | 
   return !!status && (TERMINAL_PROJECT_STATUSES as ReadonlyArray<string>).includes(status);
 }
 
-/** Start of the period immediately before the one `at` falls in. */
-function previousPeriodStart(frequency: string, at: Date): Date {
-  if (frequency === 'weekly') return addZonedDays(at, -7);
-  const p = zonedParts(at);
-  // The 1st, so stepping back from the 31st cannot skip a short month.
-  return zonedDate(p.year, p.month - 1, 1);
-}
 
 /**
  * Re-point a stale period claim so resuming billing does not raise a false alarm.
@@ -118,8 +119,9 @@ export function resumedBillingClaimPatch(
   const claim = project.lastInvoicePeriodKey;
   if (!claim) return {};
   const frequency = project.recurringFrequency || 'monthly';
-  if (claim === projectBillingPeriodKey(frequency, at)) return {};
-  const previousKey = projectBillingPeriodKey(frequency, previousPeriodStart(frequency, at));
+  const anchor = projectBillingAnchor(project);
+  if (claim === projectBillingPeriodKey(frequency, at, anchor)) return {};
+  const previousKey = projectBillingPeriodKey(frequency, previousBillingPeriodStart(frequency, at, anchor), anchor);
   if (claim === previousKey) return {};
   return { lastInvoicePeriodKey: previousKey };
 }

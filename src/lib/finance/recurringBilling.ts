@@ -15,87 +15,76 @@
 // `projectBillingBlockReason` in `api/cron/run.ts` — keep the two in sync.
 
 import type { Project } from '../../types';
-// Billing period keys are CALENDAR questions, so they are answered in ONE
-// declared zone. Read with the machine's getters they differed between the
-// browser (Europe/Tirane) and the cron body (Vercel, UTC) — see the note in
-// recurringUtils.ts. Mirrored in `api/cron/run.ts`.
-import { zonedParts, zonedDate, startOfZonedWeek, daysInZonedMonth } from '../recurringUtils';
+// The calendar math (period keys, anchors, the block reason) lives in the
+// import-free core `projectCycles.ts`, whose byte-identical copy
+// `api/_projectCycles.ts` the cron uses — so browser and server can no longer
+// drift. This module keeps the names the app already imports.
+import {
+  SUPPORTED_BILLING_FREQUENCIES,
+  billingAnchorOf,
+  billingBlockReason,
+  billingFrequencyOf,
+  billingPeriodEnd,
+  billingPeriodKey,
+  billingPeriodsSkipped,
+  isAnchoredFrequency,
+  materializeWorkCyclePatch,
+  startOfCycleWeek,
+  zonedMonthIndex,
+  type BillingBlock,
+  type BillingCandidate,
+  type BillingFrequency,
+} from './projectCycles';
 
-export type ProjectBillingFrequency = 'weekly' | 'monthly';
+export type ProjectBillingFrequency = BillingFrequency;
 
 /** Frequencies a recurring project can actually be billed on. */
-export const SUPPORTED_PROJECT_BILLING_FREQUENCIES: ReadonlyArray<ProjectBillingFrequency> = ['weekly', 'monthly'];
+export const SUPPORTED_PROJECT_BILLING_FREQUENCIES: ReadonlyArray<ProjectBillingFrequency> = SUPPORTED_BILLING_FREQUENCIES;
 
 /** Statuses that end a retainer for good — the series is cleared, not just skipped. */
 export const TERMINAL_PROJECT_STATUSES: ReadonlyArray<Project['status']> = ['Cancelled', 'Archived'];
 
-export type ProjectBillingBlock =
-  | 'not-recurring'
-  | 'unsupported-frequency'
-  | 'terminal-status'
-  | 'paused'
-  | 'one-time'
-  | 'series-ended'
-  | 'already-billed'
-  /** Monthly retainer whose chosen billing day (e.g. the 25th) hasn't arrived yet. */
-  | 'before-billing-day';
+export type ProjectBillingBlock = BillingBlock;
 
 /** Reasons that permanently end the series (the caller should clear `isRecurring`). */
 export const PERMANENT_BILLING_BLOCKS: ReadonlyArray<ProjectBillingBlock> = ['terminal-status', 'series-ended'];
 
-function pad2(n: number): string {
-  return String(n).padStart(2, '0');
-}
-
-function toDate(value: unknown): Date | null {
-  if (!value) return null;
-  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
-  // Firestore Timestamp (client or admin SDK).
-  const ts = value as { toDate?: () => Date };
-  if (typeof ts.toDate === 'function') {
-    const d = ts.toDate();
-    return d instanceof Date && !isNaN(d.getTime()) ? d : null;
-  }
-  const d = new Date(value as string | number);
-  return isNaN(d.getTime()) ? null : d;
-}
-
 /** Monday 00:00 (business zone) of the week `d` falls in — the weekly anchor. */
 export function startOfBillingWeek(d: Date): Date {
-  return startOfZonedWeek(d);
+  return startOfCycleWeek(d);
 }
 
 /** The frequency a project bills on, defaulting to monthly (the legacy behaviour). */
 export function projectBillingFrequency(project: Pick<Project, 'recurringFrequency'>): string {
-  return (project.recurringFrequency as string) || 'monthly';
+  return billingFrequencyOf(project);
+}
+
+/**
+ * The contract-year anchor of a quarterly / yearly retainer (null for weekly /
+ * monthly, whose periods are calendar weeks / months).
+ */
+export function projectBillingAnchor(
+  project: Pick<Project, 'recurringFrequency'> & { billingAnchorAt?: unknown; startDate?: unknown; createdAt?: unknown },
+): Date | null {
+  return isAnchoredFrequency(billingFrequencyOf(project)) ? billingAnchorOf(project) : null;
 }
 
 /**
  * Stable key for the billing period `at` falls in. Exactly one invoice may exist
- * per (project, key) — this is the idempotency token that replaces the old
- * "same calendar month?" comparison.
+ * per (project, key) — this is the idempotency token.
  *
- *   monthly → '2026-08'
- *   weekly  → '2026-W-2026-08-03'  (anchored on the Monday, so it is comparable
- *             across month boundaries without ISO week-number edge cases)
+ *   monthly   → '2026-08'
+ *   weekly    → 'W2026-08-03'  (anchored on the Monday)
+ *   quarterly → 'Q2026-03'     (first month of the quarter, anchored on the contract)
+ *   yearly    → 'Y2026-03'     (first month of the contract year)
  */
-export function projectBillingPeriodKey(frequency: string, at: Date): string {
-  if (frequency === 'weekly') {
-    const m = zonedParts(startOfBillingWeek(at));
-    return `W${m.year}-${pad2(m.month + 1)}-${pad2(m.day)}`;
-  }
-  const p = zonedParts(at);
-  return `${p.year}-${pad2(p.month + 1)}`;
+export function projectBillingPeriodKey(frequency: string, at: Date, anchor?: Date | null): string {
+  return billingPeriodKey(frequency, at, anchor);
 }
 
-/** Last day of the period `at` falls in — the natural due date for that invoice. */
-export function projectBillingPeriodEnd(frequency: string, at: Date): Date {
-  if (frequency === 'weekly') {
-    const m = zonedParts(startOfBillingWeek(at));
-    return zonedDate(m.year, m.month, m.day + 6, 23, 59, 59, 999);
-  }
-  const p = zonedParts(at);
-  return zonedDate(p.year, p.month, daysInZonedMonth(p.year, p.month), 23, 59, 59, 999);
+/** Last day of the period `at` falls in. */
+export function projectBillingPeriodEnd(frequency: string, at: Date, anchor?: Date | null): Date {
+  return billingPeriodEnd(frequency, at, anchor);
 }
 
 /**
@@ -103,8 +92,8 @@ export function projectBillingPeriodEnd(frequency: string, at: Date): Date {
  * decide from the raw `lastInvoiceGeneratedAt` timestamp whether the current
  * period was already billed.
  */
-export function periodAlreadyBilledLegacy(frequency: string, lastGeneratedAt: Date, at: Date): boolean {
-  return projectBillingPeriodKey(frequency, lastGeneratedAt) === projectBillingPeriodKey(frequency, at);
+export function periodAlreadyBilledLegacy(frequency: string, lastGeneratedAt: Date, at: Date, anchor?: Date | null): boolean {
+  return billingPeriodKey(frequency, lastGeneratedAt, anchor) === billingPeriodKey(frequency, at, anchor);
 }
 
 /**
@@ -113,23 +102,14 @@ export function periodAlreadyBilledLegacy(frequency: string, lastGeneratedAt: Da
  * rather than slipping into the next one).
  */
 export function billingDayForMonth(day: number, at: Date): number {
-  const p = zonedParts(at);
-  const lastDay = daysInZonedMonth(p.year, p.month);
+  const idx = zonedMonthIndex(at);
+  const year = Math.floor(idx / 12);
+  const month = idx % 12;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
   return Math.min(Math.max(1, Math.round(day)), lastDay);
 }
 
-export interface ProjectBillingCandidate {
-  status?: Project['status'];
-  isRecurring?: boolean;
-  isRecurringPaused?: boolean;
-  billingType?: Project['billingType'];
-  recurringFrequency?: string;
-  recurringEndDate?: unknown;
-  lastInvoicePeriodKey?: string;
-  lastInvoiceGeneratedAt?: unknown;
-  /** Day of month a monthly retainer issues its invoice (e.g. 25). */
-  billingDayOfMonth?: number;
-}
+export type ProjectBillingCandidate = BillingCandidate;
 
 /**
  * Why this project may NOT be billed for the period containing `now`, or `null`
@@ -140,54 +120,12 @@ export function projectBillingBlockReason(
   project: ProjectBillingCandidate,
   now: Date,
 ): ProjectBillingBlock | null {
-  if (!project.isRecurring) return 'not-recurring';
-
-  const frequency = projectBillingFrequency(project);
-  if (!SUPPORTED_PROJECT_BILLING_FREQUENCIES.includes(frequency as ProjectBillingFrequency)) {
-    return 'unsupported-frequency';
-  }
-
-  // Terminal status ends the engagement — a cancelled retainer must never invoice.
-  if (project.status && TERMINAL_PROJECT_STATUSES.includes(project.status)) return 'terminal-status';
-
-  // "Repeat until" — checked before the pause flag so an expired series is always
-  // cleaned up rather than left dormant.
-  const endDate = toDate(project.recurringEndDate);
-  if (endDate && now > endDate) return 'series-ended';
-
-  if (project.isRecurringPaused) return 'paused';
-
-  // A single deal value must never bill on a cycle, even if `isRecurring` got set
-  // by mistake — the two settings are contradictory and one-time wins.
-  if (project.billingType === 'one-time') return 'one-time';
-
-  const periodKey = projectBillingPeriodKey(frequency, now);
-  if (project.lastInvoicePeriodKey) {
-    if (project.lastInvoicePeriodKey === periodKey) return 'already-billed';
-  } else {
-    const last = toDate(project.lastInvoiceGeneratedAt);
-    if (last && periodAlreadyBilledLegacy(frequency, last, now)) return 'already-billed';
-  }
-
-  // Chosen billing day (monthly only): hold the invoice until that day arrives,
-  // e.g. bill social-media retainers on the 25th instead of the 1st. Transient —
-  // the same period bills normally once the day is reached.
-  if (frequency === 'monthly' && project.billingDayOfMonth) {
-    if (zonedParts(now).day < billingDayForMonth(project.billingDayOfMonth, now)) return 'before-billing-day';
-  }
-
-  return null;
+  return billingBlockReason(project, now);
 }
 
 /**
  * How many whole billing periods a retainer missed between `lastPeriodKey` and the
  * period containing `now` (0 when on schedule, or when the gap cannot be resolved).
- *
- * Project-driven billing derives everything from `now`, so a period the cron never
- * ran in is simply never billed — silently. The invoice engine already reports its
- * gap (`recurringPeriodsSkipped`); a retainer losing a whole month of revenue with
- * no signal at all is the same fault, on the side that carries the recurring money.
- *
  * Like the invoice engine, this only REPORTS. Backfilling closed months is the
  * owner's call.
  */
@@ -196,21 +134,9 @@ export function projectPeriodsSkipped(
   lastPeriodKey: string | undefined | null,
   now: Date,
   maxLookback = 24,
+  anchor?: Date | null,
 ): number {
-  if (!lastPeriodKey) return 0;
-  if (projectBillingPeriodKey(frequency, now) === lastPeriodKey) return 0;
-  const start = zonedParts(now);
-  let cursor = zonedDate(start.year, start.month, start.day);
-  for (let i = 0; i < maxLookback; i++) {
-    const c = zonedParts(cursor);
-    cursor = frequency === 'weekly'
-      ? zonedDate(c.year, c.month, c.day - 7)
-      // The 1st, so stepping back from the 31st cannot skip a short month.
-      : zonedDate(c.year, c.month - 1, 1);
-    if (projectBillingPeriodKey(frequency, cursor) === lastPeriodKey) return i;
-  }
-  // Older than the window (or a key from another frequency) — don't invent a number.
-  return 0;
+  return billingPeriodsSkipped(frequency, lastPeriodKey, now, anchor, maxLookback);
 }
 
 // ── Billing controls (pause / stop) ─────────────────────────────────────────
@@ -237,8 +163,14 @@ export function resumeProjectBillingPatch(): Partial<Project> {
  * Every issued invoice stays. `recurringFrequency` is kept so switching the
  * series back on later remembers its cycle.
  */
-export function stopProjectBillingPatch(at: Date = new Date()): Partial<Project> {
+export function stopProjectBillingPatch(
+  at: Date = new Date(),
+  project?: Partial<Pick<Project, 'isRecurring' | 'recurringFrequency' | 'workCycle'>> | null,
+): Partial<Project> {
   return {
+    // Stopping the INVOICES never stops the WORK: a project that still relied
+    // on the legacy coupling (no `workCycle`) gets its cycle written down first.
+    ...(project ? materializeWorkCyclePatch(project) : {}),
     isRecurring: false,
     isRecurringPaused: false,
     recurringBillingStoppedReason: 'manual',
@@ -259,13 +191,14 @@ export function isPermanentBillingBlock(reason: ProjectBillingBlock | null): boo
 
 export const PROJECT_BILLING_BLOCK_LABELS: Record<ProjectBillingBlock, string> = {
   'not-recurring': 'Projekti nuk faturohet periodikisht',
-  'unsupported-frequency': 'Frekuencë e pambështetur (vetëm javore / mujore)',
+  'unsupported-frequency': 'Frekuencë e pambështetur (javore / mujore / tremujore / vjetore)',
   'terminal-status': 'Projekti është anuluar ose arkivuar',
   'paused': 'Faturimi është në pauzë',
   'one-time': 'Lloji i faturimit është një-herësh',
   'series-ended': 'Seria mbaroi (data e fundit e përsëritjes kaloi)',
   'already-billed': 'Periudha u faturua',
   'before-billing-day': 'Pret ditën e faturimit',
+  'before-contract-start': 'Kontrata nuk ka nisur ende',
 };
 
 /**

@@ -378,6 +378,34 @@ permission `canAccessHosting`.
   `projectPnl.projectDate()` falls back to `updatedAt`, so bumping it dragged
   un-completed one-time projects into the current month's P&L.
 
+### Project cycles: WORK vs BILLING (Oct 2026)
+
+- **Two independent cycles, one import-free core**: `src/lib/finance/projectCycles.ts`
+  (byte-identical copy `api/_projectCycles.ts`, test-enforced). `workCycle`
+  (`weekly | monthly | null`) = when the tasks start again; `isRecurring` +
+  `recurringFrequency` (`weekly | monthly | quarterly | yearly`) = when the client is
+  invoiced. A project without `workCycle` falls back to the legacy coupling
+  (`projectWorkCycle()`); every new/edited project writes it explicitly.
+  `stopProjectBillingPatch(at, project)` / `archiveProjectPatch` call
+  `materializeWorkCyclePatch` first — stopping the invoices must never stop the work.
+- **Long cycles are anchored on the contract's start month** (`billingAnchorAt` →
+  `startDate` → `createdAt`): keys `Q2026-03` / `Y2026-03`, invoice issued in the
+  period's FIRST month on `billingDayOfMonth`, due `invoiceDueDays` later (default 15
+  — never the period end). A contract that starts later is `before-contract-start`.
+  `budget` stays the fee PER CYCLE; the form computes it as `listMonthlyFee × months ×
+  (1 − prepayDiscountPct)` (`projectBillingForm.ts`) and `monthlyFeeOf()` divides it
+  back, so every P&L earns 1/12 per month and the rest is deferred
+  (`retainerSummary.ts` → Faturimi panel "Paguar përpara"). A frequency OR anchor
+  change re-expresses the claim (`reexpressBillingClaim`).
+- **`recurring-project-reset` opens a cycle at the start of every period**, idempotent
+  on `workCycleLastPeriodKey` (server-owned, rules): Done → Todo, unfinished →
+  CARRIED (`carriedOverFromPeriod`, `carriedOverCount`, badge "mbartur"), a recurring
+  task is left to its own engine, dates move by the periods that passed. First
+  meeting seeds the current period (no mid-month reopen). Every non-reset is a named
+  `WorkCycleBlock` in `workCycleLastBlock`. It no longer waits for "all tasks Done".
+- Part 2 sends `project_renewal_upcoming` ~30 days before a quarterly/yearly invoice
+  (`renewalNoticePeriodKey`, server-owned). Rules test 81k.
+
 ### Project archive (the reversible alternative to delete)
 
 - **Archiving never writes `status: 'Archived'` by hand.** All of it lives in

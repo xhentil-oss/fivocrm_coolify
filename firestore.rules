@@ -1396,7 +1396,12 @@ service cloud.firestore {
 
     // Server-owned project rollup fields (see the projects rule below).
     function projectRollupKeys() {
-      return ['spent', 'laborCost', 'hoursByRole', 'spendRolledUpAt', 'budgetAlertsSent'];
+      return ['spent', 'laborCost', 'hoursByRole', 'spendRolledUpAt', 'budgetAlertsSent',
+              // The WORK cycle's idempotency token + diagnosis (recurring-project-reset):
+              // a browser that moved the claim could skip or re-run a month's cycle.
+              'workCycleLastPeriodKey', 'workCycleLastBlock', 'workCycleCheckedAt', 'workCycleCarriedOver',
+              // Renewal-notice debounce for quarterly / yearly retainers (Part 2).
+              'renewalNoticePeriodKey'];
     }
 
     // ── Project MONEY fields (audit Oct 2026) ──
@@ -1430,7 +1435,10 @@ service cloud.firestore {
       return projectBankKeys().concat(projectPlanKeys()).concat([
         'budget', 'currency', 'isRecurring', 'isRecurringPaused', 'recurringFrequency',
         'recurringEndDate', 'billingType', 'billingDayOfMonth', 'lastInvoicePeriodKey',
-        'wasRecurringBeforeArchive']);
+        'wasRecurringBeforeArchive',
+        // Quarterly / yearly cycles: the contract-year anchor, payment terms and
+        // the monthly list price + prepay discount the cycle fee came from.
+        'billingAnchorAt', 'invoiceDueDays', 'listMonthlyFee', 'prepayDiscountPct']);
     }
     function projectFinanceManager(businessId) {
       return isSuperAdmin() || isBusinessAdmin(businessId);
@@ -1454,6 +1462,11 @@ service cloud.firestore {
         && request.resource.data.get('billingType', 'x') == resource.data.get('billingType',
              resource.data.get('isRecurring', false) == true ? 'monthly' : 'one-time')
         && projKeySame('billingDayOfMonth')
+        // Long-cycle inputs: one key-set check, not four projKeySame() calls — those
+        // pushed a Member's full edit form over the 1000-expression limit (81a). The
+        // Member form never sends these keys, so "untouched" is the only shape needed.
+        && !request.resource.data.diff(resource.data).affectedKeys()
+              .hasAny(['billingAnchorAt', 'invoiceDueDays', 'listMonthlyFee', 'prepayDiscountPct'])
         && projKeySame('paymentMethod') && projKeySame('bankName') && projKeySame('bankIBAN')
         && projKeySame('bankSWIFT') && projKeySame('bankAccountHolder') && projKeySame('bankCountry')
         && projKeySame('serviceMix') && projKeySame('plannedRoles') && projKeySame('plannedHours')
@@ -1520,7 +1533,8 @@ service cloud.firestore {
       // 70/85/100 % budget alarms. Create may carry `spent: 0` (ProjectsView's
       // shape) and nothing else; update may spread them UNCHANGED only.
       allow create: if canCreateBusinessDoc() && !isViewerRole()
-        && !request.resource.data.keys().hasAny(['laborCost', 'hoursByRole', 'spendRolledUpAt', 'budgetAlertsSent'])
+        && !request.resource.data.keys().hasAny(['laborCost', 'hoursByRole', 'spendRolledUpAt', 'budgetAlertsSent',
+                                                  'workCycleLastPeriodKey', 'workCycleLastBlock', 'workCycleCheckedAt', 'workCycleCarriedOver'])
         && request.resource.data.get('spent', 0) == 0
         && projCreateFinanceOk();
       // STAFF ONLY. No portal view writes `projects` (PortalProjectsView /

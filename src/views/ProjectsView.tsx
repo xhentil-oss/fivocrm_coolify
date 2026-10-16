@@ -7,7 +7,12 @@ import { doc, runTransaction, Timestamp } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { canSeeFinancials, toAll, fromAll, currencySymbol, getRateToAll } from '../lib/utils';
-import { projectBillingPeriodKey, projectBillingPeriodEnd, stopProjectBillingPatch, pauseProjectBillingPatch, projectBillingBlockLabel } from '../lib/finance/recurringBilling';
+import { projectBillingPeriodKey, projectBillingPeriodEnd, projectBillingAnchor, stopProjectBillingPatch, pauseProjectBillingPatch, projectBillingBlockLabel } from '../lib/finance/recurringBilling';
+import { billingDueDate, billingPeriodStart, isAnchoredFrequency, reexpressBillingClaim, workCycleBlockLabel } from '../lib/finance/projectCycles';
+import {
+  cycleBudgetFromForm, cycleMonthsFor, defaultAnchorMonth, initialMonthlyFee, initialWorkCycle,
+  parseAnchorMonthInput, parseDueDaysInput, parseMoneyInput, parsePctInput, parseWorkCycleInput,
+} from '../lib/finance/projectBillingForm';
 import { recurringOccurrenceId } from '../lib/finance/recurringInvoices';
 import { normalizePlannedRoles, plannedFieldsPatch } from '../lib/finance/projectBudget';
 import { buildRateCard } from '../lib/finance/costRates';
@@ -351,6 +356,13 @@ const ProjectsView: React.FC = () => {
     const billingDayNum = billingDayRaw ? parseInt(billingDayRaw, 10) : NaN;
     const billingDayOfMonth = !isNaN(billingDayNum) && billingDayNum >= 1 && billingDayNum <= 31
       ? billingDayNum : undefined;
+    // Work cycle (tasks) and the long-cycle billing inputs (projectBillingForm.ts).
+    const workCycle = parseWorkCycleInput(formData.get('workCycle'));
+    const longCycle = isRecurring && isAnchoredFrequency(recurringFrequency || 'monthly');
+    const billingAnchorAt = longCycle ? parseAnchorMonthInput(formData.get('billingAnchorMonth')) : null;
+    const invoiceDueDays = isRecurring ? parseDueDaysInput(formData.get('invoiceDueDays')) : null;
+    const listMonthlyFee = longCycle ? parseMoneyInput(formData.get('listMonthlyFee')) : null;
+    const prepayDiscountPct = longCycle ? parsePctInput(formData.get('prepayDiscountPct')) : null;
     const memberUserIdsStr = formData.get('memberUserIds') as string;
     let memberUserIds: string[] | undefined;
     if (memberUserIdsStr) {
@@ -408,6 +420,13 @@ const ProjectsView: React.FC = () => {
       recurringFrequency: isRecurring && recurringFrequency ? recurringFrequency as any : undefined,
       isRecurringPaused: isRecurring && isRecurringPaused ? true : undefined,
       recurringEndDate: isRecurring ? recurringEndDate : undefined,
+      // Written explicitly on every new project — the legacy fallback
+      // (work cycle follows isRecurring) is for old rows only.
+      workCycle,
+      billingAnchorAt: billingAnchorAt ?? undefined,
+      invoiceDueDays: invoiceDueDays ?? undefined,
+      listMonthlyFee: listMonthlyFee ?? undefined,
+      prepayDiscountPct: prepayDiscountPct ?? undefined,
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
       serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
       endDate,
@@ -477,14 +496,25 @@ const ProjectsView: React.FC = () => {
       }
     };
 
-    if (billableTotal > 0) {
+    // A quarterly / yearly contract that starts in a LATER month has nothing to
+    // bill today: the cron issues its first invoice when that month arrives
+    // (`before-contract-start`). Claiming "now" would be claiming last year.
+    const createdBillingFrequency = recurringFrequency || 'monthly';
+    const createdAnchor = isRecurring
+      ? projectBillingAnchor({ recurringFrequency: createdBillingFrequency as any, billingAnchorAt, startDate, createdAt: now })
+      : null;
+    const contractStartsLater = !!createdAnchor
+      && now < billingPeriodStart(createdBillingFrequency, createdAnchor, createdAnchor);
+
+    if (billableTotal > 0 && !(isRecurring && contractStartsLater)) {
     if (isRecurring) {
       // The recurrence is PROJECT-driven (cron `recurring-invoices` Part 2), so this
       // first invoice covers the current billing period and must record which one —
       // otherwise the cron bills the same period again and mails the client twice.
-      const billingFrequency = recurringFrequency || 'monthly';
-      const periodKey = projectBillingPeriodKey(billingFrequency, now);
-      const periodEnd = projectBillingPeriodEnd(billingFrequency, now);
+      const billingFrequency = createdBillingFrequency;
+      const periodKey = projectBillingPeriodKey(billingFrequency, now, createdAnchor);
+      const periodEnd = projectBillingPeriodEnd(billingFrequency, now, createdAnchor);
+      const firstDueDate = billingDueDate(billingFrequency, now, periodEnd, invoiceDueDays);
       // Same id the cron computes for this (project, period) — see
       // createInvoiceOccurrence above and api/cron/run.ts Part 2.
       const occurrenceId = recurringOccurrenceId('auto', newProject.id, periodKey);
@@ -510,12 +540,15 @@ const ProjectsView: React.FC = () => {
         // Issue date: accrual revenue is recognised on invoiceDate; without it the
         // engines fall back to createdAt and the UI shows an empty "Data" column.
         invoiceDate: now,
-        dueDate: periodEnd,
+        dueDate: firstDueDate,
         // The PROJECT drives the cycle, not this invoice — flagging it isRecurring
         // too would make it look like a second, competing series.
         isRecurring: false,
         autoGenerated: true,
         billingPeriodKey: periodKey,
+        billingFrequency,
+        billingPeriodStart: billingPeriodStart(billingFrequency, now, createdAnchor),
+        billingPeriodEnd: periodEnd,
         emailSent: false,
         reminderSent: false,
         reminder25Sent: false,
@@ -769,6 +802,13 @@ const ProjectsView: React.FC = () => {
     const billingDayNum = billingDayRaw ? parseInt(billingDayRaw, 10) : NaN;
     const billingDayOfMonth = !isNaN(billingDayNum) && billingDayNum >= 1 && billingDayNum <= 31
       ? billingDayNum : undefined;
+    // Work cycle (tasks) and the long-cycle billing inputs (projectBillingForm.ts).
+    const workCycle = parseWorkCycleInput(formData.get('workCycle'));
+    const longCycle = isRecurring && isAnchoredFrequency(recurringFrequency || 'monthly');
+    const billingAnchorAt = longCycle ? parseAnchorMonthInput(formData.get('billingAnchorMonth')) : null;
+    const invoiceDueDays = isRecurring ? parseDueDaysInput(formData.get('invoiceDueDays')) : null;
+    const listMonthlyFee = longCycle ? parseMoneyInput(formData.get('listMonthlyFee')) : null;
+    const prepayDiscountPct = longCycle ? parsePctInput(formData.get('prepayDiscountPct')) : null;
     // `[]` CLEARS an emptied list (undefined would be stripped and keep the old ids
     // — and with them the derived service split and the recurring invoice lines);
     // `undefined` only when the form did not send the list at all.
@@ -833,14 +873,23 @@ const ProjectsView: React.FC = () => {
     const lastGeneratedAt: Date | null = rawLastGenerated
       ? (rawLastGenerated?.toDate ? rawLastGenerated.toDate() : new Date(rawLastGenerated))
       : null;
+    // A long cycle is anchored on the contract month; a changed anchor is a
+    // changed period grid too, so it re-expresses the claim just like a new frequency.
+    const nextAnchor = isRecurring
+      ? projectBillingAnchor({ ...projectToEdit, recurringFrequency: nextFrequency, billingAnchorAt: billingAnchorAt ?? projectToEdit.billingAnchorAt } as any)
+      : null;
+    const previousAnchor = projectBillingAnchor(projectToEdit as any);
+    const anchorChanged = (nextAnchor?.getTime() ?? null) !== (previousAnchor?.getTime() ?? null);
     const reExpressedClaim =
       isRecurring
         && projectToEdit.lastInvoicePeriodKey
-        && previousFrequency !== nextFrequency
+        && (previousFrequency !== nextFrequency || anchorChanged)
         ? {
-            lastInvoicePeriodKey: projectBillingPeriodKey(
+            lastInvoicePeriodKey: reexpressBillingClaim(
               nextFrequency,
-              lastGeneratedAt && !isNaN(lastGeneratedAt.getTime()) ? lastGeneratedAt : editedAt,
+              lastGeneratedAt && !isNaN(lastGeneratedAt.getTime()) ? lastGeneratedAt : null,
+              editedAt,
+              nextAnchor,
             ),
           }
         : {};
@@ -905,10 +954,16 @@ const ProjectsView: React.FC = () => {
               : {}),
           }
         : (projectToEdit.isRecurring
-            ? { ...stopProjectBillingPatch(), recurringEndDate: null }
+            ? { ...stopProjectBillingPatch(editedAt, projectToEdit), recurringEndDate: null }
             : { isRecurring: false })),
       // null CLEARS an emptied split; not sent at all (no editor shown) = untouched.
       ...(serviceMixSent ? { serviceMix: serviceMix.length > 0 ? serviceMix : null } : {}),
+      // Long-cycle inputs: explicit null CLEARS them when the cycle is no longer
+      // quarterly / yearly (removeUndefined would keep the stale values).
+      billingAnchorAt: billingAnchorAt ?? null,
+      invoiceDueDays: invoiceDueDays ?? null,
+      listMonthlyFee: listMonthlyFee ?? null,
+      prepayDiscountPct: prepayDiscountPct ?? null,
       // Explicit null CLEARS (removeUndefined strips undefined — see formValue.ts).
       recognitionMethod: recognitionMethod ?? null,
       targetMarginPct: targetMarginPct ?? null,
@@ -919,7 +974,7 @@ const ProjectsView: React.FC = () => {
     };
     const memberBillingFields: Record<string, unknown> =
       projectToEdit.isRecurring && !isRecurring
-        ? { ...stopProjectBillingPatch(), recurringEndDate: null }
+        ? { ...stopProjectBillingPatch(editedAt, projectToEdit), recurringEndDate: null }
         : projectToEdit.isRecurring && isRecurring && isRecurringPaused && !projectToEdit.isRecurringPaused
           ? pauseProjectBillingPatch()
           : {};
@@ -950,6 +1005,9 @@ const ProjectsView: React.FC = () => {
       customerId: custId && custId !== '__none__' ? custId : '',
       responsibleUserId: resolvedResponsible,
       ...(canManageProjectFinance ? financeFields : memberBillingFields),
+      // The WORK cycle is not money: every editor may set it. Written after the
+      // billing patches so the form's choice wins over a stop's materialisation.
+      workCycle,
       memberUserIds,
       serviceIds: selectedServiceIds,
       endDate: endDate ?? null,
@@ -1627,6 +1685,18 @@ const ProjectForm: React.FC<{
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
   const [recurringFrequency, setRecurringFrequency] = useState(initialData?.recurringFrequency || 'monthly');
   const [isRecurringPaused, setIsRecurringPaused] = useState(!!(initialData as any)?.isRecurringPaused);
+  // WORK cycle (tasks) — independent of the billing cycle below.
+  const [workCycle, setWorkCycle] = useState<'none' | 'weekly' | 'monthly'>(() => initialWorkCycle(initialData));
+  // Quarterly / yearly: monthly fee × months − prepay discount, anchored on the
+  // contract's start month (projectBillingForm.ts).
+  const [monthlyFeeInput, setMonthlyFeeInput] = useState<string>(() => initialMonthlyFee(initialData));
+  const [prepayDiscountInput, setPrepayDiscountInput] = useState<string>(
+    initialData?.prepayDiscountPct != null ? String(initialData.prepayDiscountPct) : '',
+  );
+  const [anchorMonthInput, setAnchorMonthInput] = useState<string>('');
+  const [invoiceDueDaysInput, setInvoiceDueDaysInput] = useState<string>(
+    initialData?.invoiceDueDays != null ? String(initialData.invoiceDueDays) : '',
+  );
   const [recurringEndInput, setRecurringEndInput] = useState(() => {
     const d = (initialData as any)?.recurringEndDate ? new Date((initialData as any).recurringEndDate) : null;
     return d && !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : '';
@@ -1717,6 +1787,18 @@ const ProjectForm: React.FC<{
     [canSeeBudget, services, selectedServiceIds, initialServiceIds, currency, isCreate],
   );
 
+  // Quarterly / yearly retainer: the cycle fee is DERIVED from the monthly fee.
+  // A Member editing (no budget field) never re-derives it — the rules refuse a
+  // money change from them, and a rounding difference would read as one.
+  const anchoredBilling = isRecurring && isAnchoredFrequency(recurringFrequency);
+  const cycleMonths = cycleMonthsFor(recurringFrequency);
+  const monthlyFeeSource = serviceBudget !== null ? serviceBudget : parseMoneyInput(monthlyFeeInput);
+  const cycleBudget = anchoredBilling && (canSeeBudget || isCreate)
+    ? cycleBudgetFromForm(recurringFrequency, monthlyFeeSource, parsePctInput(prepayDiscountInput))
+    : null;
+  const effectiveAnchorMonth = anchorMonthInput || defaultAnchorMonth(initialData, startDateInput);
+  const cycleNoun = recurringFrequency === 'yearly' ? 'vit' : 'tremujor';
+
   // What the split would be WITHOUT explicit rows — shown as the placeholder, so
   // the owner sees what "automatik" means before overriding it.
   const derivedMix = React.useMemo(() => {
@@ -1747,6 +1829,13 @@ const ProjectForm: React.FC<{
     }
     formData.set('isRecurring', isRecurring ? 'true' : 'false');
     if (isRecurring) formData.set('recurringFrequency', recurringFrequency);
+    formData.set('workCycle', workCycle);
+    if (isRecurring) formData.set('invoiceDueDays', invoiceDueDaysInput);
+    if (anchoredBilling) {
+      formData.set('billingAnchorMonth', effectiveAnchorMonth);
+      if (monthlyFeeSource !== null) formData.set('listMonthlyFee', String(monthlyFeeSource));
+      formData.set('prepayDiscountPct', prepayDiscountInput);
+    }
     formData.set('isRecurringPaused', isRecurring && isRecurringPaused ? 'true' : 'false');
     if (isRecurring && recurringEndInput) formData.set('recurringEndDate', recurringEndInput);
     formData.set('billingType', billingType);
@@ -1768,6 +1857,10 @@ const ProjectForm: React.FC<{
     // (or the hidden one for users who cannot see it) is sent as it is.
     if (serviceBudget !== null) {
       formData.set('budget', String(serviceBudget));
+    }
+    // Long cycle: the budget is the whole quarter / year (monthly × months − discount).
+    if (cycleBudget !== null) {
+      formData.set('budget', String(cycleBudget));
     }
     onSubmit(formData);
   };
@@ -1917,6 +2010,57 @@ const ProjectForm: React.FC<{
           <input type="hidden" name="budget" value={initialData?.budget != null ? String(initialData.budget) : ''} />
           <input type="hidden" name="currency" value={(initialData as any)?.currency || 'ALL'} />
         </>
+      ) : anchoredBilling ? (
+      <div className="space-y-2">
+        <Label htmlFor="monthlyFee">Tarifa mujore</Label>
+        <div className="flex gap-2">
+          <Input
+            id="monthlyFee"
+            type="number"
+            step="0.01"
+            min="0"
+            value={serviceBudget !== null ? String(serviceBudget) : monthlyFeeInput}
+            onChange={serviceBudget !== null ? undefined : (e) => setMonthlyFeeInput(e.target.value)}
+            readOnly={serviceBudget !== null}
+            placeholder="0.00"
+            className={`flex-1 ${serviceBudget !== null ? 'bg-muted cursor-not-allowed' : ''}`}
+          />
+          <input type="hidden" name="budget" value={cycleBudget !== null ? String(cycleBudget) : (initialData?.budget != null ? String(initialData.budget) : '')} />
+          <input type="hidden" name="currency" value={currency} />
+          <Select value={currency} onValueChange={(v) => setCurrency(v as 'ALL' | 'EUR')}>
+            <SelectTrigger className="w-28 shrink-0"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">L (Lekë)</SelectItem>
+              <SelectItem value="EUR">€ (Euro)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid grid-cols-2 gap-2 items-end">
+          <div>
+            <Label htmlFor="prepayDiscount">Zbritje për pagesë përpara (%)</Label>
+            <Input
+              id="prepayDiscount"
+              type="number"
+              step="0.1"
+              min="0"
+              max="100"
+              value={prepayDiscountInput}
+              onChange={(e) => setPrepayDiscountInput(e.target.value)}
+              placeholder="p.sh. 10"
+            />
+          </div>
+          <div className="rounded-lg bg-muted/40 px-3 py-2 text-sm">
+            <p className="text-xs text-muted-foreground">Fatura për {cycleNoun}</p>
+            <p className="font-semibold tabular-nums">
+              {cycleBudget !== null ? `${cycleBudget.toLocaleString('sq-AL')} ${currencySymbol(currency)}` : '—'}
+            </p>
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Tarifa mujore × {cycleMonths} muaj − zbritja. Fatura del një herë në {cycleNoun}; fitimi njihet 1/{cycleMonths} çdo muaj,
+          pjesa tjetër shfaqet si “paguar përpara”.
+        </p>
+      </div>
       ) : (
       <div>
         <Label htmlFor="budget">Buxheti / Të Ardhurat e Projektit</Label>
@@ -1957,12 +2101,14 @@ const ProjectForm: React.FC<{
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="one-time">Njëherëshe (vlerë totale)</SelectItem>
-            <SelectItem value="monthly">Mujore (tarifë çdo muaj)</SelectItem>
+            <SelectItem value="monthly">Periodike (tarifë çdo cikël)</SelectItem>
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground mt-1">
           {billingType === 'monthly'
-            ? 'Buxheti lart është tarifë mujore — fitimi shumëzon me muajt që projekti ka qenë aktiv.'
+            ? (anchoredBilling
+              ? `Tarifa e ciklit (${cycleNoun}) faturohet përpara; fitimi njihet çdo muaj (1/${cycleMonths}).`
+              : 'Buxheti lart është tarifë mujore — fitimi shumëzon me muajt që projekti ka qenë aktiv.')
             : 'Buxheti lart është vlerë totale njëherëshe (p.sh. ndërtim web, branding).'}
         </p>
       </div>
@@ -2126,9 +2272,9 @@ const ProjectForm: React.FC<{
       )}
 
       {/* Billing day — only meaningful for a MONTHLY recurring retainer */}
-      {billingType === 'monthly' && (isRecurring || recurringFrequency === 'monthly') && (
+      {billingType === 'monthly' && (!isRecurring || recurringFrequency !== 'weekly') && (
         <div>
-          <Label htmlFor="billingDayOfMonth">Dita e faturimit (çdo muaj)</Label>
+          <Label htmlFor="billingDayOfMonth">{anchoredBilling ? 'Dita e faturimit (në muajin e nisjes)' : 'Dita e faturimit (çdo muaj)'}</Label>
           <Input
             id="billingDayOfMonth"
             name="billingDayOfMonth"
@@ -2140,7 +2286,9 @@ const ProjectForm: React.FC<{
             placeholder="p.sh. 25"
           />
           <p className="text-xs text-muted-foreground mt-1">
-            Fatura mujore gjenerohet në këtë ditë (p.sh. 25). Bosh = në fillim të muajit.
+            {anchoredBilling
+              ? 'Fatura e ciklit gjenerohet në këtë ditë të muajit të parë të ciklit. Bosh = në fillim të muajit.'
+              : 'Fatura mujore gjenerohet në këtë ditë (p.sh. 25). Bosh = në fillim të muajit.'}
             Në muajt më të shkurtër zbret te dita e fundit (p.sh. 31 → 28 Shkurt).
           </p>
         </div>
@@ -2203,11 +2351,32 @@ const ProjectForm: React.FC<{
         </div>
       )}
 
-      {/* Recurring Project */}
+      {/* WORK cycle — the tasks; independent of billing (projectCycles.ts) */}
+      <div>
+        <Label htmlFor="workCycle">Cikli i punës (detyrat)</Label>
+        <Select value={workCycle} onValueChange={(v) => setWorkCycle(v as 'none' | 'weekly' | 'monthly')}>
+          <SelectTrigger id="workCycle"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">Pa cikël (projekt i vetëm)</SelectItem>
+            <SelectItem value="monthly">Çdo muaj</SelectItem>
+            <SelectItem value="weekly">Çdo javë</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground mt-1">
+          {workCycle === 'none'
+            ? 'Detyrat bëhen një herë.'
+            : `Në fillim të çdo ${workCycle === 'weekly' ? 'jave' : 'muaji'} detyrat e kryera rihapen; të papërfunduarat mbarten te cikli i ri me shënimin “mbartur”. I pavarur nga faturimi.`}
+        </p>
+        {initialData && (initialData as any).workCycleLastBlock && workCycle !== 'none' && (
+          <p className="text-xs text-muted-foreground mt-1">Kontrolli i fundit: {workCycleBlockLabel((initialData as any).workCycleLastBlock)}</p>
+        )}
+      </div>
+
+      {/* Recurring BILLING */}
       <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/40">
         <div>
-          <p className="text-sm font-medium">Projekt Periodik</p>
-          <p className="text-xs text-muted-foreground">Projekti ripërsëritet automatikisht çdo javë/muaj</p>
+          <p className="text-sm font-medium">Faturim periodik</p>
+          <p className="text-xs text-muted-foreground">Fatura krijohet automatikisht çdo cikël (javë / muaj / tremujor / vit)</p>
         </div>
         <button
           type="button"
@@ -2221,6 +2390,8 @@ const ProjectForm: React.FC<{
             // multiplied every cycle. Automatic billing refuses that combination, so
             // keep the two settings consistent here instead of failing silently later.
             if (next && billingType === 'one-time') setBillingType('monthly');
+            // A new retainer usually repeats its work too — suggest it, never force it.
+            if (next && isCreate && workCycle === 'none') setWorkCycle(recurringFrequency === 'weekly' ? 'weekly' : 'monthly');
           }}
           className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
             isRecurring ? 'bg-primary' : 'bg-muted-foreground/30'
@@ -2269,19 +2440,62 @@ const ProjectForm: React.FC<{
 
       {isRecurring && (
         <div>
-          <Label>Frekuenca e Përsëritjes</Label>
-          <Select value={recurringFrequency} onValueChange={setRecurringFrequency}>
+          <Label>Cikli i faturimit</Label>
+          <Select
+            value={recurringFrequency}
+            onValueChange={(v) => {
+              // Switching between monthly and a long cycle keeps the MONTHLY price:
+              // the long-cycle editor starts from the monthly fee being replaced.
+              if (isAnchoredFrequency(v) && !isAnchoredFrequency(recurringFrequency)) {
+                setMonthlyFeeInput(serviceBudget !== null ? String(serviceBudget) : budgetInput);
+              }
+              if (!isAnchoredFrequency(v) && isAnchoredFrequency(recurringFrequency) && monthlyFeeSource !== null) {
+                setBudgetInput(String(monthlyFeeSource));
+              }
+              setRecurringFrequency(v as any);
+            }}
+          >
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="weekly">Javore (çdo javë)</SelectItem>
               <SelectItem value="monthly">Mujore (çdo muaj)</SelectItem>
+              <SelectItem value="quarterly">Tremujore (çdo 3 muaj)</SelectItem>
+              <SelectItem value="yearly">Vjetore (një herë në vit)</SelectItem>
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground mt-1">
-            Kur të gjitha detyrat mbarojnë, projekti shënohet si kompletuar për atë periudhë dhe rifillon automatikisht.
+            {anchoredBilling
+              ? `Fatura del në muajin e nisjes së kontratës dhe përsëritet çdo ${recurringFrequency === 'yearly' ? '12' : '3'} muaj. Puna ndjek “Ciklin e punës” më lart.`
+              : 'Sa shpesh faturohet klienti. Puna ndjek “Ciklin e punës” më lart.'}
           </p>
+          {anchoredBilling && (
+            <div className="mt-2">
+              <Label htmlFor="billingAnchorMonth">Muaji i nisjes së kontratës</Label>
+              <Input
+                id="billingAnchorMonth"
+                type="month"
+                value={effectiveAnchorMonth}
+                onChange={(e) => setAnchorMonthInput(e.target.value)}
+              />
+            </div>
+          )}
+          <div className="mt-2">
+            <Label htmlFor="invoiceDueDays">Afati i pagesës (ditë)</Label>
+            <Input
+              id="invoiceDueDays"
+              type="number"
+              min="0"
+              max="120"
+              value={invoiceDueDaysInput}
+              onChange={(e) => setInvoiceDueDaysInput(e.target.value)}
+              placeholder={anchoredBilling ? '15' : 'fundi i periudhës'}
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              Ditë nga lëshimi i faturës. Bosh = {anchoredBilling ? '15 ditë' : 'fundi i periudhës'}.
+            </p>
+          </div>
           {billingType === 'one-time' && (
             <p className="text-xs text-amber-600 mt-1">
               ⚠ Lloji i faturimit është “një-herësh”, ndaj faturimi automatik periodik NUK do të gjenerojë fatura. Zgjidh “mujore” për të faturuar çdo cikël.

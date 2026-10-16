@@ -48,6 +48,7 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   project_status_changed: 'projects',
   project_open_reminder: 'projects',
   project_cycle_reset: 'projects',
+  project_renewal_upcoming: 'projects',
   project_budget_alert: 'projects',
   lead_created: 'projects',
   lead_assigned: 'projects',

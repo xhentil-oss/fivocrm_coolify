@@ -46,7 +46,9 @@ describe('projectBillingPeriodKey', () => {
   });
 
   it('defaults an unknown frequency to monthly', () => {
-    expect(projectBillingPeriodKey('quarterly', new Date(2026, 7, 15))).toBe('2026-08');
+    expect(projectBillingPeriodKey('daily', new Date(2026, 7, 15))).toBe('2026-08');
+    // Quarterly / yearly are real cycles now (anchored) — see projectCycles.test.ts.
+    expect(projectBillingPeriodKey('quarterly', new Date(2026, 7, 15))).toBe('Q2026-07');
   });
 
   it('keys weekly by the Monday, so a week spanning two months stays one period', () => {
@@ -115,7 +117,7 @@ describe('projectBillingBlockReason', () => {
   });
 
   it('blocks an unsupported frequency instead of silently billing monthly', () => {
-    expect(projectBillingBlockReason({ ...base, recurringFrequency: 'quarterly' }, now)).toBe('unsupported-frequency');
+    expect(projectBillingBlockReason({ ...base, recurringFrequency: 'daily' } as any, now)).toBe('unsupported-frequency');
   });
 
   it('allows weekly', () => {

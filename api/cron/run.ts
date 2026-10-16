@@ -47,6 +47,29 @@ import { costRateFor, resolveFinanceSettings, budgetAlertsDue, type FinanceSetti
 // src/lib/apiImports.test.ts.
 import { formatMoney } from '../_money.js';
 import { projectInvoiceLines, type InvoiceLineService } from '../_projectInvoiceLines.js';
+import {
+  PERMANENT_BILLING_BLOCK_LIST,
+  billingAnchorOf,
+  billingBlockReason,
+  billingDueDate,
+  billingFrequencyOf,
+  billingIssueDate,
+  billingPeriodEnd,
+  billingPeriodKey,
+  billingPeriodsSkipped,
+  billingPeriodStart,
+  isAnchoredFrequency,
+  nextBillingPeriodStart,
+  nextWorkPeriodStart,
+  projectWorkCycle,
+  seedWorkPeriodKey,
+  shiftByWorkCycles,
+  startOfCycleWeek,
+  workCycleBlockReason,
+  workCycleTaskAction,
+  workPeriodKey,
+  workPeriodsSince,
+} from '../_projectCycles.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 // Constant-time compare: `===` on the secret leaks its length and the position
@@ -795,7 +818,7 @@ async function runInvoiceReminders(opts?: { businessId?: string | null }) {
         const customerDoc = await db.collection('customers').doc(invoice.customerId).get();
         const customer = customerDoc.data();
         if (customer?.email) {
-          ops.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject: `Kujtesë pagese: Fatura #${invoiceLabel}`, html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;"><h2 style="color:#f59e0b">⏰ Kujtesë Pagese</h2><p>Fatura juaj <strong>#${invoiceLabel}</strong> skadon ${daysLeft === 0 ? 'sot' : `për ${daysLeft} ditë`}.</p><p style="color:#9ca3af;font-size:12px">FivoCRM – Njoftime automatike</p></div>` }));
+          ops.push(transporter.sendMail({ from: senderHeader('FivoCRM', smtpUser), to: customer.email, subject: `Kujtesë pagese: Fatura #${invoiceLabel}`, html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;"><h2 style="color:#f59e0b">⏰ Kujtesë Pagese</h2><p>Fatura juaj <strong>#${invoiceLabel}</strong> skadon ${daysLeft === 0 ? 'sot' : `për ${daysLeft} ditë`}.</p><p style="color:#9ca3af;font-size:12px">FivoCRM – Njoftime automatike</p></div>` }));
         }
       }
       if (invoice.createdByUserId) ops.push(notifyUser({ userId: invoice.createdByUserId, type: 'invoice_reminder_sent', title: `📧 Kujtesë u dërgua: Fatura #${invoiceLabel}`, message: `Kujtesa e pagesës u dërgua te klienti.`, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', businessId: invoice.businessId ?? null, teamId: invoice.teamId ?? null, customerId: invoice.customerId ?? null, email: false }));
@@ -855,7 +878,7 @@ async function runInvoiceReminders(opts?: { businessId?: string | null }) {
       if (invoice.projectId) { const pd = await db.collection('projects').doc(invoice.projectId).get(); if (pd.exists) projectName = pd.data()?.name || projectName; }
       const dueDate: Date = invoice.dueDate?.toDate ? invoice.dueDate.toDate() : invoice.dueDate ? new Date(invoice.dueDate) : now;
       const { subject, html } = buildInvoiceEmail({ customerName: customer.name || 'Klient', invoiceNumber: invoiceLabel, amount: invoice.total || invoice.amount || 0, paidAmount: invoice.paidAmount || 0, dueDate, projectName, type, currency: invoice.currency || 'ALL', paymentMethod: invoice.paymentMethod, bankName: invoice.bankName, bankIBAN: invoice.bankIBAN, bankSWIFT: invoice.bankSWIFT, bankAccountHolder: invoice.bankAccountHolder, bankCountry: invoice.bankCountry, payUrl: await publicInvoicePayUrl(doc.id, invoice) });
-      if (transporter && smtpUser) reminderOps.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject, html }).then(() => doc.ref.update({ [flagField]: true, updatedAt: admin.firestore.Timestamp.now() })));
+      if (transporter && smtpUser) reminderOps.push(transporter.sendMail({ from: senderHeader('FivoCRM', smtpUser), to: customer.email, subject, html }).then(() => doc.ref.update({ [flagField]: true, updatedAt: admin.firestore.Timestamp.now() })));
       // The type used to be assembled as `invoice_${type}_sent`, producing values no
       // table knew about: no icon, no category, impossible to mute. The variant now
       // lives in the title, where it belongs, and the type is a registered one.
@@ -998,7 +1021,7 @@ async function runOverdueReminders(opts?: { businessId?: string | null }) {
           payUrl: await publicInvoicePayUrl(doc.id, inv),
         });
         ops.push(
-          transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject: `⚠️ Faturë e papaguar #${invoiceLabel} (${daysOverdue} ditë vonesë)`, html })
+          transporter.sendMail({ from: senderHeader('FivoCRM', smtpUser), to: customer.email, subject: `⚠️ Faturë e papaguar #${invoiceLabel} (${daysOverdue} ditë vonesë)`, html })
             .then(() => doc.ref.update({ overdueEmailSentAt: admin.firestore.Timestamp.now() }))
             .catch((e) => console.error('[overdue-email]', e))
         );
@@ -1473,91 +1496,37 @@ function invoicePeriodAlreadyCovered(frequency: string, periodKey: string, child
 // (project, key). It replaced the old "lastInvoiceGeneratedAt is in the current
 // calendar month?" check, which the UI-created first invoice bypassed entirely
 // (it never recorded itself) — so every new retainer got billed twice.
-const SUPPORTED_PROJECT_BILLING_FREQUENCIES = ['weekly', 'monthly'];
-const TERMINAL_PROJECT_STATUSES = ['Cancelled', 'Archived'];
-const PERMANENT_BILLING_BLOCKS = ['terminal-status', 'series-ended'];
+// The math lives in `../_projectCycles.ts`, a BYTE-IDENTICAL copy of
+// src/lib/finance/projectCycles.ts (test-enforced) — so the period key the UI
+// claims and the one the cron bills under can never drift again. Quarterly and
+// yearly cycles are anchored on the contract's start month (`billingAnchorAt`).
+const PERMANENT_BILLING_BLOCKS: ReadonlyArray<string> = PERMANENT_BILLING_BLOCK_LIST;
 
 function startOfBillingWeek(d: Date): Date {
-  return startOfZonedWeek(d);
+  return startOfCycleWeek(d);
 }
 
-function projectBillingPeriodKey(frequency: string, at: Date): string {
-  const p2 = (n: number) => String(n).padStart(2, '0');
-  if (frequency === 'weekly') {
-    const m = zonedParts(startOfBillingWeek(at));
-    return `W${m.year}-${p2(m.month + 1)}-${p2(m.day)}`;
-  }
-  const z = zonedParts(at);
-  return `${z.year}-${p2(z.month + 1)}`;
+/** The contract-year anchor for quarterly / yearly (null for weekly / monthly). */
+function projectBillingAnchor(project: any): Date | null {
+  return isAnchoredFrequency(billingFrequencyOf(project)) ? billingAnchorOf(project) : null;
 }
 
-function projectBillingPeriodEnd(frequency: string, at: Date): Date {
-  if (frequency === 'weekly') {
-    const m = zonedParts(startOfBillingWeek(at));
-    return zonedDate(m.year, m.month, m.day + 6, 23, 59, 59, 999);
-  }
-  const z = zonedParts(at);
-  return zonedDate(z.year, z.month, daysInZonedMonth(z.year, z.month), 23, 59, 59, 999);
+function projectBillingPeriodKey(frequency: string, at: Date, anchor?: Date | null): string {
+  return billingPeriodKey(frequency, at, anchor);
 }
 
-/**
- * Whole billing periods missed between `lastPeriodKey` and the period containing
- * `now`. Mirrors `projectPeriodsSkipped` in src/lib/finance/recurringBilling.ts.
- * Reports only — backfilling closed months is the owner's call.
- */
-function projectPeriodsSkipped(frequency: string, lastPeriodKey: string | undefined | null, now: Date, maxLookback = 24): number {
-  if (!lastPeriodKey) return 0;
-  if (projectBillingPeriodKey(frequency, now) === lastPeriodKey) return 0;
-  const start = zonedParts(now);
-  let cursor = zonedDate(start.year, start.month, start.day);
-  for (let i = 0; i < maxLookback; i++) {
-    const c = zonedParts(cursor);
-    cursor = frequency === 'weekly'
-      ? zonedDate(c.year, c.month, c.day - 7)
-      : zonedDate(c.year, c.month - 1, 1);
-    if (projectBillingPeriodKey(frequency, cursor) === lastPeriodKey) return i;
-  }
-  return 0;
+function projectBillingPeriodEnd(frequency: string, at: Date, anchor?: Date | null): Date {
+  return billingPeriodEnd(frequency, at, anchor);
+}
+
+/** Whole billing periods missed (reports only — backfilling is the owner's call). */
+function projectPeriodsSkipped(frequency: string, lastPeriodKey: string | undefined | null, now: Date, anchor?: Date | null): number {
+  return billingPeriodsSkipped(frequency, lastPeriodKey, now, anchor);
 }
 
 /** Why this project may not bill for the period containing `now`, or null when due. */
 function projectBillingBlockReason(project: any, now: Date): string | null {
-  if (!project.isRecurring) return 'not-recurring';
-  const frequency: string = project.recurringFrequency || 'monthly';
-  if (!SUPPORTED_PROJECT_BILLING_FREQUENCIES.includes(frequency)) return 'unsupported-frequency';
-  if (project.status && TERMINAL_PROJECT_STATUSES.includes(project.status)) return 'terminal-status';
-
-  const rawEnd = project.recurringEndDate;
-  const endDate: Date | null = rawEnd
-    ? (rawEnd.toDate ? rawEnd.toDate() : new Date(rawEnd))
-    : null;
-  if (endDate && !isNaN(endDate.getTime()) && now > endDate) return 'series-ended';
-
-  if (project.isRecurringPaused) return 'paused';
-  // A single deal value must never bill on a cycle, even if isRecurring got set.
-  if (project.billingType === 'one-time') return 'one-time';
-
-  const periodKey = projectBillingPeriodKey(frequency, now);
-  if (project.lastInvoicePeriodKey) {
-    if (project.lastInvoicePeriodKey === periodKey) return 'already-billed';
-  } else if (project.lastInvoiceGeneratedAt) {
-    const raw = project.lastInvoiceGeneratedAt;
-    const last: Date = raw.toDate ? raw.toDate() : new Date(raw);
-    if (!isNaN(last.getTime()) && projectBillingPeriodKey(frequency, last) === periodKey) return 'already-billed';
-  }
-
-  // Chosen billing day (monthly only): hold until that day of the month arrives,
-  // clamped to the month's length. Transient — bills normally once reached.
-  // Read in the business zone (mirrors `billingDayForMonth`): the machine-zone
-  // getters made a Vercel (UTC) tick on the evening of the billing day hold the
-  // invoice until the next run, and a 1st-of-month series bill a day early.
-  if (frequency === 'monthly' && project.billingDayOfMonth) {
-    const z = zonedParts(now);
-    const lastDay = daysInZonedMonth(z.year, z.month);
-    const day = Math.min(Math.max(1, Math.round(Number(project.billingDayOfMonth))), lastDay);
-    if (z.day < day) return 'before-billing-day';
-  }
-  return null;
+  return billingBlockReason(project, now);
 }
 
 // ── JOB: recurring-invoices ──────────────────────────────────────────────────
@@ -1888,7 +1857,7 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
             payUrl: await publicInvoicePayUrl(newInvoiceRef.id, null),
           });
           ops.push(transporter.sendMail({
-            from: `"FivoCRM" <${smtpUser}>`,
+            from: senderHeader('FivoCRM', smtpUser),
             to: customer.email,
             subject,
             html,
@@ -1967,6 +1936,35 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
     if (block) {
       stampBillingCheck(projectDoc, project, block);
       tallyProjectBlock(block);
+      // A quarter / year paid up front: tell the responsible ~30 days before the
+      // next invoice goes out (once per period), so the renewal is never a
+      // surprise to the client — or to us.
+      if (block === 'already-billed' && isAnchoredFrequency(frequency)) {
+        const renewalAnchor = projectBillingAnchor(project);
+        const nextStart = nextBillingPeriodStart(frequency, now, renewalAnchor);
+        const nextKey = projectBillingPeriodKey(frequency, nextStart, renewalAnchor);
+        const issueAt = billingIssueDate(frequency, nextStart, renewalAnchor, project.billingDayOfMonth);
+        const daysLeft = Math.ceil((issueAt.getTime() - now.getTime()) / 86_400_000);
+        const renewUid = project.responsibleUserId || project.createdByUserId;
+        if (daysLeft <= 30 && project.renewalNoticePeriodKey !== nextKey) {
+          legacyOps.push(projectDoc.ref.update({ renewalNoticePeriodKey: nextKey }));
+          if (renewUid) {
+            const fee = Number(project.budget) || 0;
+            legacyOps.push(notifyUser({
+              userId: renewUid,
+              type: 'project_renewal_upcoming',
+              title: `🔁 Rinovimi ${frequency === 'yearly' ? 'vjetor' : 'tremujor'} i "${project.name}" pas ${Math.max(0, daysLeft)} ditësh`,
+              message: `Fatura e ciklit të ri (${fee.toLocaleString('sq-AL')} ${project.currency === 'EUR' ? 'EUR' : 'ALL'}) gjenerohet automatikisht më ${issueAt.toLocaleDateString('sq-AL', { timeZone: 'Europe/Tirane' })}. Kontrollo tarifën para se të dalë.`,
+              actionUrl: `/app/projects/${projectDoc.id}`,
+              actionLabel: 'Hap Projektin',
+              businessId: project.businessId ?? null,
+              teamId: project.teamId ?? null,
+              customerId: project.customerId ?? null,
+              projectId: projectDoc.id,
+            }));
+          }
+        }
+      }
       // A permanently-blocked series is switched off so we stop reading — and
       // re-evaluating — it on every single run.
       if (PERMANENT_BILLING_BLOCKS.includes(block)) {
@@ -1997,7 +1995,7 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
               title: `⚠️ Faturimi periodik i "${project.name}" është i ndalur`,
               message: block === 'one-time'
                 ? 'Projekti është shënuar periodik, por lloji i faturimit është "një-herësh" — ndaj nuk gjenerohet faturë. Ndrysho llojin e faturimit në "mujore".'
-                : `Frekuenca "${frequency}" nuk mbështetet për faturim automatik. Zgjidh "javore" ose "mujore".`,
+                : `Frekuenca "${frequency}" nuk mbështetet për faturim automatik. Zgjidh javore, mujore, tremujore ose vjetore.`,
               actionUrl: `/app/projects/${projectDoc.id}`,
               actionLabel: 'Hap Projektin',
               businessId: project.businessId ?? null,
@@ -2012,8 +2010,15 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
       continue;
     }
 
-    const periodKey = projectBillingPeriodKey(frequency, now);
-    const periodEnd = projectBillingPeriodEnd(frequency, now);
+    // Quarterly / yearly periods are anchored on the contract's start month, so
+    // a contract signed in March bills every March, not every January.
+    const anchor = projectBillingAnchor(project);
+    const periodKey = projectBillingPeriodKey(frequency, now, anchor);
+    const periodEnd = projectBillingPeriodEnd(frequency, now, anchor);
+    // A yearly invoice due at the END of the year it pays for gave the client
+    // twelve months to pay — the due date is issue day + `invoiceDueDays`
+    // (15 by default for quarterly / yearly; weekly / monthly keep the period end).
+    const dueDate = billingDueDate(frequency, now, periodEnd, project.invoiceDueDays);
     const budget = Number(project.budget) || 0;
 
     // NEVER email a 0-value invoice. A retainer priced only through attached
@@ -2051,16 +2056,19 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
     // Nothing blocks it: the stamp says so (cleared only when it was set before).
     stampBillingCheck(projectDoc, project, null);
 
+    const monthYear = (d: Date) => d.toLocaleDateString('sq-AL', { month: 'long', year: 'numeric', timeZone: 'Europe/Tirane' });
     const periodLabel = frequency === 'weekly'
       ? `java ${startOfBillingWeek(now).toLocaleDateString('sq-AL', { day: '2-digit', month: 'long' })}`
-      : now.toLocaleDateString('sq-AL', { month: 'long', year: 'numeric' });
+      : isAnchoredFrequency(frequency)
+        ? `${frequency === 'yearly' ? 'abonim vjetor' : 'tremujor'} ${monthYear(billingPeriodStart(frequency, now, anchor))} – ${monthYear(periodEnd)}`
+        : now.toLocaleDateString('sq-AL', { month: 'long', year: 'numeric' });
     const currency: 'ALL' | 'EUR' = project.currency === 'EUR' ? 'EUR' : 'ALL';
     // Period key in the number so weekly children in the same month never collide.
     const invoiceLabel = `AUTO-${periodKey}-${projectDoc.id.slice(0, 6).toUpperCase()}`;
     // One invoice per (project, period), enforced by the id — see Part 1.
     const invoiceRef = db.collection('invoices').doc(recurringOccurrenceId('auto', projectDoc.id, periodKey));
 
-    const projectOccurrence = { invoiceNumber: invoiceLabel, projectId: projectDoc.id, customerId: project.customerId || null, teamId: project.teamId || null, businessId: project.businessId || null, amount: budget, subtotal: budget, total: budget, tax: 0, discount: 0, discountType: 'fixed', currency, status: 'Pending', notes: `Faturë e gjeneruar automatikisht për projektin periodik "${project.name}" – ${periodLabel}.`, invoiceDate: admin.firestore.Timestamp.now(), dueDate: admin.firestore.Timestamp.fromDate(periodEnd), isRecurring: false, autoGenerated: true, billingPeriodKey: periodKey, emailSent: false, reminderSent: false, reminder25Sent: false, reminderLastDaySent: false, createdByUserId: project.createdByUserId || null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() };
+    const projectOccurrence = { invoiceNumber: invoiceLabel, projectId: projectDoc.id, customerId: project.customerId || null, teamId: project.teamId || null, businessId: project.businessId || null, amount: budget, subtotal: budget, total: budget, tax: 0, discount: 0, discountType: 'fixed', currency, status: 'Pending', notes: `Faturë e gjeneruar automatikisht për projektin periodik "${project.name}" – ${periodLabel}.`, invoiceDate: admin.firestore.Timestamp.now(), dueDate: admin.firestore.Timestamp.fromDate(dueDate), isRecurring: false, autoGenerated: true, billingPeriodKey: periodKey, billingFrequency: frequency, billingPeriodStart: admin.firestore.Timestamp.fromDate(billingPeriodStart(frequency, now, anchor)), billingPeriodEnd: admin.firestore.Timestamp.fromDate(periodEnd), emailSent: false, reminderSent: false, reminder25Sent: false, reminderLastDaySent: false, createdByUserId: project.createdByUserId || null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() };
     try {
       await invoiceRef.create(projectOccurrence);
     } catch (err) {
@@ -2118,8 +2126,8 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
         const customerDoc = await db.collection('customers').doc(project.customerId).get();
         const customer = customerDoc.data();
         if (customer?.email) {
-          const { subject, html } = buildInvoiceEmail({ customerName: customer.name || 'Klient', invoiceNumber: invoiceLabel, amount: budget, dueDate: periodEnd, projectName: project.name, type: 'initial', currency, paymentMethod: project.paymentMethod, bankName: project.bankName, bankIBAN: project.bankIBAN, bankSWIFT: project.bankSWIFT, bankAccountHolder: project.bankAccountHolder, bankCountry: project.bankCountry, payUrl: await publicInvoicePayUrl(invoiceRef.id, null) });
-          legacyOps.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject, html })
+          const { subject, html } = buildInvoiceEmail({ customerName: customer.name || 'Klient', invoiceNumber: invoiceLabel, amount: budget, dueDate, projectName: project.name, type: 'initial', currency, paymentMethod: project.paymentMethod, bankName: project.bankName, bankIBAN: project.bankIBAN, bankSWIFT: project.bankSWIFT, bankAccountHolder: project.bankAccountHolder, bankCountry: project.bankCountry, payUrl: await publicInvoicePayUrl(invoiceRef.id, null) });
+          legacyOps.push(transporter.sendMail({ from: senderHeader('FivoCRM', smtpUser), to: customer.email, subject, html })
             .then(() => invoiceRef.update({ emailSent: true, updatedAt: admin.firestore.Timestamp.now() })));
         }
       } catch { /* skip */ }
@@ -2129,7 +2137,7 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
     // invoice engine has always reported its gap; the project engine derives
     // everything from `now`, so a missed month simply vanished — the owner found
     // out, if at all, from an annual report.
-    const missedPeriods = projectPeriodsSkipped(frequency, project.lastInvoicePeriodKey, now);
+    const missedPeriods = projectPeriodsSkipped(frequency, project.lastInvoicePeriodKey, now, anchor);
 
     // Record the period so no later run (and no UI action) bills it twice.
     legacyOps.push(projectDoc.ref.update({
@@ -2262,58 +2270,93 @@ async function runProjectCompletionReminder(opts?: { businessId?: string | null 
 }
 
 // ── JOB: recurring-project-reset ─────────────────────────────────────────────
+// The project's WORK cycle (src/lib/finance/projectCycles.ts → `_projectCycles`).
+// Independent of billing since Oct 2026: `workCycle` decides, legacy projects
+// without it follow `isRecurring` (projectWorkCycle). The old job
+//   · read only `isRecurring == true`, so "Ndalo faturimin" stopped the work too;
+//   · restarted only a `Completed` project whose EVERY task was Done — one open
+//     task and the next month never opened, silently;
+//   · moved every date by exactly one cycle, whatever the gap.
+// Now: at the start of every period the cycle opens; Done tasks reopen, open
+// tasks are CARRIED into the new period ("mbartur"), recurring tasks are left to
+// their own engine, and every non-reset is a named `WorkCycleBlock` stamped on
+// the project (written only when it changes — cost rule).
+// Idempotent per project/period via `workCycleLastPeriodKey`.
 async function runRecurringProjectReset(opts?: { businessId?: string | null }) {
   const scopeId = opts?.businessId || null;
   const now = new Date();
   const suspended = await loadSuspendedBusinessIds();
-  const projectsSnap = await db.collection('projects').where('isRecurring', '==', true).get();
-  if (projectsSnap.empty) return { reset: 0 };
+  const [explicitSnap, legacySnap] = await Promise.all([
+    db.collection('projects').where('workCycle', 'in', ['weekly', 'monthly']).get(),
+    db.collection('projects').where('isRecurring', '==', true).get(),
+  ]);
+  const docs = new Map<string, FirebaseFirestore.QueryDocumentSnapshot>();
+  for (const d of [...explicitSnap.docs, ...legacySnap.docs]) docs.set(d.id, d);
+  if (docs.size === 0) return { reset: 0 };
 
   let resetCount = 0;
-  let skippedStatus = 0;
+  let reopenedTasks = 0;
+  let carriedTasks = 0;
+  let ownSeriesTasks = 0;
+  let seeded = 0;
+  const blocked: Record<string, number> = {};
   const ops: Promise<any>[] = [];
+  const stamp = (doc: FirebaseFirestore.QueryDocumentSnapshot, project: any, reason: string | null, extra: Record<string, unknown> = {}) => {
+    const changed = (project.workCycleLastBlock ?? null) !== reason || Object.keys(extra).length > 0;
+    if (!changed) return;
+    ops.push(doc.ref.update({ workCycleLastBlock: reason, workCycleCheckedAt: admin.firestore.Timestamp.now(), ...extra }));
+  };
 
-  for (const projectDoc of projectsSnap.docs) {
+  for (const projectDoc of docs.values()) {
     const project = projectDoc.data();
     if (scopeId && project.businessId !== scopeId) continue;
     if (project.businessId && suspended.has(project.businessId)) continue;
-    const lastCompletedAt: Date | null = project.lastCompletedAt?.toDate ? project.lastCompletedAt.toDate() : project.lastCompletedAt ? new Date(project.lastCompletedAt) : null;
-    if (!lastCompletedAt) continue;
-    // Only a project that IS completed starts a new cycle. `status: 'Active'` used
-    // to be written unconditionally — a Cancelled / On Hold / Archived retainer
-    // (isRecurring stays true until the billing cron clears it) was re-activated
-    // and its tasks re-opened by this job.
-    if (project.status !== 'Completed') { skippedStatus++; continue; }
 
-    const frequency = project.recurringFrequency || 'monthly';
-    // Zone-explicit, clamped (never setMonth(+1)): the next cycle starts a week
-    // later, or on the 1st of the next month in Europe/Tirane.
-    const nextCycle: Date = frequency === 'weekly'
-      ? addZonedDays(lastCompletedAt, 7)
-      : (() => { const p = zonedParts(lastCompletedAt); return zonedDate(p.year, p.month + 1, 1); })();
+    const cycle = projectWorkCycle(project);
+    const block = workCycleBlockReason(project, now);
+    if (block === 'seeded' && cycle) {
+      // First meeting: record the period it is in, reopen nothing mid-period.
+      seeded++;
+      stamp(projectDoc, project, 'seeded', {
+        workCycleLastPeriodKey: workPeriodKey(cycle, now),
+        nextRecurringDate: admin.firestore.Timestamp.fromDate(nextWorkPeriodStart(cycle, now)),
+      });
+      continue;
+    }
+    if (block || !cycle) {
+      const reason = block || 'no-work-cycle';
+      blocked[reason] = (blocked[reason] || 0) + 1;
+      stamp(projectDoc, project, reason);
+      continue;
+    }
 
-    if (now < nextCycle) continue;
+    const fromKey: string = project.workCycleLastPeriodKey || seedWorkPeriodKey(cycle, project, now);
+    const currentKey = workPeriodKey(cycle, now);
+    // A cycle changed in between (monthly key read as weekly) reads as one period.
+    const periods = Math.max(1, workPeriodsSince(cycle, fromKey, now) ?? 1);
 
     const tasksSnap = await db.collection('tasks').where('projectId', '==', projectDoc.id).get();
-    if (tasksSnap.empty) continue;
-    if (!tasksSnap.docs.every(t => t.data().status === 'Done')) continue;
+    if (tasksSnap.empty) {
+      blocked['no-tasks'] = (blocked['no-tasks'] || 0) + 1;
+      // Claim the period anyway: there is nothing to reopen until next time.
+      stamp(projectDoc, project, 'no-tasks', { workCycleLastPeriodKey: currentKey });
+      continue;
+    }
 
-    // BOTH alert flags reset — clearing only dueNotificationSent left reused
-    // tasks unable to overdue-alert ever again. The task DATES move by one cycle
-    // too: re-opened with last cycle's endDate (necessarily in the past by now)
-    // every task fired "ka kaluar afatin" at the very next run, every cycle.
-    const shift = (v: any): admin.firestore.Timestamp | null => {
-      const d: Date | null = v?.toDate ? v.toDate() : v ? new Date(v) : null;
-      if (!d || isNaN(d.getTime())) return null;
-      const moved = frequency === 'weekly' ? addZonedDays(d, 7) : addZonedMonthsClamped(d, 1);
-      return admin.firestore.Timestamp.fromDate(moved);
-    };
+    const ts = (d: Date | null) => (d ? admin.firestore.Timestamp.fromDate(d) : null);
+    let reopened = 0;
+    let carried = 0;
     for (const taskDoc of tasksSnap.docs) {
       const t = taskDoc.data();
-      const newStart = shift(t.startDate);
-      const newEnd = shift(t.endDate);
-      ops.push(taskDoc.ref.update({
-        status: 'Todo', updatedAt: admin.firestore.Timestamp.now(),
+      const action = workCycleTaskAction(t);
+      if (action === 'own-series') { ownSeriesTasks++; continue; }
+      // Dates move into the new cycle by the number of periods that passed —
+      // re-opened with last cycle's endDate every task fired "ka kaluar afatin".
+      const newStart = ts(shiftByWorkCycles(t.startDate, cycle, periods));
+      const newEnd = ts(shiftByWorkCycles(t.endDate, cycle, periods));
+      const common = {
+        updatedAt: admin.firestore.Timestamp.now(),
+        // BOTH alert flags reset — the deadline is a new one.
         dueNotificationSent: false, overdueNotificationSent: false,
         ...(newStart ? { startDate: newStart } : {}),
         ...(newEnd ? { endDate: newEnd, ...(t.dueDate ? { dueDate: newEnd } : {}) } : {}),
@@ -2321,15 +2364,43 @@ async function runRecurringProjectReset(opts?: { businessId?: string | null }) {
         ...(newEnd && t.reminderOffsetMinutes !== null && t.reminderOffsetMinutes !== undefined
           ? { reminderAt: admin.firestore.Timestamp.fromMillis(newEnd.toMillis() - Math.max(0, Number(t.reminderOffsetMinutes)) * 60_000), reminderSentAt: null }
           : {}),
-      }));
+      };
+      if (action === 'reopen') {
+        reopened++;
+        ops.push(taskDoc.ref.update({ ...common, status: 'Todo', carriedOverFromPeriod: null, carriedOverCount: 0 }));
+      } else {
+        // Unfinished: it stays open (status kept) and moves into the new period,
+        // marked so the board and the responsible can see it came from last cycle.
+        carried++;
+        ops.push(taskDoc.ref.update({
+          ...common,
+          carriedOverFromPeriod: fromKey,
+          carriedOverCount: (Number(t.carriedOverCount) || 0) + 1,
+        }));
+      }
     }
-    ops.push(projectDoc.ref.update({ status: 'Active', nextRecurringDate: nextCycle, updatedAt: admin.firestore.Timestamp.now() }));
-    if (project.responsibleUserId) ops.push(notifyUser({ userId: project.responsibleUserId, type: 'project_cycle_reset', title: `🔄 Projekti "${project.name}" u riaktivizua`, message: `Cikli i ri ka filluar. Të gjitha detyrat janë rivendosur te "Për të bërë".`, actionUrl: `/app/projects/${projectDoc.id}`, actionLabel: 'Shiko Projektin', businessId: project.businessId ?? null, teamId: project.teamId ?? null, customerId: project.customerId ?? null, projectId: projectDoc.id }));
+    reopenedTasks += reopened;
+    carriedTasks += carried;
+
+    ops.push(projectDoc.ref.update({
+      ...(project.status === 'Completed' ? { status: 'Active' } : {}),
+      workCycleLastPeriodKey: currentKey,
+      workCycleLastBlock: null,
+      workCycleCheckedAt: admin.firestore.Timestamp.now(),
+      workCycleCarriedOver: carried,
+      nextRecurringDate: admin.firestore.Timestamp.fromDate(nextWorkPeriodStart(cycle, now)),
+      updatedAt: admin.firestore.Timestamp.now(),
+    }));
+    if (project.responsibleUserId) {
+      const parts = [`${reopened} detyra u rihapën`];
+      if (carried > 0) parts.push(`${carried} të papërfunduara u mbartën nga cikli i kaluar`);
+      ops.push(notifyUser({ userId: project.responsibleUserId, type: 'project_cycle_reset', title: `🔄 Cikli i ri i "${project.name}" filloi`, message: `${parts.join(' · ')}.`, actionUrl: `/app/projects/${projectDoc.id}`, actionLabel: 'Shiko Projektin', businessId: project.businessId ?? null, teamId: project.teamId ?? null, customerId: project.customerId ?? null, projectId: projectDoc.id }));
+    }
     resetCount++;
   }
 
   await settleAll(ops, 'recurring-project-reset');
-  return { reset: resetCount, skippedStatus, scoped: !!scopeId };
+  return { reset: resetCount, reopenedTasks, carriedTasks, ownSeriesTasks, seeded, blocked, scoped: !!scopeId };
 }
 
 // ── Recurring EXPENSES ───────────────────────────────────────────────────────
@@ -3690,7 +3761,7 @@ async function runNotificationDigest(opts?: { businessId?: string }) {
       const moreCount = notifs.length > 10 ? `<p style="color:#6b7280;font-size:13px">... dhe ${notifs.length - 10} njoftime të tjera</p>` : '';
 
       ops.push(transporter.sendMail({
-        from: `"FivoCRM" <${smtpUser}>`,
+        from: senderHeader('FivoCRM', smtpUser),
         to: userRecord.email,
         subject: `📬 Digest i njoftimeve: ${notifs.length} të palexuara${criticalCount > 0 ? ` (${criticalCount} urgjente)` : ''}`,
         html: `
@@ -6248,7 +6319,7 @@ async function runInquiryMaterialsReminders(opts?: { businessId?: string | null 
 
     ops.push(
       transporter.sendMail({
-        from: `"FivoCRM" <${smtpUser}>`,
+        from: senderHeader('FivoCRM', smtpUser),
         to: q.email,
         subject: 'Kujtesë: plotësoni materialet e projektit tuaj',
         html,

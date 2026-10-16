@@ -43,6 +43,8 @@ import { entryHours, memberBillRate } from '../lib/finance/laborCost';
 import { laborForEntries } from '../lib/finance/laborAllocation';
 import { expenseListQueryOptions } from '../lib/finance/expenseSeries';
 import { billingTypeOf, monthlyFeeOf } from '../lib/finance/projectPeriod';
+import { projectWorkCycle } from '../lib/finance/projectCycles';
+import { retainerSummary, BILLING_FREQUENCY_LABELS } from '../lib/finance/retainerSummary';
 import { dayKeyOf, entryDayKey, monthKeyOfDay } from '../lib/finance/timeEntries';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import ProjectFinancePanel from '../components/projects/ProjectFinancePanel';
@@ -362,6 +364,13 @@ const ProjectDetailView: React.FC = () => {
       diff,
     };
   }, [projectInvoices, project?.budget, project?.currency, project?.billingType, project?.isRecurring]);
+
+  // The retainer's own cycle: current period billed?, next invoice, and for a
+  // quarter / year paid up front the part not yet served (retainerSummary.ts).
+  const retainer = React.useMemo(
+    () => (project && project.isRecurring ? retainerSummary(project, projectInvoices) : null),
+    [project, projectInvoices],
+  );
 
   // The cron's last verdict on this retainer (`billingLastBlock` +
   // `billingLastCheckedAt`, stamped by recurring-invoices Part 2), read-only.
@@ -1008,8 +1017,10 @@ const ProjectDetailView: React.FC = () => {
     const allDone = updatedStatuses.every(s => s === 'Done');
     if (allDone) {
       const now = new Date();
-      // For recurring projects: keep Active, just record lastCompletedAt
-      if ((project as any).isRecurring) {
+      // A project with a WORK cycle stays Active — the cycle reopens it next
+      // period — and just records lastCompletedAt. (It used to ask isRecurring,
+      // i.e. the BILLING switch.)
+      if (projectWorkCycle(project as any)) {
         await projectMutation.update(project.id, { lastCompletedAt: now });
       } else {
         await projectMutation.update(project.id, {
@@ -1634,6 +1645,14 @@ const ProjectDetailView: React.FC = () => {
                                 </p>
                                 <p className="truncate text-[11.5px] font-semibold text-brand-muted-2">
                                   {(task as any).section || 'Pa seksion'}
+                                  {task.carriedOverFromPeriod && !done && (
+                                    <span
+                                      className="ml-1.5 rounded-full bg-brand-warn-tint px-2 py-px text-[10px] font-extrabold text-brand-warn-ink"
+                                      title={`E papërfunduar në ciklin ${task.carriedOverFromPeriod}${(task.carriedOverCount || 0) > 1 ? ` · mbartur ${task.carriedOverCount} herë` : ''}`}
+                                    >
+                                      mbartur
+                                    </span>
+                                  )}
                                 </p>
                               </div>
                             </div>
@@ -1708,6 +1727,11 @@ const ProjectDetailView: React.FC = () => {
                                     )}
                                   >
                                     <p className="text-[13px] font-bold leading-[1.35] text-brand-ink">{task.title}</p>
+                                    {task.carriedOverFromPeriod && task.status !== 'Done' && (
+                                      <span className="mt-1 inline-block rounded-full bg-brand-warn-tint px-2 py-px text-[10px] font-extrabold text-brand-warn-ink">
+                                        mbartur nga {task.carriedOverFromPeriod}
+                                      </span>
+                                    )}
                                     <div className="mt-2.5 flex items-center justify-between gap-2">
                                       <span className={cn('rounded-full px-2.5 py-0.5 text-[10px] font-extrabold', prio.pill)}>
                                         {prio.label}
@@ -1858,6 +1882,37 @@ const ProjectDetailView: React.FC = () => {
                       </span>
                     </p>
                   </>
+                )}
+
+                {retainer && (
+                  <div className="mt-3.5 rounded-xl border border-brand-line-soft px-3.5 py-3 text-[12.5px] leading-relaxed text-brand-ink">
+                    <p className="font-bold">
+                      Cikli: {BILLING_FREQUENCY_LABELS[retainer.frequency] || retainer.frequency}
+                      {' · '}
+                      <span className={NUM}>{formatCurrency(retainer.cycleFee, project?.currency || 'ALL')}</span>
+                      {retainer.frequency !== 'monthly' && (
+                        <span className="text-brand-muted"> ({formatCurrency(retainer.monthlyFee, project?.currency || 'ALL')}/muaj)</span>
+                      )}
+                    </p>
+                    <p className="text-brand-muted">
+                      Periudha aktuale{' '}
+                      <span className={NUM}>{retainer.periodStart.toLocaleDateString('sq-AL')} – {retainer.periodEnd.toLocaleDateString('sq-AL')}</span>
+                      {': '}
+                      {retainer.currentPeriodBilled ? <span className="font-bold text-brand-pos">e faturuar</span> : <span className="font-bold text-brand-warn-ink">pa faturuar ende</span>}
+                    </p>
+                    {retainer.deferred !== null && retainer.monthsInCycle !== null && retainer.currentPeriodBilled && (
+                      <p className="text-brand-muted">
+                        Paguar përpara, pa shërbyer:{' '}
+                        <span className={cn(NUM, 'font-bold text-brand-ink')}>{formatCurrency(retainer.deferred, project?.currency || 'ALL')}</span>
+                        {' · '}shërbyer {retainer.monthsServed}/{retainer.monthsInCycle} muaj
+                      </p>
+                    )}
+                    <p className="text-brand-muted">
+                      {retainer.nextInvoiceAt
+                        ? <>Fatura e radhës: <span className={cn(NUM, 'font-bold text-brand-ink')}>{retainer.nextInvoiceAt.toLocaleDateString('sq-AL')}</span></>
+                        : 'Asnjë faturë e radhës (seria është ndalur ose në pauzë).'}
+                    </p>
+                  </div>
                 )}
 
                 <div className="mt-4 flex flex-col gap-2.5">

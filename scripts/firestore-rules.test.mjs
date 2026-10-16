@@ -3380,3 +3380,39 @@ test('81i. the private snapshot of a month close is owner/Admin only, written in
   await assertFails(setDoc(PV(outsider(), `${MY_BIZ}_2026-06`), priv('mallory', '2026-06')));
   await assertFails(setDoc(PV(outsider(), `${MY_BIZ}_2026-06`), priv('mallory', '2026-06', VICTIM_BIZ)));
 });
+
+// ── projects: two cycles (Oct 2026) — the WORK cycle is anyone's, its token is the cron's,
+//    the long-cycle billing inputs are Admin/Manager like every other money key ──
+test('81k. a Member sets the work cycle but not its period token, nor a yearly anchor / discount / payment terms', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'projects', 'projCycles'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, name: 'SEO yearly', status: 'Active', budget: 10800, currency: 'ALL',
+      isRecurring: true, recurringFrequency: 'yearly', billingType: 'monthly', listMonthlyFee: 1000,
+      prepayDiscountPct: 10, invoiceDueDays: 15, billingAnchorAt: new Date('2026-03-01T00:00:00+01:00'),
+      workCycle: 'monthly', workCycleLastPeriodKey: '2026-10', createdByUserId: 'memb1',
+    });
+  });
+  const pm = staffOf('pm1', MY_BIZ, MY_TEAM, ['member']);
+  const mgr = staffOf('mgr1', MY_BIZ, MY_TEAM, ['manager']);
+  const P = (db) => doc(db, 'projects', 'projCycles');
+  await assertSucceeds(updateDoc(P(pm), { workCycle: 'weekly' }));
+  await assertSucceeds(updateDoc(P(pm), { workCycle: null }));
+  for (const patch of [
+    { billingAnchorAt: new Date('2026-04-01') }, { prepayDiscountPct: 50 }, { listMonthlyFee: 1 },
+    { invoiceDueDays: 120 }, { recurringFrequency: 'monthly' },
+  ]) {
+    await assertFails(updateDoc(P(pm), patch), `member patch ${JSON.stringify(patch)} must be denied`);
+  }
+  // The work-cycle token and the renewal debounce are server-owned, for managers too.
+  for (const patch of [
+    { workCycleLastPeriodKey: '2026-11' }, { workCycleLastBlock: 'on-hold' }, { renewalNoticePeriodKey: 'Y2027-03' },
+  ]) {
+    await assertFails(updateDoc(P(mgr), patch), `browser patch ${JSON.stringify(patch)} must be denied`);
+  }
+  await assertSucceeds(updateDoc(P(mgr), { prepayDiscountPct: 15, budget: 10200, billingAnchorAt: new Date('2026-04-01') }));
+  // A browser create cannot plant the token either.
+  await assertFails(setDoc(doc(pm, 'projects', 'projPlanted'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, name: 'x', status: 'Active', spent: 0, createdByUserId: 'pm1',
+    workCycle: 'monthly', workCycleLastPeriodKey: '2099-01',
+  }));
+});

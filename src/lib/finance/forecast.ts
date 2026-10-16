@@ -78,6 +78,7 @@ const ALIVE = new Set(['Active', 'Planning', 'In Review', 'On Hold']);
 const TRANSIENT_BILLING_BLOCKS: ReadonlyArray<ProjectBillingBlock> = [
   'already-billed',       // this period's invoice is out; the next one still comes
   'before-billing-day',   // e.g. bills on the 25th, we asked on the 1st
+  'before-contract-start', // a yearly contract that starts next month still comes
 ];
 
 /**
