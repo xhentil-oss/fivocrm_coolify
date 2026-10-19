@@ -289,7 +289,9 @@ const PortalDashboard: React.FC = () => {
     [myInquiries]
   );
   const activeProjects = React.useMemo(
-    () => customerProjects.filter(p => p.status !== 'Completed'),
+    // Archived/cancelled projects are still the client's (Projektet lists them),
+    // but they are not "active" work.
+    () => customerProjects.filter(p => p.status !== 'Completed' && p.status !== 'Archived' && p.status !== 'Cancelled'),
     [customerProjects]
   );
 

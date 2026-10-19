@@ -20,6 +20,9 @@ const STATUS_FILTERS = [
   { value: 'Planning', label: 'Planifikim' },
   { value: 'On Hold', label: 'Në Pritje' },
   { value: 'Completed', label: 'Përfunduara' },
+  // An archived project stays the client's: archiving is staff housekeeping
+  // (it leaves the team's live list and stops billing), never a revocation.
+  { value: 'Archived', label: 'Arkivuar' },
 ];
 
 const PortalProjectsView: React.FC = () => {
@@ -87,7 +90,7 @@ const PortalProjectsView: React.FC = () => {
       const pct = total > 0 ? Math.round((done / total) * 100) : 0;
       return { ...p, done, total, pct };
     }).sort((a, b) => {
-      const order: Record<string, number> = { Active: 0, Planning: 1, 'On Hold': 2, Completed: 3 };
+      const order: Record<string, number> = { Active: 0, Planning: 1, 'On Hold': 2, Completed: 3, Archived: 5 };
       return (order[a.status] ?? 4) - (order[b.status] ?? 4);
     });
   }, [rawProjects, projectTasks]);
@@ -116,6 +119,8 @@ const PortalProjectsView: React.FC = () => {
       case 'Planning': return 'Planifikim';
       case 'On Hold': return 'Në Pritje';
       case 'Completed': return 'Përfunduar';
+      case 'Archived': return 'Arkivuar';
+      case 'Cancelled': return 'Anuluar';
       default: return status;
     }
   };

@@ -1408,6 +1408,29 @@ test('39e. a portal MEMBER of a project reads its tasks (by projectId), a strang
   await assertFails(getDocs(query(collection(erin, 'tasks'), where('projectId', '==', 'projShared'))));
 });
 
+test('39f. an ARCHIVED project stays readable by its portal client and members (archive ≠ revoke)', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'projects', 'projArchived'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, name: 'Archived', status: 'Archived',
+      statusBeforeArchive: 'Completed', customerId: 'cust1', memberUserIds: ['dave'],
+    });
+    await setDoc(doc(ctx.firestore(), 'tasks', 'taskArchived'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, projectId: 'projArchived', customerId: 'cust1',
+      title: 'Delivered work', status: 'Done',
+    });
+  });
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+  await assertSucceeds(getDoc(doc(carol, 'projects', 'projArchived')));
+  await assertSucceeds(getDocs(query(collection(carol, 'projects'), where('customerId', '==', 'cust1'))));
+  await assertSucceeds(getDocs(query(collection(carol, 'tasks'),
+    where('projectId', '==', 'projArchived'), where('customerId', '==', 'cust1'))));
+  const dave = portalOf('dave', 'custOther', 'dave@partner.com');
+  await assertSucceeds(getDoc(doc(dave, 'projects', 'projArchived')));
+  await assertSucceeds(getDocs(query(collection(dave, 'tasks'), where('projectId', '==', 'projArchived'))));
+  // Still read-only for the client.
+  await assertFails(updateDoc(doc(carol, 'projects', 'projArchived'), { status: 'Active' }));
+});
+
 test('39c. task update may never move the task to another business', async () => {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(doc(ctx.firestore(), 'tasks', 'taskHop'), {

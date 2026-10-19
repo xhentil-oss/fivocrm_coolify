@@ -200,6 +200,8 @@ const PortalProjectDetailView: React.FC = () => {
       case 'Planning': return 'Planifikim';
       case 'On Hold': return 'Në Pritje';
       case 'Completed': return 'Përfunduar';
+      case 'Archived': return 'Arkivuar';
+      case 'Cancelled': return 'Anuluar';
       default: return status;
     }
   };
