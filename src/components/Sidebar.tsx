@@ -4,6 +4,7 @@ import {
   FolderKanban,
   Users,
   CheckSquare,
+  ListChecks,
   Settings,
   UsersRound,
   Receipt,
@@ -94,6 +95,9 @@ const allSections: NavSection[] = [
     label: 'Puna ime',
     entries: [
       { path: '/app/dashboard', label: 'Dashboard', icon: LayoutDashboard, permissionKey: 'canAccessProfile' },
+      // Personal day view. Moved to the very top for people who mostly DO the work
+      // (not Admin/Manager/Owner) — see `sections` below.
+      { path: '/app/my-tasks', label: 'Detyrat e mia', icon: ListChecks, permissionKey: 'canAccessTasks' },
       { path: '/app/tasks', label: 'Detyrat', icon: CheckSquare, permissionKey: 'canAccessTasks' },
       { path: '/app/timesheet', label: 'Orët e mia', icon: Clock, permissionKey: 'canAccessTasks' },
       { path: '/app/projects', label: 'Projektet', icon: FolderKanban, permissionKey: 'canAccessProjects' },
@@ -259,9 +263,15 @@ const Sidebar: React.FC<SidebarProps> = ({
         }
         return canSeeLeaf(entry) ? [entry] : [];
       });
+      // "Detyrat e mia" first for the people who execute the work.
+      const leadsTeam = permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin;
+      if (section.key === 'my-work' && !leadsTeam) {
+        const i = entries.findIndex(e => !isGroup(e) && e.path === '/app/my-tasks');
+        if (i > 0) entries.unshift(...entries.splice(i, 1));
+      }
       return entries.length ? [{ ...section, entries }] : [];
     });
-  }, [permissions.isLoading, canSeeLeaf]);
+  }, [permissions.isLoading, permissions.isAdmin, permissions.isManager, permissions.isOwner, permissions.isSuperAdmin, canSeeLeaf]);
 
   // Expand a group by default when one of its children is the active route;
   // manual toggles override that.

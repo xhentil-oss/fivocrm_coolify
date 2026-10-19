@@ -55,6 +55,7 @@ const CRMView = lazyRetry(() => import('./views/CRMView'));
 const FollowUpsView = lazyRetry(() => import('./views/FollowUpsView'));
 const DealsView = lazyRetry(() => import('./views/DealsView'));
 const TasksView = lazyRetry(() => import('./views/TasksView'));
+const MyTasksView = lazyRetry(() => import('./views/MyTasksView'));
 const ReportsView = lazyRetry(() => import('./views/ReportsView'));
 const ReportDetailView = lazyRetry(() => import('./views/ReportDetailView'));
 const ReportingAdminView = lazyRetry(() => import('./views/ReportingAdminView'));
@@ -435,6 +436,8 @@ function AppContent() {
                       <Route path="/app/follow-ups" element={<ModuleGate moduleId="crm"><FollowUpsView /></ModuleGate>} />
                       <Route path="/app/deals" element={<PermissionGate permissionKey="canAccessCRM"><DealsView /></PermissionGate>} />
                       <Route path="/app/tasks" element={<PermissionGate permissionKey="canAccessTasks"><TasksView /></PermissionGate>} />
+                      {/* Personal day view ("Detyrat e mia") — an extraPath of the tasks module. */}
+                      <Route path="/app/my-tasks" element={<ModuleGate moduleId="tasks"><MyTasksView /></ModuleGate>} />
                       <Route path="/app/timesheet" element={<ModuleGate moduleId="timesheet"><TimesheetView /></ModuleGate>} />
                       {/* Daily reports now live inside the hub. Kept as a redirect so
                           existing bookmarks and the daily-report notification deep

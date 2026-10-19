@@ -20,6 +20,16 @@ import type { DailyReport } from '../types';
 const DUE_LABEL = `${DAILY_DUE_HOUR}:${String(DAILY_DUE_MINUTE).padStart(2, '0')}`;
 
 /**
+ * Other surfaces (e.g. "Detyrat e mia") open THIS dialog instead of mounting a
+ * second copy of the form ("One form, two mounts" — the popup and the admin
+ * preview are the only mounts). The popup is mounted once in the app shell.
+ */
+export const DAILY_REPORT_OPEN_EVENT = 'fivocrm:open-daily-report';
+export function openDailyReport(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(DAILY_REPORT_OPEN_EVENT));
+}
+
+/**
  * The end-of-day report gate.
  *
  * Owns the SCHEDULE and the two ways of asking — the dialog and, once it is dismissed,
@@ -52,6 +62,13 @@ const DailyReportPopup: React.FC = () => {
   });
 
   const alreadySubmitted = useMemo(() => (todayReports?.length || 0) > 0, [todayReports]);
+
+  // An explicit ask from another surface opens the dialog at any hour.
+  useEffect(() => {
+    const onOpen = () => setOpen(true);
+    window.addEventListener(DAILY_REPORT_OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(DAILY_REPORT_OPEN_EVENT, onOpen);
+  }, []);
 
   // One timer for both surfaces. `promptTime` opens the dialog once; after that the
   // banner is driven by the same flag, so closing the dialog cannot hide the ask.

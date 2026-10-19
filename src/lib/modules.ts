@@ -71,7 +71,7 @@ export const MODULES: ModuleDef[] = [
 
   // ── Operacione ──
   { id: 'projects', path: '/app/projects', label: 'Projektet', description: 'Projekte, milestone-e dhe buxhet.', permissionKey: 'canAccessProjects', minPlan: 'starter', optional: true, group: 'Operacione' },
-  { id: 'tasks', path: '/app/tasks', label: 'Detyrat', description: 'Bordi i detyrave, etiketat, bllokuesit dhe përsëritjet.', permissionKey: 'canAccessTasks', minPlan: 'starter', optional: true, group: 'Operacione' },
+  { id: 'tasks', path: '/app/tasks', label: 'Detyrat', description: 'Bordi i detyrave, etiketat, bllokuesit dhe përsëritjet.', permissionKey: 'canAccessTasks', minPlan: 'starter', optional: true, group: 'Operacione', extraPaths: ['/app/my-tasks'] },
   // Hours per client → project → task. The base of every cost figure in Financat
   // (client profitability, plan vs actual, utilisation). Same permission as tasks:
   // everyone who does work logs it.

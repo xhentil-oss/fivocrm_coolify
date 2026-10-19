@@ -1,112 +1,63 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { DndContext, DragOverlay, closestCorners, MouseSensor, TouchSensor, useSensor, useSensors, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
-import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
-import { getTaskStatusLabel } from '../lib/statusColors';
-import { completeTask, startOfRecurrenceDay, hasLiveSeriesSibling, recurringOccurrencesInMonth } from '../lib/recurringUtils';
+import { type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
+import { completeTask, hasLiveSeriesSibling, startOfRecurrenceDay } from '../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
-import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
-import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
+import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import {
-  User,
-  Flag,
-  MoreVertical,
-  Plus,
-  MessageSquare,
-  CalendarDays,
-  List,
-  LayoutGrid,
-  Users,
-  ChevronLeft,
-  ChevronRight,
-  ChevronDown,
-  Target,
-  Clock,
-  Play,
-  Check,
-  X,
-  AlertCircle,
-  CheckCircle2,
-  CircleDot,
-  ListChecks,
-  Edit2,
-  Trash2,
-  AlertTriangle,
-  GripVertical,
-  Tag as TagIcon,
-} from 'lucide-react';
-import { Card } from '../components/ui/card';
-import { Badge } from '../components/ui/badge';
-import { Checkbox } from '../components/ui/checkbox';
-import { Button } from '../components/ui/button';
-import { Calendar } from '../components/ui/calendar';
-import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '../components/ui/dropdown-menu';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
+import { useStableCallback } from '../hooks/useStableCallback';
+import { useTaskListOrder } from '../hooks/useTaskListOrder';
+import { useTaskGroups } from '../hooks/useTaskGroups';
+import { useTaskBulkActions } from '../hooks/useTaskBulkActions';
+import { useCreateTask } from '../hooks/useCreateTask';
+import { useTaskCommentHandlers } from '../hooks/useTaskCommentHandlers';
 import { toast } from '../hooks/use-toast';
 import type { Task, TaskComment, Project, Notification, TaskCollaborator, UserProfile, TimeEntry, Customer, Invoice } from '../types';
 import TaskDetailPanel from '../components/TaskDetailPanel';
-import QuickTaskForm, { QUICK_TASK_DIALOG_CLASS } from '../components/QuickTaskForm';
+import QuickTaskForm from '../components/QuickTaskForm';
 import TaskDateConflictDialog from '../components/TaskDateConflictDialog';
-import { findSameDayTasks } from '../lib/taskConflicts';
-import { reminderPatchForDeadline, reminderAtFromOffset, parseTaskDate } from '../lib/taskReminders';
-import { sortByManualOrder, pruneManualOrder, doneLast, compareTasksByDue, compareTasksByTimeOfDayThenPriority, taskDueMs } from '../lib/taskSort';
-import { Bell as ReminderBellIcon } from 'lucide-react';
+import { reminderPatchForDeadline } from '../lib/taskReminders';
 import { deleteTaskCascade } from '../lib/deleteCascade';
-import { applyValuedTaskSideEffects } from '../lib/finance/taskValue';
-import { canSeeFinancials } from '../lib/utils';
-import { taskDeepLink } from '../lib/deepLinks';
-import { taskCompletedNotifications, taskAssignedNotifications } from '../lib/taskNotifications';
+import { taskCompletedNotifications } from '../lib/taskNotifications';
 import SmartSuggestions from '../components/SmartSuggestions';
-import { TaskLabels } from '../components/TaskLabels';
 import TaskTimeline from '../components/TaskTimeline';
-import { GanttChart } from 'lucide-react';
-
-/** A task is overdue only if its due DAY is before today (calendar-day, ignoring
- * time-of-day) — consistent with the "Sot/Nesër" labels now that tasks carry
- * intra-day times. Undated/invalid → not overdue. */
-function isOverdueDate(endDate: any): boolean {
-  if (!endDate) return false;
-  const d = new Date(endDate);
-  if (isNaN(d.getTime())) return false;
-  // Calendar-day comparison in Europe/Tirane (the zone every deadline is a
-  // promise in) — machine-local midnight made a travelling browser and the
-  // cron disagree about "vonuar".
-  return startOfRecurrenceDay(d) < startOfRecurrenceDay(new Date());
-}
-
-/** Generate a deterministic HSL background colour from a name string */
-function hashColor(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  const h = Math.abs(hash) % 360;
-  return `hsl(${h}, 55%, 42%)`;
-}
+import TaskRow from '../components/tasks/TaskRow';
+import TaskListView, { TaskListSkeleton } from '../components/tasks/TaskListView';
+import TaskBoardView from '../components/tasks/TaskBoardView';
+import TaskCalendarView from '../components/tasks/TaskCalendarView';
+import TaskPaginationBar from '../components/tasks/TaskPaginationBar';
+import TaskBulkBar from '../components/tasks/TaskBulkBar';
+import TaskListHeader, { type TaskViewMode } from '../components/tasks/TaskListHeader';
+import TaskFilters, { type TaskGroupBy } from '../components/tasks/TaskFilters';
+import { TaskDeleteConfirmDialog, TaskBulkDeleteDialog } from '../components/tasks/TaskDeleteDialogs';
+import { useTaskDragSensors } from '../components/tasks/taskDnd';
+import { TASKS_PAGE_SIZE as PAGE_SIZE, TASK_BOARD_COLUMNS as columns, isOverdueDate } from '../components/tasks/taskListUtils';
 
 const TasksView: React.FC = () => {
   const { user } = useAuth();
+  // Rows are memoized, so "Sot/Nesër/vonuar" labels would freeze across
+  // midnight on a page left open: remount the list once per Tirane day.
+  const [todayKey, setTodayKey] = useState(() => startOfRecurrenceDay(new Date()));
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const k = startOfRecurrenceDay(new Date());
+      setTodayKey(prev => (prev === k ? prev : k));
+    }, 60_000);
+    return () => window.clearInterval(id);
+  }, []);
   const permissions = usePermissions();
   const logActivity = useActivityLogger();
   // Persisted view preferences (Asana-style: the view/filter you left is remembered).
-  const [viewMode, setViewMode] = useState<'board' | 'calendar' | 'list' | 'timeline'>(() => (localStorage.getItem('tasks_viewMode') as any) || 'list');
+  const [viewMode, setViewMode] = useState<TaskViewMode>(() => (localStorage.getItem('tasks_viewMode') as any) || 'list');
   const [filterStatus, setFilterStatus] = useState<string>(() => localStorage.getItem('tasks_filterStatus') || 'all');
   // Filter by assignee (a teamMember userId, 'all', or 'unassigned'). Applies to
   // every view — list, board, calendar and timeline — so e.g. picking Elton shows
   // exactly what Elton has to do, including on the calendar.
   const [filterAssignee, setFilterAssignee] = useState<string>(() => localStorage.getItem('tasks_filterAssignee') || 'all');
-  const [groupBy, setGroupBy] = useState<'none' | 'assignee' | 'priority' | 'project' | 'dueDate'>(() => (localStorage.getItem('tasks_groupBy') as any) || 'none');
+  const [groupBy, setGroupBy] = useState<TaskGroupBy>(() => (localStorage.getItem('tasks_groupBy') as any) || 'none');
   // Label filter ('all' = off) — `allLabels` powered an autocomplete but no
   // filter existed anywhere, despite its own comment claiming one.
   const [filterLabel, setFilterLabel] = useState<string>(() => localStorage.getItem('tasks_filterLabel') || 'all');
@@ -117,7 +68,6 @@ const TasksView: React.FC = () => {
     localStorage.setItem('tasks_filterAssignee', filterAssignee);
     localStorage.setItem('tasks_groupBy', groupBy);
   }, [viewMode, filterStatus, filterAssignee, groupBy]);
-  const PAGE_SIZE = 50;
   const [page, setPage] = useState(0);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -125,46 +75,9 @@ const TasksView: React.FC = () => {
   // here. Tagged with its task so it never leaks onto another task you open next.
   const [focusComment, setFocusComment] = useState<{ taskId: string; commentId: string } | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
-  // Set when the assignee already has work on the day being scheduled — the form
-  // submission is parked here until the user confirms (or cancels).
-  const [dateConflict, setDateConflict] = useState<{
-    formData: FormData;
-    tasks: Task[];
-    assigneeName: string;
-    date: Date;
-  } | null>(null);
   const [panelExpanded, setPanelExpanded] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  const [listOrder, setListOrder] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem('tasks_list_order') || '[]'); } catch { return []; }
-  });
-  const teamId = useGlobalTeamId();
   const businessId = useGlobalBusinessId();
-  const teamSettingsData = useTeamSettingsData();
-  const listOrderLoaded = React.useRef(false);
-  // The team-shared order lives in teamSettings, which the rules let only an
-  // Admin/Manager (or owner / super-admin) write. Everyone else drags into a
-  // PERSONAL order kept on this device (permission FLAGS, never role strings).
-  const canWriteSharedOrder = !!(permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin);
-  const personalOrderKey = user?.uid ? `tasks_list_order:${user.uid}` : null;
-  const personalOrderNoticeShown = React.useRef(false);
-  // Load the order once: a writer gets the shared Firestore order (it takes
-  // priority over localStorage); a non-writer gets their own saved order first —
-  // otherwise every reload clobbered their drags with the shared one.
-  useEffect(() => {
-    if (listOrderLoaded.current) return;
-    if (teamSettingsData === null || permissions.isLoading) return;
-    listOrderLoaded.current = true;
-    if (!canWriteSharedOrder && personalOrderKey) {
-      try {
-        const own = JSON.parse(localStorage.getItem(personalOrderKey) || 'null');
-        if (Array.isArray(own) && own.length > 0) { setListOrder(own); return; }
-      } catch { /* unreadable → fall back to the shared order */ }
-    }
-    if (teamSettingsData.taskListOrder && teamSettingsData.taskListOrder.length > 0) {
-      setListOrder(teamSettingsData.taskListOrder);
-    }
-  }, [teamSettingsData, permissions.isLoading, canWriteSharedOrder, personalOrderKey]);
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Fetch data — skipTeamFilter to avoid dependency on globalTeamId timing.
@@ -210,17 +123,33 @@ const TasksView: React.FC = () => {
     return new Set(activeTimeEntries.map(entry => entry.taskId).filter(Boolean));
   }, [activeTimeEntries]);
 
+  // Lookup maps for userId → display name. FIRST match wins, exactly like the
+  // `.find()` calls they replace (a row render used to scan both arrays per row).
+  const profileByUserId = useMemo(() => {
+    const map = new Map<string, UserProfile>();
+    for (const p of userProfiles || []) {
+      if (p.userId && !map.has(p.userId)) map.set(p.userId, p);
+      if (p.id && !map.has(p.id)) map.set(p.id, p);
+    }
+    return map;
+  }, [userProfiles]);
+  const memberByUserId = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const m of teamMembers || []) if (m.userId && !map.has(m.userId)) map.set(m.userId, m);
+    return map;
+  }, [teamMembers]);
+
   // Helper: resolve userId to display name
   const getUserName = React.useCallback((userId?: string) => {
     if (!userId) return 'Pa caktuar';
     if (userId === user?.uid) return user?.displayName || 'Ti';
-    const profile = userProfiles?.find(p => p.userId === userId || p.id === userId);
+    const profile = profileByUserId.get(userId);
     if (profile?.displayName) return profile.displayName;
-    const member = teamMembers?.find((m: any) => m.userId === userId);
+    const member = memberByUserId.get(userId);
     if (member?.displayName) return member.displayName;
     if (member?.email) return member.email.split('@')[0];
     return userId.includes('@') ? userId.split('@')[0] : userId.slice(0, 8);
-  }, [user, userProfiles, teamMembers]);
+  }, [user, profileByUserId, memberByUserId]);
 
   // Helper: get subtask counts per task
   const subtaskCounts = useMemo(() => {
@@ -256,15 +185,19 @@ const TasksView: React.FC = () => {
     return blocked;
   }, [allTasks, rawTasks]);
 
-  // Helper: get project name
+  // Helper: get project name (first match by id, like the `.find()` it replaces)
+  const projectNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of projects || []) if (!map.has(p.id)) map.set(p.id, p.name);
+    return map;
+  }, [projects]);
   const getProjectName = React.useCallback((projectId?: string) => {
     if (!projectId || !projects) return null;
-    return projects.find(p => p.id === projectId)?.name || null;
-  }, [projects]);
+    return projectNameById.get(projectId) || null;
+  }, [projects, projectNameById]);
 
   // Mutations
   const taskMutation = useMutation<Task>('tasks');
-  const commentMutation = useMutation<TaskComment>('taskComments');
   const notificationMutation = useMutation<Notification>('notifications');
   const collaboratorMutation = useMutation<TaskCollaborator>('taskCollaborators');
 
@@ -334,7 +267,6 @@ const TasksView: React.FC = () => {
   // so filter buttons always show correct totals regardless of active filter
   const taskStats = useMemo(() => {
     if (!baseTasksForStats.length && !allTasks?.length) return { todo: 0, inProgress: 0, review: 0, done: 0, overdue: 0 };
-    const now = new Date();
     return {
       todo: baseTasksForStats.filter(t => t.status === 'Todo').length,
       inProgress: baseTasksForStats.filter(t => t.status === 'In Progress').length,
@@ -386,334 +318,38 @@ const TasksView: React.FC = () => {
     }
   }, [rawTasks, selectedTask]);
 
-
-
-  const handleCreateTask = async (formData: FormData, options?: { skipDateConflictCheck?: boolean; createAnother?: boolean }) => {
-    const title = formData.get('title') as string;
-    const description = formData.get('description') as string;
-    // Dates are optional (only the title is required) — guard against Invalid Date.
-    const startRaw = formData.get('startDate') as string;
-    const endRaw = formData.get('endDate') as string;
-    const sd = startRaw ? new Date(startRaw) : null;
-    const ed = endRaw ? new Date(endRaw) : null;
-    const startDate = sd && !isNaN(sd.getTime()) ? sd : undefined;
-    const endDate = ed && !isNaN(ed.getTime()) ? ed : undefined;
-    // Default to current user if not specified
-    const assignedToUserId = (formData.get('assignedToUserId') as string) || user?.uid || '';
-
-    // Same-day check: if this person already has an open task on the scheduled day,
-    // ask before stacking another one on it. Detection runs on the raw (unfiltered)
-    // task list so the role filter can't hide a conflicting task from the check.
-    const scheduledDate = endDate || startDate;
-    if (!options?.skipDateConflictCheck && scheduledDate && assignedToUserId) {
-      const sameDay = findSameDayTasks(rawTasks || [], {
-        assigneeId: assignedToUserId,
-        date: scheduledDate,
-      });
-      if (sameDay.length > 0) {
-        setDateConflict({
-          formData,
-          tasks: sameDay,
-          assigneeName: assignedToUserId === user?.uid ? 'Ti' : getUserName(assignedToUserId),
-          date: scheduledDate,
-        });
-        return;
+  // "Detyrë e Re" submission (same-day check, recurrence seed, valued-task
+  // invoice, collaborators, notifications) — src/hooks/useCreateTask.ts.
+  const { handleCreateTask, handleConfirmDateConflict, dateConflict, setDateConflict } = useCreateTask({
+    rawTasks,
+    projects,
+    getUserName,
+    taskMutation,
+    collaboratorMutation,
+    notificationMutation,
+    onCreated: (newTask, options) => {
+      // "Krijo & shto tjetër" keeps the dialog open for the next entry — the form
+      // resets itself and shows its own confirmation, so don't steal focus either.
+      if (!options?.createAnother) {
+        setIsCreateDialogOpen(false);
+        setSelectedTask(newTask);
       }
-    }
+    },
+  });
 
-    const projectId = formData.get('projectId') as string;
-    const priority = formData.get('priority') as string;
-    const status = formData.get('status') as string;
-    const parentTaskId = formData.get('parentTaskId') as string;
-    const collaboratorIdsRaw = formData.get('collaboratorIds') as string;
-    const isRecurringRaw = formData.get('isRecurring') as string;
-    const recurringFrequency = formData.get('recurringFrequency') as string;
-    const recurringIntervalRaw = formData.get('recurringInterval') as string;
-    const recurringDayOfWeekRaw = formData.get('recurringDayOfWeek') as string;
-    const recurringDayOfMonthRaw = formData.get('recurringDayOfMonth') as string;
-    const recurringDaysOfWeekRaw = formData.get('recurringDaysOfWeek') as string;
-    const recurringEndDateRaw = formData.get('recurringEndDate') as string;
-    const estimatedHoursRaw = formData.get('estimatedHours') as string;
-    const valueRaw = formData.get('value') as string;
-    const dependsOnRaw = formData.get('dependsOn') as string;
-    // "Më kujto" preset, minutes before the deadline (QuickTaskForm). Resolved
-    // here against the deadline the form actually sent; no deadline → no reminder.
-    const reminderOffsetRaw = formData.get('reminderOffsetMinutes') as string;
-    const reminderOffsetMinutes = reminderOffsetRaw !== null && reminderOffsetRaw !== '' && !isNaN(Number(reminderOffsetRaw))
-      ? Math.max(0, Number(reminderOffsetRaw)) : undefined;
-    const reminderAt = reminderOffsetMinutes !== undefined && endDate ? reminderAtFromOffset(endDate, reminderOffsetMinutes) : undefined;
+  // Comment callbacks for the panel (src/hooks/useTaskCommentHandlers.ts).
+  const { handleAddComment, handleEditComment, handleDeleteComment, handleToggleReaction } = useTaskCommentHandlers(rawTasks, comments);
 
-    let dependsOn: string[] = [];
-    try { dependsOn = dependsOnRaw ? JSON.parse(dependsOnRaw) : []; } catch { dependsOn = []; }
-    let collaboratorIds: string[] = [];
-    try { collaboratorIds = collaboratorIdsRaw ? JSON.parse(collaboratorIdsRaw) : []; } catch { collaboratorIds = []; }
-    const labelsRaw = formData.get('labels') as string;
-    let labels: string[] = [];
-    try { labels = labelsRaw ? JSON.parse(labelsRaw) : []; } catch { labels = []; }
-    const isRecurring = isRecurringRaw === 'true';
-    const recurringDayOfWeek = recurringDayOfWeekRaw ? parseInt(recurringDayOfWeekRaw) : undefined;
-    const recurringDayOfMonth = recurringDayOfMonthRaw ? parseInt(recurringDayOfMonthRaw) : undefined;
-
-    let nextRecurringDate: Date | undefined;
-    if (isRecurring && recurringFrequency) {
-      const now = new Date();
-      if (recurringFrequency === 'daily') {
-        // Next day that is in the selected days-of-week list (default Mon-Fri)
-        const activeDays = recurringDaysOfWeekRaw ? JSON.parse(recurringDaysOfWeekRaw) as number[] : [1,2,3,4,5];
-        nextRecurringDate = new Date(now);
-        nextRecurringDate.setDate(nextRecurringDate.getDate() + 1);
-        nextRecurringDate.setHours(9, 0, 0, 0);
-        if (activeDays.length > 0) {
-          let tries = 0;
-          while (!activeDays.includes(nextRecurringDate.getDay()) && tries < 7) {
-            nextRecurringDate.setDate(nextRecurringDate.getDate() + 1);
-            tries++;
-          }
-        }
-      } else if (recurringFrequency === 'weekly' && recurringDayOfWeek !== undefined) {
-        // Next occurrence of selected weekday
-        nextRecurringDate = new Date(now);
-        const currentDay = now.getDay();
-        let daysUntil = recurringDayOfWeek - currentDay;
-        if (daysUntil <= 0) daysUntil += 7;
-        nextRecurringDate.setDate(nextRecurringDate.getDate() + daysUntil);
-        nextRecurringDate.setHours(9, 0, 0, 0);
-      } else if (recurringFrequency === 'monthly' && recurringDayOfMonth !== undefined) {
-        // Next occurrence of selected day of month, clamped to the month's last
-        // day (e.g. day 31 in February becomes the 28th/29th, not March 3rd).
-        const buildMonthly = (year: number, month: number) => {
-          const lastDay = new Date(year, month + 1, 0).getDate();
-          return new Date(year, month, Math.min(recurringDayOfMonth, lastDay), 9, 0, 0);
-        };
-        nextRecurringDate = buildMonthly(now.getFullYear(), now.getMonth());
-        if (nextRecurringDate <= now) {
-          nextRecurringDate = buildMonthly(now.getFullYear(), now.getMonth() + 1);
-        }
-      } else if (recurringFrequency === 'yearly') {
-        const baseDate = new Date(endDate || now);
-        nextRecurringDate = new Date(baseDate.setFullYear(baseDate.getFullYear() + 1));
-      }
-    }
-
-    const newTask = await taskMutation.create({
-      title,
-      description,
-      startDate,
-      endDate,
-      assignedToUserId,
-      projectId: projectId || undefined,
-      status,
-      priority,
-      parentTaskId: parentTaskId || undefined,
-      collaboratorIds: collaboratorIds,
-      labels: labels.length > 0 ? labels : undefined,
-      dueNotificationSent: false,
-      isRecurring,
-      recurringFrequency: isRecurring ? recurringFrequency : undefined,
-      recurringInterval: isRecurring ? Math.max(1, Math.round(parseInt(recurringIntervalRaw) || 1)) : undefined,
-      recurringDayOfWeek: isRecurring && recurringFrequency === 'weekly' ? recurringDayOfWeek : undefined,
-      recurringDayOfMonth: isRecurring && recurringFrequency === 'monthly' ? recurringDayOfMonth : undefined,
-      recurringDaysOfWeek: isRecurring && recurringFrequency === 'daily' && recurringDaysOfWeekRaw
-        ? (() => { try { return JSON.parse(recurringDaysOfWeekRaw); } catch { return [1,2,3,4,5]; } })()
-        : undefined,
-      recurringEndDate: isRecurring && recurringEndDateRaw
-        ? (() => { const [y, mo, d] = recurringEndDateRaw.split('-').map(Number); return new Date(y, mo - 1, d); })()
-        : undefined,
-      nextRecurringDate,
-      reminderAt,
-      reminderOffsetMinutes: reminderAt ? reminderOffsetMinutes : undefined,
-      estimatedHours: estimatedHoursRaw ? (v => !isNaN(v) ? v : undefined)(parseFloat(estimatedHoursRaw)) : undefined,
-      value: valueRaw ? (v => !isNaN(v) && v >= 0 ? v : undefined)(parseFloat(valueRaw)) : undefined,
-      dependsOn: dependsOn.length > 0 ? dependsOn : undefined,
-    });
-
-    // A priced task means the SAME thing from every surface: draft invoice +
-    // budget increment only on one-time projects (src/lib/finance/taskValue.ts).
-    // This path used to store `value` with none of the side-effects, leaving it
-    // to a manual backfill script with different behaviour.
-    const createdValue = Number((newTask as any).value) || (valueRaw ? parseFloat(valueRaw) : 0) || 0;
-    if (createdValue > 0) {
-      try {
-        const proj = projectId ? (projects || []).find(p => p.id === projectId) : undefined;
-        const result = await applyValuedTaskSideEffects({
-          taskId: (newTask as any).id,
-          taskTitle: title,
-          value: createdValue,
-          project: proj ? ({ ...(proj as any), id: proj.id }) : null,
-          canEditBudget: canSeeFinancials(permissions),
-        });
-        if (!result.skipped) {
-          toast({
-            title: 'Faturë Draft për detyrën ✓',
-            description: result.appliedToBudget
-              ? `${result.invoiceNumber} për ${createdValue.toLocaleString()} · buxheti i projektit u rrit.`
-              : `${result.invoiceNumber} për ${createdValue.toLocaleString()}${proj ? ' · tarifa periodike nuk u prek' : ''}.`,
-          });
-        }
-      } catch (err: any) {
-        console.error('[Tasks] draft invoice for valued task failed:', err);
-        toast({ title: 'Detyra u ruajt, fatura jo', description: err?.message, variant: 'destructive' });
-      }
-    }
-
-    // Create collaborator records in parallel
-    await Promise.all(
-      collaboratorIds.map(collabId =>
-        collaboratorMutation.create({
-          taskId: newTask.id,
-          userId: collabId,
-          role: 'collaborator',
-        })
-      )
-    );
-
-    // Send notifications in parallel
-    const notificationPromises: Promise<any>[] = [];
-    if (assignedToUserId && assignedToUserId !== user?.uid) {
-      notificationPromises.push(
-        notificationMutation.create({
-          userId: assignedToUserId,
-          type: 'task_assigned',
-          title: 'Detyrë e Re e Caktuar',
-          message: `Ju u caktuat te detyra: ${title}`,
-          isRead: false,
-          // Deep link straight to the task — a bare '/app/tasks' landed on the
-          // list and nothing opened or scrolled.
-          actionUrl: taskDeepLink((newTask as any).id, projectId || undefined),
-          actionLabel: 'Shiko Detyrën',
-        })
-      );
-    }
-    for (const collabId of collaboratorIds) {
-      // Skip the assignee too — they were just told "detyrë e re" above; a second
-      // "u shtuat si bashkëpunëtor" for the same creation is a duplicate ping.
-      if (collabId !== user?.uid && collabId !== assignedToUserId) {
-        notificationPromises.push(
-          notificationMutation.create({
-            userId: collabId,
-            type: 'task_collaborator_added',
-            title: 'U shtuat si bashkëpunëtor',
-            message: `U shtuat si bashkëpunëtor te detyra: ${title}`,
-            isRead: false,
-            actionUrl: taskDeepLink((newTask as any).id, projectId || undefined),
-            actionLabel: 'Shiko Detyrën',
-          })
-        );
-      }
-    }
-    // allSettled, not all: the task is already created by this point. A rejected
-    // notification used to reject this whole handler, so the dialog stayed open on a
-    // task that existed — and the user created it a second time.
-    await Promise.allSettled(notificationPromises);
-
-    setDateConflict(null);
-    // "Krijo & shto tjetër" keeps the dialog open for the next entry — the form
-    // resets itself and shows its own confirmation, so don't steal focus either.
-    if (!options?.createAnother) {
-      setIsCreateDialogOpen(false);
-      setSelectedTask(newTask);
-    }
-  };
-
-  /** "Po, vazhdo" on the same-day warning — re-runs the parked submission. */
-  const handleConfirmDateConflict = async () => {
-    if (!dateConflict) return;
-    const { formData } = dateConflict;
-    setDateConflict(null);
-    await handleCreateTask(formData, { skipDateConflictCheck: true });
-  };
-
-  const handleAddComment = async (taskId: string, content: string, opts?: { visibleToClient?: boolean }) => {
-    // Return the created doc — the panel needs its id to deep-link the notifications.
-    // customerId on a task comment IS the client-visibility switch (the portal
-    // reads `customerId == mine`), so it is stamped ONLY when the composer
-    // explicitly marked the comment client-visible.
-    const task = (rawTasks || []).find(t => t.id === taskId);
-    const customerId = opts?.visibleToClient ? (task as any)?.customerId : undefined;
-    return commentMutation.create({
-      taskId,
-      content,
-      ...(customerId ? { customerId, senderType: 'team' } : {}),
-    } as any);
-  };
-
-  const handleEditComment = async (commentId: string, content: string) => {
-    await commentMutation.update(commentId, { content, edited: true });
-  };
-
-  const handleDeleteComment = async (commentId: string) => {
-    await commentMutation.remove(commentId);
-  };
-
-  const handleToggleReaction = async (commentId: string, emoji: string) => {
-    if (!user?.uid) return;
-    const c = comments?.find(x => x.id === commentId);
-    const current: Record<string, string[]> = { ...((c as any)?.reactions || {}) };
-    const arr = Array.isArray(current[emoji]) ? [...current[emoji]] : [];
-    const i = arr.indexOf(user.uid);
-    if (i >= 0) arr.splice(i, 1); else arr.push(user.uid);
-    if (arr.length) current[emoji] = arr; else delete current[emoji];
-    // Never fail silently: a reaction on someone else's comment is a rules-level
-    // write (see the `reactions`-only branch on taskComments), so a stale rules
-    // deploy shows up as nothing happening at all unless we say so.
-    try {
-      await commentMutation.update(commentId, { reactions: current } as any);
-    } catch (err: any) {
-      toast({ title: 'Reagimi nuk u ruajt', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
-    }
-  };
-
-  // --- @dnd-kit drag-and-drop for kanban ---
-  // Mouse: drag after a small move. Touch: drag only after a 200ms hold, so normal
-  // finger-scrolling through the list/board isn't hijacked into a drag.
-  const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } }),
-  );
+  // --- @dnd-kit drag-and-drop for list + kanban ---
+  const sensors = useTaskDragSensors();
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveTaskId(String(event.active.id));
   };
 
-  // Reorder against the FULL workspace task list (not just the filtered/paginated
-  // subset), so a manual move while a filter or search is active doesn't drop the
-  // order of every hidden task to the end.
-  const applyReorder = async (taskId: string, overId: string) => {
-    // Start from the MANUAL order (unknown ids first — see taskSort), not
-    // "saved order + unknown appended": with a fresh task at the top, a row
-    // dropped onto it landed at the bottom of the saved order, i.e. last page.
-    // Deliberately WITHOUT doneLast: "Done sinks" is a display rule. Baking it
-    // into the saved (team-shared) order moved every completed task to the end
-    // for good, so re-opening one never brought it back to its slot.
-    const full = sortByManualOrder(allTasks, orderMap).map(t => t.id);
-    for (const id of listOrder) if (!full.includes(id)) full.push(id);
-    const oldIndex = full.indexOf(taskId);
-    const newIndex = full.indexOf(overId);
-    if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return;
-    // Drop ids of deleted tasks — the saved order only ever grew. Pruned against
-    // the WORKSPACE list: the role-filtered one would erase the slots of every
-    // task this user cannot see from an order the whole team shares.
-    const reordered = pruneManualOrder(arrayMove(full, oldIndex, newIndex), rawTasks || allTasks);
-    setListOrder(reordered);
-    if (!canWriteSharedOrder || !teamId) {
-      // teamSettings is Admin/Manager-only in the rules: everyone else keeps a
-      // personal order on this device (the write used to be rejected silently).
-      try { if (personalOrderKey) localStorage.setItem(personalOrderKey, JSON.stringify(reordered)); } catch { /* storage unavailable */ }
-      if (!personalOrderNoticeShown.current) {
-        personalOrderNoticeShown.current = true;
-        toast({ title: 'Renditja u ruajt vetëm për ty', description: 'Renditja e përbashkët e ekipit ndryshohet nga administratori ose menaxheri.' });
-      }
-      return;
-    }
-    try { localStorage.setItem('tasks_list_order', JSON.stringify(reordered)); } catch { /* storage unavailable */ }
-    try {
-      await saveTeamSettings(teamId, { taskListOrder: reordered });
-    } catch (err: any) {
-      console.error('[Tasks] ruajtja e renditjes dështoi:', err);
-      toast({ title: 'Renditja nuk u ruajt për ekipin', description: err?.message, variant: 'destructive' });
-    }
-  };
+  // Manual (drag) order: shared team order for writers, personal for the rest.
+  const { sortByOrder, applyReorder } = useTaskListOrder(allTasks, rawTasks);
 
   const handleDragEnd = async (event: DragEndEvent) => {
     setActiveTaskId(null);
@@ -810,21 +446,6 @@ const TasksView: React.FC = () => {
       ? { status, nextCycleCreated: false, completedAt: null }
       : { status, completedAt: null };
 
-  const columns = [
-    { id: 'Todo', title: 'Për të bërë', status: 'Todo' },
-    { id: 'In Progress', title: 'Në progres', status: 'In Progress' },
-    { id: 'Review', title: 'Rishikim', status: 'Review' },
-    { id: 'Done', title: 'Përfunduar', status: 'Done' },
-  ];
-
-  // Shared manual-order map (used by both the list view and board columns).
-  const orderMap = useMemo(() => new Map(listOrder.map((id, i) => [id, i])), [listOrder]);
-  // Tasks created AFTER the last drag are not in the map: they stay on top in
-  // their `createdAt desc` order (src/lib/taskSort.ts). The old 99999 sentinel
-  // sank every new task below all ordered ones — onto the last page.
-  // Completed tasks always go below the open ones (a no-op inside a board column).
-  const sortByOrder = React.useCallback((arr: Task[]) => doneLast(sortByManualOrder(arr, orderMap)), [orderMap]);
-
   // Apply saved manual order for the list view
   const orderedTasks = useMemo(() => sortByOrder(tasks), [tasks, sortByOrder]);
 
@@ -859,522 +480,149 @@ const TasksView: React.FC = () => {
     [orderedTasks, page]
   );
 
-  // Format date compactly — always show actual date; flag overdue with ⚠️
-  const formatDateCompact = (date: Date, status?: Task['status']) => {
-    if (!date || isNaN(new Date(date).getTime())) {
-      return { text: 'Pa afat', overdue: false, className: 'text-muted-foreground' };
+  // Groups over the WHOLE ordered list, then the page window (useTaskGroups).
+  const taskGroups = useTaskGroups(groupBy, orderedTasks, page, PAGE_SIZE, getUserName, getProjectName);
+
+  // Bulk multi-select (Asana/Monday) — list view — and the ONE delete rule for
+  // the row menu and the bulk bar (src/hooks/useTaskBulkActions.ts).
+  const {
+    selectedIds,
+    toggleSelect,
+    clearSelection,
+    bulkUpdate,
+    canDeleteTask,
+    bulkDeleteOpen,
+    setBulkDeleteOpen,
+    bulkDeleting,
+    bulkDeletePlan,
+    bulkDelete,
+    confirmBulkDelete,
+  } = useTaskBulkActions({
+    rawTasks,
+    viewMode,
+    selectedTask,
+    setSelectedTask,
+    markTaskDone,
+    reopenPatch,
+    taskMutation,
+    notificationMutation,
+    getUserName,
+  });
+  const confirmSingleDelete = async () => {
+    if (deleteConfirmId) {
+      try {
+        const s = await deleteTaskCascade(deleteConfirmId);
+        if (selectedTask?.id === deleteConfirmId) setSelectedTask(null);
+        const extra = s.tasks > 1 ? ` (${s.tasks - 1} nën-detyra u fshinë bashkë)` : '';
+        toast({ title: `Detyra u fshi${extra}`, description: s.failed ? `${s.failed} veprime lidhëse dështuan` : undefined });
+      } catch (err: any) {
+        console.error('[Tasks] fshirja dështoi:', err);
+        toast({ title: 'Detyra nuk u fshi', description: err?.message, variant: 'destructive' });
+      }
     }
-    const now = new Date();
-    const taskDate = new Date(date);
-    // Albanian month names — the UI is sq-AL, "May 5" amid Albanian labels was a leak.
-    const months = ['Jan', 'Shk', 'Mar', 'Pri', 'Maj', 'Qer', 'Kor', 'Gush', 'Sht', 'Tet', 'Nën', 'Dhj'];
-    const dateStr = `${taskDate.getDate()} ${months[taskDate.getMonth()]}`;
-    // A finished task is never "vonuar": it used to render red with ⚠️ in the
-    // Përfunduar column because only the calendar day was looked at.
-    if (status === 'Done') return { text: dateStr, overdue: false, className: 'text-muted-foreground' };
-    // Compare CALENDAR days (ignore time-of-day) so a task due later today isn't
-    // labeled "Nesër" — intra-day times made the hour-based diff round up.
-    // Days are Europe/Tirane days (see isOverdueDate).
-    const diffDays = Math.round((startOfRecurrenceDay(taskDate) - startOfRecurrenceDay(now)) / (1000 * 60 * 60 * 24));
-    if (diffDays < 0) return { text: dateStr, overdue: true, className: 'text-destructive font-medium' };
-    if (diffDays === 0) return { text: 'Sot · ' + dateStr, overdue: false, className: 'text-warning font-medium' };
-    if (diffDays === 1) return { text: 'Nesër · ' + dateStr, overdue: false, className: 'text-warning' };
-    return { text: dateStr, overdue: false, className: 'text-muted-foreground' };
+    setDeleteConfirmId(null);
   };
 
-  // ── Group by (Jira/Asana style) — purely client-side over the loaded tasks ──
-  // Groups are built from the WHOLE ordered list, then the page window is applied
-  // to the grouped sequence. Grouping only the current page made "Të vonuara"
-  // show the overdue tasks that happened to sit in that window, and the same
-  // group re-appear on page 2 with different members and a different count.
-  const taskGroups = useMemo(() => {
-    if (groupBy === 'none') return [];
-    const now = new Date();
-    const todayMs = startOfRecurrenceDay(now);
-    const PRIORITY_LABEL: Record<string, string> = { urgent: 'Urgjente', high: 'I lartë', medium: 'Mesatar', low: 'I ulët' };
-    const PRIORITY_ORDER = ['urgent', 'high', 'medium', 'low'];
-    const groups = new Map<string, { key: string; label: string; sort: number; tasks: Task[]; total: number }>();
-    const add = (key: string, label: string, sort: number, task: Task) => {
-      let g = groups.get(key);
-      if (!g) { g = { key, label, sort, tasks: [], total: 0 }; groups.set(key, g); }
-      g.tasks.push(task);
-      g.total++;
-    };
-    for (const task of orderedTasks) {
-      if (groupBy === 'assignee') {
-        const uid = task.assignedToUserId || '';
-        add(uid || '__none__', uid ? getUserName(uid) : 'Pa caktuar', uid ? 0 : 1, task);
-      } else if (groupBy === 'priority') {
-        const p = task.priority || '';
-        const idx = PRIORITY_ORDER.indexOf(p);
-        add(p || '__none__', PRIORITY_LABEL[p] || 'Pa prioritet', idx < 0 ? 99 : idx, task);
-      } else if (groupBy === 'project') {
-        const pid = task.projectId || '';
-        add(pid || '__none__', pid ? (getProjectName(pid) || 'Projekt pa emër') : 'Pa projekt', pid ? 0 : 1, task);
-      } else if (groupBy === 'dueDate') {
-        // `endDate || dueDate` (legacy rows), through one normaliser. A COMPLETED
-        // task is its own bucket: a Done task dated last month used to fail the
-        // overdue branch and fall through to "Më vonë".
-        const dueMs = taskDueMs(task);
-        if (task.status === 'Done') { add('e_done', 'Përfunduara', 4, task); continue; }
-        if (dueMs === null) { add('z_none', 'Pa afat', 5, task); continue; }
-        const dayMs = startOfRecurrenceDay(new Date(dueMs));
-        const diff = Math.round((dayMs - todayMs) / 86400000);
-        if (dayMs < todayMs) add('a_overdue', 'Të vonuara', 0, task);
-        else if (diff === 0) add('b_today', 'Sot', 1, task);
-        else if (diff > 0 && diff <= 7) add('c_week', 'Këtë javë', 2, task);
-        else add('d_later', 'Më vonë', 3, task);
-      }
+  // ── Row/card handlers ──
+  // STABLE identities (useStableCallback) so the memoized TaskRow / board card
+  // re-renders only when its own data changes, while every handler still runs
+  // against the current render's state.
+  const onRowSelect = useStableCallback((task: Task) => setSelectedTask(task));
+  const onRowToggleChecked = useStableCallback((id: string) => toggleSelect(id));
+  const onRowToggleDone = useStableCallback(async (task: Task) => {
+    const checked = task.status !== 'Done';
+    if (!checked) {
+      // Un-completing — flip back to Todo (and re-arm a recurring tip).
+      await taskMutation.update(task.id, reopenPatch(task, 'Todo'));
+      toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Për të bërë` });
+      return;
     }
-    const sorted = Array.from(groups.values()).sort((a, b) => a.sort - b.sort || a.label.localeCompare(b.label));
-    // "Sipas afatit" orders INSIDE each bucket by deadline; the other groupings
-    // keep the manual/createdAt order the flat list has.
-    if (groupBy === 'dueDate') for (const g of sorted) g.tasks.sort(compareTasksByDue);
-    // Page window over the grouped sequence; `total` keeps the real group size.
-    const flat: Task[] = [];
-    for (const g of sorted) flat.push(...g.tasks);
-    const window = new Set(flat.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE).map(t => t.id));
-    return sorted
-      .map(g => ({ ...g, tasks: g.tasks.filter(t => window.has(t.id)) }))
-      .filter(g => g.tasks.length > 0);
-  }, [groupBy, orderedTasks, page, getUserName, getProjectName]);
+    await markTaskDone(task);
+  });
+  const onRowMarkDone = useStableCallback((task: Task) => markTaskDone(task));
+  const onRowSetPriority = useStableCallback((task: Task, priority: NonNullable<Task['priority']>) => {
+    void taskMutation.update(task.id, { priority });
+  });
+  const onRowReschedule = useStableCallback(async (task: Task, d: Date) => {
+    const nd = new Date(d);
+    const cur = task.endDate ? new Date(task.endDate) : null;
+    nd.setHours(cur?.getHours() ?? 9, cur?.getMinutes() ?? 0, 0, 0);
+    // A moved deadline re-arms the due/overdue alerts (the cron
+    // skips flagged tasks, so a postponed task never alerted again)
+    // and carries a relative "Më kujto" reminder with it.
+    await taskMutation.update(task.id, { endDate: nd, dueNotificationSent: false, overdueNotificationSent: false, ...reminderPatchForDeadline(task, nd) });
+  });
+  const onRowCopy = useStableCallback(async (task: Task) => {
+    // Strip everything a copy must NOT inherit: recurrence & its
+    // bookkeeping (nextCycleCreated!), the billing idempotency flag
+    // (a copy's value was never invoiced/applied), collaborator ids
+    // (their taskCollaborators rows belong to the original),
+    // notification flags, and the reminder — a copied "1 orë para"
+    // made the cron fire two identical reminders (and its owner,
+    // reminderSetByUserId, goes with it). The work-cycle carry-over
+    // stamps and the completion instant describe the ORIGINAL's
+    // history — a fresh copy was never carried and is not done.
+    const { id, isRecurring, recurringFrequency, recurringInterval, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, recurringEndDate, nextRecurringDate, nextCycleCreated, seriesId, recurringSkippedReason, dueNotificationSent, overdueNotificationSent, reminderAt, reminderOffsetMinutes, reminderSentAt, reminderSetByUserId, carriedOverFromPeriod, carriedOverCount, completedAt, parentTaskId, dependsOn, attachments, value, valueAppliedToBudget, collaboratorIds, createdByUserId, seriesCreatedByUserId, cycleAnchorStartDay, cycleAnchorEndDay, ...rest } = task as any;
+    // The copy is MINE (rules: created as yourself), and without the
+    // assign right it can only be assigned to me — the rules refuse
+    // handing a colleague work through a copy.
+    if (!permissions.canAssignTasks && rest.assignedToUserId && rest.assignedToUserId !== user?.uid) {
+      rest.assignedToUserId = user?.uid ?? null;
+    }
+    await taskMutation.create({ ...rest, title: rest.title + ' (kopje)', status: 'Todo' });
+    toast({ title: 'Detyrë u kopjua' });
+  });
+  const onRowRequestDelete = useStableCallback((id: string) => setDeleteConfirmId(id));
 
-  // Single task row — shared by the flat (drag-sortable) list and the grouped view.
-  // Bulk multi-select (Asana/Monday) — list view.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const toggleSelect = (id: string) => setSelectedIds(prev => { const s = new Set(prev); if (s.has(id)) s.delete(id); else s.add(id); return s; });
-  const clearSelection = () => setSelectedIds(new Set());
-  // A selection must never outlive its rows: a task deleted from its own menu
-  // (or by a colleague) stayed counted in "N të zgjedhura" and the next bulk
-  // action failed on it. Leaving the list view drops the selection too — the
-  // floating bar used to hover over the board with no checkboxes in sight.
-  useEffect(() => {
-    setSelectedIds(prev => {
-      if (prev.size === 0) return prev;
-      const live = new Set((rawTasks || []).map(t => t.id));
-      const next = new Set([...prev].filter(id => live.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [rawTasks]);
-  useEffect(() => { setSelectedIds(new Set()); }, [viewMode]);
-  const bulkUpdate = async (patch: Partial<Task>) => {
-    const ids = [...selectedIds];
-    if (!ids.length) return;
-    const byId = new Map((rawTasks || []).map(t => [t.id, t]));
-    let blocked = 0;
-    const results = await Promise.allSettled(ids.map(id => {
-      const t = byId.get(id);
-      // Bulk "Përfunduar" is a completion — route through the shared flow so
-      // blockers, recurrence and follower notifications aren't bypassed.
-      if (patch.status === 'Done' && t && t.status !== 'Done') {
-        return markTaskDone(t, { silent: true }).then(done => {
-          if (!done) { blocked++; throw new Error('blocked'); }
-        });
-      }
-      if (patch.status && patch.status !== 'Done' && t) {
-        return taskMutation.update(id, { ...patch, ...reopenPatch(t, patch.status) });
-      }
-      // Bulk "Cakto te" is a reassignment like any other: the new assignee and
-      // the previous one hear about it (the panel's assignTo already did; the
-      // bar reassigned in silence). Notification failures never fail the update.
-      if (patch.assignedToUserId && t && user?.uid && patch.assignedToUserId !== t.assignedToUserId) {
-        return taskMutation.update(id, patch).then(res => {
-          taskAssignedNotifications(t, patch.assignedToUserId as string, user.uid, {
-            actorName: user.displayName || undefined,
-            newAssigneeName: getUserName(patch.assignedToUserId as string),
-          }).forEach(n => notificationMutation.create(n as any).catch(err => console.error('[Notifications] task_assigned (bulk) dërgim dështoi:', err)));
-          return res;
-        });
-      }
-      return taskMutation.update(id, patch);
-    }));
-    const failed = results.filter(r => r.status === 'rejected').length;
-    toast(failed
-      ? {
-          title: `${ids.length - failed}/${ids.length} u përditësuan`,
-          description: blocked ? `${blocked} të bllokuara nga varësi të pakryera` : `${failed} dështuan`,
-          variant: 'destructive',
-        }
-      : { title: `${ids.length} detyra u përditësuan` });
-    clearSelection();
-  };
-  // ONE delete rule for the row menu and the bulk bar: edit rights, plus manager
-  // rank or owning the task (creator/assignee). The bulk bar used to delete
-  // every selected row with no check at all — and no confirmation.
-  const canDeleteTask = (task: Task) => permissions.canEdit && (
-    permissions.isAdmin || permissions.isManager
-    || task.createdByUserId === user?.uid || task.assignedToUserId === user?.uid
-  );
-  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
-  const [bulkDeleting, setBulkDeleting] = useState(false);
-  const bulkDeletePlan = useMemo(() => {
-    if (!bulkDeleteOpen) return { allowed: [] as string[], skipped: 0 };
-    const byId = new Map((rawTasks || []).map(t => [t.id, t]));
-    const allowed: string[] = [];
-    let skipped = 0;
-    for (const id of selectedIds) {
-      const t = byId.get(id);
-      if (t && canDeleteTask(t)) allowed.push(id); else skipped++;
-    }
-    return { allowed, skipped };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bulkDeleteOpen, selectedIds, rawTasks, permissions, user]);
-  const bulkDelete = () => {
-    if (!selectedIds.size) return;
-    setBulkDeleteOpen(true);
-  };
-  const confirmBulkDelete = async () => {
-    const { allowed: ids, skipped } = bulkDeletePlan;
-    if (!ids.length) { setBulkDeleteOpen(false); return; }
-    setBulkDeleting(true);
-    try {
-      // Cascade per task: subtasks, comments, collaborator records, draft invoice;
-      // logged hours are unlinked, never deleted (src/lib/deleteCascade.ts).
-      const results = await Promise.allSettled(ids.map(id => deleteTaskCascade(id)));
-      const failed = results.filter(r => r.status === 'rejected').length;
-      if (selectedTask && ids.includes(selectedTask.id)) setSelectedTask(null);
-      const skippedNote = skipped ? `${skipped} u anashkaluan (pa të drejtë fshirjeje)` : undefined;
-      toast(failed
-        ? { title: `${ids.length - failed}/${ids.length} u fshinë`, description: [`${failed} dështuan`, skippedNote].filter(Boolean).join(' · '), variant: 'destructive' }
-        : { title: `${ids.length} detyra u fshinë`, description: skippedNote });
-      clearSelection();
-    } finally {
-      setBulkDeleting(false);
-      setBulkDeleteOpen(false);
-    }
-  };
-
+  // Viewer (canEdit=false) is read-only: the rules currently accept any
+  // business member's write, so the UI must not advertise mutations the role
+  // isn't meant to have. Delete additionally requires manager rank or owning
+  // the task (creator/assignee).
   const renderTaskRow = (task: Task) => {
-    const dateInfo = formatDateCompact(new Date(task.endDate), task.status);
-    const isSelected = selectedTask?.id === task.id;
-    const isOverdue = isOverdueDate(task.endDate) && task.status !== 'Done';
-    const isBlocked = blockedTaskIds.has(task.id);
-    // Viewer (canEdit=false) is read-only: the rules currently accept any
-    // business member's write, so the UI must not advertise mutations the role
-    // isn't meant to have. Delete additionally requires manager rank or owning
-    // the task (creator/assignee).
-    const canEditRow = permissions.canEdit;
-    const canDeleteRow = canDeleteTask(task);
-    const projectName = getProjectName(task.projectId);
     const subtaskInfo = subtaskCounts[task.id];
-    const isBeingWorkedOn = tasksBeingWorkedOn.has(task.id);
-    const commentCount = commentCountByTask.get(task.id) || 0;
-    const assigneeName = getUserName(task.assignedToUserId);
-    const initials = assigneeName.slice(0, 2).toUpperCase();
-    const initialsColor = hashColor(assigneeName);
-    const priorityFlagColor = task.priority === 'urgent' || task.priority === 'high'
-      ? '#EF4444' : task.priority === 'medium' ? '#F97316' : '#9CA3AF';
-    // Status-coded left accent bar color.
-    const accentColor = task.status === 'Todo' ? '#f59e0b'
-      : task.status === 'Done' ? '#10b981'
-      : task.status === 'In Progress' ? '#3b82f6'
-      : '#12468C'; // Review / default
     return (
-      <div
-        className={`group relative rounded-[14px] bg-white dark:bg-card border shadow-sm cursor-pointer overflow-hidden transition-all duration-[180ms] ease-[cubic-bezier(.4,0,.2,1)] hover:-translate-y-0.5 hover:shadow-md ${
-          isSelected
-            ? 'border-[rgba(18,70,140,0.5)] ring-1 ring-[rgba(18,70,140,0.3)]'
-            : 'border-black/5 dark:border-white/10 hover:border-[rgba(18,70,140,0.3)]'
-        }`}
-        onClick={() => setSelectedTask(task)}
-      >
-        {/* Status accent bar — brightens & widens slightly on hover */}
-        <span
-          aria-hidden="true"
-          className="absolute left-0 top-0 bottom-0 w-1 group-hover:w-1.5 transition-all duration-[180ms] ease-[cubic-bezier(.4,0,.2,1)] group-hover:brightness-110"
-          style={{ backgroundColor: accentColor }}
-        />
-        <div className={`flex items-start gap-3 pl-4 pr-3 py-3 ${isOverdue ? 'bg-destructive/5' : ''}`}>
-        {/* Bulk-select checkbox — hover on desktop; hidden on touch unless a selection is active */}
-        {canEditRow && (
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className={`items-center pt-1 flex-shrink-0 transition-opacity ${selectedIds.size > 0 ? 'flex opacity-100' : 'hidden sm:flex opacity-0 group-hover:opacity-100'}`}
-          >
-            <Checkbox checked={selectedIds.has(task.id)} onCheckedChange={() => toggleSelect(task.id)} aria-label="Përzgjidh detyrën" />
-          </div>
-        )}
-        {/* Drag handle */}
-        <div className="mt-1.5 cursor-grab opacity-0 group-hover:opacity-30 hover:!opacity-70 text-muted-foreground flex-shrink-0 hidden sm:block">
-          <GripVertical className="w-3.5 h-3.5" />
-        </div>
-        {/* Completion toggle — compact circular checkbox (Todoist-style): small
-            visual, comfortable tap area, satisfying fill-and-check on complete. */}
-        <button
-          type="button"
-          disabled={!canEditRow}
-          aria-label={task.status === 'Done' ? 'Shëno si të pabërë' : 'Shëno si të përfunduar'}
-          aria-pressed={task.status === 'Done'}
-          onClick={async (e) => {
-            e.stopPropagation();
-            if (!canEditRow) return;
-            const checked = task.status !== 'Done';
-            if (!checked) {
-              // Un-completing — flip back to Todo (and re-arm a recurring tip).
-              await taskMutation.update(task.id, reopenPatch(task, 'Todo'));
-              toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Për të bërë` });
-              return;
-            }
-            await markTaskDone(task);
-          }}
-          className="group/check mt-0.5 -m-1 p-1 flex items-center justify-center shrink-0 active:scale-90 transition-transform"
-        >
-          <span
-            className={`flex items-center justify-center w-5 h-5 rounded-full border-2 transition-all duration-200 ${
-              task.status === 'Done'
-                ? 'bg-emerald-500 border-emerald-500'
-                : 'border-muted-foreground/30 group-hover/check:border-emerald-500/60'
-            }`}
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={3.5}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className={`w-3 h-3 transition-opacity duration-150 ${
-                task.status === 'Done'
-                  ? 'text-white opacity-100'
-                  : 'text-emerald-500 opacity-0 group-hover/check:opacity-40'
-              }`}
-            >
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
-          </span>
-        </button>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* Priority flag — inline change (read-only roles just see the flag) */}
-            {canEditRow ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button onClick={(e) => e.stopPropagation()} title="Ndrysho prioritetin" className="flex-shrink-0 hover:opacity-70">
-                    <Flag className="w-3 h-3" style={{ color: priorityFlagColor }} />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" onClick={(e) => e.stopPropagation()}>
-                  {(([['urgent', 'Urgjent'], ['high', 'I lartë'], ['medium', 'Mesatar'], ['low', 'I ulët']]) as const).map(([p, label]) => (
-                    <DropdownMenuItem key={p} onClick={() => taskMutation.update(task.id, { priority: p })}>{label}</DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
-              <Flag className="w-3 h-3 flex-shrink-0" style={{ color: priorityFlagColor }} />
-            )}
-            <span className={`text-sm font-medium ${task.status === 'Done' ? 'line-through text-muted-foreground' : ''}`}>
-              {task.title}
-            </span>
-            {isBeingWorkedOn && (
-              <span className="flex items-center gap-0.5 text-[10px] text-success bg-success/10 px-1.5 py-0.5 rounded-full">
-                <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-                Duke punuar
-              </span>
-            )}
-            {isBlocked && (
-              <span className="flex items-center gap-0.5 text-[10px] text-orange-600 bg-orange-50 dark:bg-orange-950 dark:text-orange-300 px-1.5 py-0.5 rounded-full border border-orange-200 dark:border-orange-800">
-                🔒 Bllokuar
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2 mt-1 flex-wrap">
-            {/* Status badge */}
-            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-              task.status === 'Done' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-              : task.status === 'In Progress' ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
-              : task.status === 'Review' ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
-              : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
-            }`}>
-              {getTaskStatusLabel(task.status)}
-            </span>
-            {/* Project name */}
-            {projectName && (
-              <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded flex items-center gap-1">
-                <Target className="w-2.5 h-2.5" />{projectName}
-              </span>
-            )}
-            {/* Comment count */}
-            {commentCount > 0 && (
-              <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-                <MessageSquare className="w-2.5 h-2.5" />{commentCount}
-              </span>
-            )}
-            {/* Labels */}
-            <TaskLabels labels={(task as any).labels} max={4} />
-          </div>
-          {/* Subtask progress bar */}
-          {subtaskInfo && (
-            <div className="mt-1.5">
-              <div className="flex items-center gap-1.5 mb-0.5">
-                <ListChecks className="w-2.5 h-2.5 text-muted-foreground" />
-                <span className="text-[10px] text-muted-foreground">{subtaskInfo.done}/{subtaskInfo.total}</span>
-              </div>
-              <div className="h-1 bg-muted rounded-full overflow-hidden w-24">
-                <div className="h-full bg-primary rounded-full transition-all"
-                  style={{ width: `${subtaskInfo.total > 0 ? (subtaskInfo.done / subtaskInfo.total) * 100 : 0}%` }} />
-              </div>
-            </div>
-          )}
-        </div>
-        {/* Assignee initials — 28px, hash color, tooltip */}
-        <div
-          className="hidden sm:flex items-center gap-1.5 flex-shrink-0"
-          title={assigneeName}
-        >
-          <div
-            className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0 ring-2 ring-white dark:ring-white/80 shadow-sm transition-transform duration-[180ms] ease-[cubic-bezier(.4,0,.2,1)] group-hover:scale-[1.06]"
-            style={{ backgroundColor: initialsColor }}
-          >
-            {initials}
-          </div>
-        </div>
-        {/* Date — inline reschedule (preserves time-of-day) */}
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              onClick={(e) => e.stopPropagation()}
-              disabled={!canEditRow}
-              title={canEditRow ? 'Ndrysho afatin' : undefined}
-              className={`flex items-center gap-1 text-xs whitespace-nowrap flex-shrink-0 mt-0.5 ${canEditRow ? 'hover:bg-muted' : ''} rounded px-1 py-0.5 transition-colors ${dateInfo.className}`}
-            >
-              {dateInfo.overdue && <AlertTriangle className="w-3 h-3" />}
-              {dateInfo.text}
-              {parseTaskDate(task.reminderAt) && !task.reminderSentAt && task.status !== 'Done' && (
-                <ReminderBellIcon className="w-3 h-3 text-primary" aria-label="Ka kujtesë" />
-              )}
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className="w-auto p-0" align="end" onClick={(e) => e.stopPropagation()}>
-            <Calendar
-              mode="single"
-              selected={task.endDate ? new Date(task.endDate) : undefined}
-              onSelect={async (d) => {
-                if (!d) return;
-                const nd = new Date(d);
-                const cur = task.endDate ? new Date(task.endDate) : null;
-                nd.setHours(cur?.getHours() ?? 9, cur?.getMinutes() ?? 0, 0, 0);
-                // A moved deadline re-arms the due/overdue alerts (the cron
-                // skips flagged tasks, so a postponed task never alerted again)
-                // and carries a relative "Më kujto" reminder with it.
-                await taskMutation.update(task.id, { endDate: nd, dueNotificationSent: false, overdueNotificationSent: false, ...reminderPatchForDeadline(task, nd) });
-              }}
-            />
-          </PopoverContent>
-        </Popover>
-        {/* Hover quick actions */}
-        {canEditRow && (
-        <div
-          className="absolute right-4 top-2.5 hidden group-hover:flex items-center gap-0.5 bg-background border border-border rounded-md shadow-sm px-0.5 py-0.5 z-10"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Mark Done */}
-          <button
-            title="Shëno si Përfunduar"
-            className="px-1.5 py-1 rounded text-xs hover:bg-muted text-emerald-600"
-            onClick={async (e) => {
-              e.stopPropagation();
-              if (task.status === 'Done') return;
-              await markTaskDone(task);
-            }}
-          >
-            <Check className="w-3.5 h-3.5" />
-          </button>
-          {/* Edit */}
-          <button
-            title="Edito"
-            className="px-1.5 py-1 rounded text-xs hover:bg-muted text-foreground"
-            onClick={(e) => { e.stopPropagation(); setSelectedTask(task); }}
-          >
-            <Edit2 className="w-3.5 h-3.5" />
-          </button>
-          {/* More */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="px-1.5 py-1 rounded text-xs hover:bg-muted text-foreground">
-                <MoreVertical className="w-3.5 h-3.5" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="text-sm">
-              <DropdownMenuItem onClick={async () => {
-                // Strip everything a copy must NOT inherit: recurrence & its
-                // bookkeeping (nextCycleCreated!), the billing idempotency flag
-                // (a copy's value was never invoiced/applied), collaborator ids
-                // (their taskCollaborators rows belong to the original),
-                // notification flags, and the reminder — a copied "1 orë para"
-                // made the cron fire two identical reminders (and its owner,
-                // reminderSetByUserId, goes with it). The work-cycle carry-over
-                // stamps and the completion instant describe the ORIGINAL's
-                // history — a fresh copy was never carried and is not done.
-                const { id, isRecurring, recurringFrequency, recurringInterval, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, recurringEndDate, nextRecurringDate, nextCycleCreated, seriesId, recurringSkippedReason, dueNotificationSent, overdueNotificationSent, reminderAt, reminderOffsetMinutes, reminderSentAt, reminderSetByUserId, carriedOverFromPeriod, carriedOverCount, completedAt, parentTaskId, dependsOn, attachments, value, valueAppliedToBudget, collaboratorIds, createdByUserId, seriesCreatedByUserId, cycleAnchorStartDay, cycleAnchorEndDay, ...rest } = task as any;
-                // The copy is MINE (rules: created as yourself), and without the
-                // assign right it can only be assigned to me — the rules refuse
-                // handing a colleague work through a copy.
-                if (!permissions.canAssignTasks && rest.assignedToUserId && rest.assignedToUserId !== user?.uid) {
-                  rest.assignedToUserId = user?.uid ?? null;
-                }
-                await taskMutation.create({ ...rest, title: rest.title + ' (kopje)', status: 'Todo' });
-                toast({ title: 'Detyrë u kopjua' });
-              }}>
-                Kopjo
-              </DropdownMenuItem>
-              {canDeleteRow && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    className="text-destructive"
-                    onClick={() => setDeleteConfirmId(task.id)}
-                  >
-                    Fshi
-                  </DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-        )}
-        </div>
-      </div>
+      <TaskRow
+        task={task}
+        isSelected={selectedTask?.id === task.id}
+        isChecked={selectedIds.has(task.id)}
+        selectionActive={selectedIds.size > 0}
+        isBlocked={blockedTaskIds.has(task.id)}
+        isBeingWorkedOn={tasksBeingWorkedOn.has(task.id)}
+        projectName={getProjectName(task.projectId)}
+        subtaskDone={subtaskInfo?.done}
+        subtaskTotal={subtaskInfo?.total}
+        commentCount={commentCountByTask.get(task.id) || 0}
+        assigneeName={getUserName(task.assignedToUserId)}
+        canEdit={permissions.canEdit}
+        canDelete={!!canDeleteTask(task)}
+        onSelect={onRowSelect}
+        onToggleChecked={onRowToggleChecked}
+        onToggleDone={onRowToggleDone}
+        onMarkDone={onRowMarkDone}
+        onSetPriority={onRowSetPriority}
+        onReschedule={onRowReschedule}
+        onCopy={onRowCopy}
+        onRequestDelete={onRowRequestDelete}
+      />
     );
   };
 
-  if (tasksLoading) {
-    return (
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div className="space-y-2">
-            <div className="h-8 w-32 skeleton rounded" />
-            <div className="h-4 w-48 skeleton rounded" />
-          </div>
-          <div className="flex gap-3">
-            <div className="h-10 w-48 skeleton rounded" />
-            <div className="h-10 w-32 skeleton rounded" />
-          </div>
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          {[1, 2, 3, 4].map((col) => (
-            <div key={col} className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="h-5 w-24 skeleton rounded" />
-                <div className="h-5 w-8 skeleton rounded-full" />
-              </div>
-              <div className="space-y-3">
-                {[1, 2, 3].map((card) => (
-                  <div key={card} className="p-4 bg-card rounded-lg border space-y-3">
-                    <div className="h-5 w-3/4 skeleton rounded" />
-                    <div className="h-4 w-full skeleton rounded" />
-                    <div className="flex gap-2">
-                      <div className="h-5 w-16 skeleton rounded" />
-                      <div className="h-5 w-20 skeleton rounded" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
+  const boardCardPropsFor = (task: Task) => {
+    const subtaskInfo = subtaskCounts[task.id];
+    return {
+      isSelected: selectedTask?.id === task.id,
+      isBlocked: blockedTaskIds.has(task.id),
+      isBeingWorkedOn: tasksBeingWorkedOn.has(task.id),
+      projectName: getProjectName(task.projectId),
+      subtaskDone: subtaskInfo?.done,
+      subtaskTotal: subtaskInfo?.total,
+      assigneeName: getUserName(task.assignedToUserId),
+    };
+  };
+
+  const activeDragTitle = activeTaskId ? tasks.find(t => t.id === activeTaskId)?.title : null;
+
+  if (tasksLoading) return <TaskListSkeleton />;
 
   return (
     // Fill the route wrapper (App.tsx gives it a definite height + its own scroll)
@@ -1389,177 +637,48 @@ const TasksView: React.FC = () => {
           : 'flex flex-col w-full'
       } min-w-0 transition-all duration-300`}>
         {/* ── Header ── */}
-        <div className="shrink-0 border-b bg-background">
-          {/* Title + primary action */}
-          <div className="flex items-center justify-between gap-3 px-4 pt-3.5 pb-3">
-            <div className="min-w-0">
-              <h1 className="text-lg sm:text-xl font-semibold text-foreground leading-tight">Detyrat</h1>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {tasks.length} detyra · <span className="font-medium text-foreground/70">{myTasks.length} të miat</span>
-              </p>
-            </div>
-            {permissions.canEdit && (
-              <Dialog open={isCreateDialogOpen} onOpenChange={(open) => { setIsCreateDialogOpen(open); if (!open) setDateConflict(null); }}>
-                <DialogTrigger asChild>
-                  <Button size="sm" className="bg-primary text-primary-foreground shadow-sm gap-1.5 rounded-lg shrink-0">
-                    <Plus className="w-4 h-4" />
-                    <span className="hidden xs:inline">Detyrë e Re</span>
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className={QUICK_TASK_DIALOG_CLASS}>
-                  <DialogTitle className="sr-only">Detyrë e re</DialogTitle>
-                  <QuickTaskForm
-                    // The quick form shows the same-day warning inline (non-blocking,
-                    // "krijohet gjithsesi") so the parked-confirmation dialog is skipped.
-                    onSubmit={(fd, opts) => handleCreateTask(fd, { skipDateConflictCheck: true, createAnother: opts?.createAnother })}
-                    projects={projects || []}
-                    conflictTasks={rawTasks || []}
-                    teamMembers={teamMembers?.filter((m: any) => !businessId || !m.businessId || m.businessId === businessId) || []}
-                    canAssignTasks={permissions.canAssignTasks}
-                    currentUserId={user?.uid || ''}
-                    allLabels={allLabels}
-                  />
-                </DialogContent>
-              </Dialog>
-            )}
-          </div>
-          {/* View switcher — segmented control, full width on mobile */}
-          <div className="px-4 pb-3">
-            <div className="flex sm:inline-flex w-full sm:w-auto items-center rounded-lg bg-muted p-1 gap-0.5">
-              {([
-                { v: 'list' as const, label: 'Listë', Icon: List },
-                { v: 'board' as const, label: 'Bordi', Icon: LayoutGrid },
-                { v: 'timeline' as const, label: 'Kronologji', Icon: GanttChart },
-                { v: 'calendar' as const, label: 'Kalendar', Icon: CalendarDays },
-              ]).map(({ v, label, Icon }) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setViewMode(v)}
-                  className={`flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${
-                    viewMode === v ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  <span className="hidden sm:inline">{label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
+        <TaskListHeader
+          taskCount={tasks.length}
+          myTaskCount={myTasks.length}
+          canEdit={permissions.canEdit}
+          createOpen={isCreateDialogOpen}
+          onCreateOpenChange={(open) => { setIsCreateDialogOpen(open); if (!open) setDateConflict(null); }}
+          createForm={
+            <QuickTaskForm
+              // The quick form shows the same-day warning inline (non-blocking,
+              // "krijohet gjithsesi") so the parked-confirmation dialog is skipped.
+              onSubmit={(fd, opts) => handleCreateTask(fd, { skipDateConflictCheck: true, createAnother: opts?.createAnother })}
+              projects={projects || []}
+              conflictTasks={rawTasks || []}
+              teamMembers={teamMembers?.filter((m: any) => !businessId || !m.businessId || m.businessId === businessId) || []}
+              canAssignTasks={permissions.canAssignTasks}
+              currentUserId={user?.uid || ''}
+              allLabels={allLabels}
+            />
+          }
+          viewMode={viewMode}
+          onViewMode={setViewMode}
+        />
 
         {/* ── Search + filters ── */}
-        <div className="shrink-0 border-b bg-muted/20 px-4 py-2.5 space-y-2.5">
-          {/* Search */}
-          <div className="relative">
-            <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <input
-              type="text"
-              placeholder="Kërko detyra..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full h-9 pl-9 pr-9 text-base sm:text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-            />
-            {searchQuery && (
-              <button onClick={() => setSearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                <X className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-          {/* Status chips — horizontally scrollable */}
-          <div className="flex items-center gap-2 overflow-x-auto -mx-1 px-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {([
-              { key: 'all', label: 'Të gjitha', count: baseTasksForStats.length, Icon: null, on: 'bg-slate-600 text-white', off: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300' },
-              { key: 'Todo', label: 'Për të bërë', count: taskStats.todo, Icon: CircleDot, on: 'bg-slate-700 text-white', off: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300' },
-              { key: 'In Progress', label: 'Në progres', count: taskStats.inProgress, Icon: Play, on: 'bg-blue-500 text-white', off: 'bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-300' },
-              { key: 'Review', label: 'Rishikim', count: taskStats.review, Icon: Clock, on: 'bg-amber-500 text-white', off: 'bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-300' },
-              { key: 'Done', label: 'Përfunduar', count: taskStats.done, Icon: CheckCircle2, on: 'bg-emerald-500 text-white', off: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-300' },
-              // Also shown when the persisted filter IS 'overdue' — otherwise, once
-              // the overdue tasks are cleared, the user is stranded inside an
-              // invisible filter ("Asnjë detyrë") with no active chip to click off.
-              ...(taskStats.overdue > 0 || filterStatus === 'overdue' ? [{ key: 'overdue', label: 'Vonuar', count: taskStats.overdue, Icon: AlertTriangle, on: 'bg-red-500 text-white', off: 'bg-red-50 text-red-600 dark:bg-red-950 dark:text-red-300' }] : []),
-            ]).map(({ key, label, count, Icon, on, off }) => (
-              <button
-                key={key}
-                onClick={() => setFilterStatus(key)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap shrink-0 transition-colors ${filterStatus === key ? on : off}`}
-              >
-                {Icon && <Icon className="w-3 h-3" />}{label}
-                <span className="tabular-nums opacity-80">{count}</span>
-              </button>
-            ))}
-          </div>
-          {/* Assignee + grouping */}
-          <div className="flex items-center gap-2">
-            {/* One-tap "my tasks" (Asana's most-used filter) */}
-            {user?.uid && (
-              <button
-                onClick={() => setFilterAssignee(filterAssignee === user.uid ? 'all' : user.uid)}
-                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap shrink-0 transition-colors ${
-                  filterAssignee === user.uid
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                <User className="w-3 h-3" />Të miat
-              </button>
-            )}
-            <Select value={filterAssignee} onValueChange={setFilterAssignee}>
-              <SelectTrigger className="h-9 text-xs flex-1 min-w-0">
-                <User className="w-3.5 h-3.5 mr-1 shrink-0 text-muted-foreground" />
-                <SelectValue placeholder="Të gjithë personat" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Të gjithë personat</SelectItem>
-                <SelectItem value="unassigned">Pa caktuar</SelectItem>
-                {assigneeOptions.map((m: any) => (
-                  <SelectItem key={m.userId} value={m.userId}>
-                    {m.label}{m.email ? ` · ${m.email}` : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {viewMode === 'list' && (
-              <Select value={groupBy} onValueChange={(v) => setGroupBy(v as any)}>
-                <SelectTrigger className="h-9 text-xs flex-1 min-w-0">
-                  <Users className="w-3.5 h-3.5 mr-1 shrink-0 text-muted-foreground" />
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Pa grupim</SelectItem>
-                  <SelectItem value="assignee">Sipas personit</SelectItem>
-                  <SelectItem value="priority">Sipas prioritetit</SelectItem>
-                  <SelectItem value="project">Sipas projektit</SelectItem>
-                  <SelectItem value="dueDate">Sipas afatit</SelectItem>
-                </SelectContent>
-              </Select>
-            )}
-            {allLabels.length > 0 && (
-              <Select value={filterLabel} onValueChange={setFilterLabel}>
-                <SelectTrigger className="h-9 text-xs flex-1 min-w-0">
-                  <TagIcon className="w-3.5 h-3.5 mr-1 shrink-0 text-muted-foreground" />
-                  <SelectValue placeholder="Të gjitha etiketat" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Të gjitha etiketat</SelectItem>
-                  {allLabels.map(l => (
-                    <SelectItem key={l} value={l}>{l}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            {(filterAssignee !== 'all' || filterLabel !== 'all') && (
-              <button
-                onClick={() => { setFilterAssignee('all'); setFilterLabel('all'); }}
-                className="text-xs text-muted-foreground hover:text-foreground underline whitespace-nowrap shrink-0"
-              >
-                Pastro
-              </button>
-            )}
-          </div>
-        </div>
+        <TaskFilters
+          searchQuery={searchQuery}
+          onSearch={setSearchQuery}
+          totalCount={baseTasksForStats.length}
+          stats={taskStats}
+          filterStatus={filterStatus}
+          onFilterStatus={setFilterStatus}
+          currentUserId={user?.uid}
+          filterAssignee={filterAssignee}
+          onFilterAssignee={setFilterAssignee}
+          assigneeOptions={assigneeOptions}
+          showGroupBy={viewMode === 'list'}
+          groupBy={groupBy}
+          onGroupBy={setGroupBy}
+          allLabels={allLabels}
+          filterLabel={filterLabel}
+          onFilterLabel={setFilterLabel}
+        />
 
         {/* Smart Suggestions Panel — only in list view (it eats vertical space and
             pushes Board/Calendar below the fold otherwise) */}
@@ -1576,210 +695,48 @@ const TasksView: React.FC = () => {
 
         {/* Task List Content */}
         <div className="flex-1 min-w-0 overflow-y-auto">
-          {viewMode === 'list' && groupBy === 'none' && (
-            <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-              <SortableContext items={visibleTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
-                <div className="space-y-2 p-3">
-                  {visibleTasks.map((task) => (
-                    <SortableListItem key={task.id} id={task.id}>
-                      {renderTaskRow(task)}
-                    </SortableListItem>
-                  ))}
-
-                  {tasks.length === 0 && (
-                    <div className="text-center py-12 text-muted-foreground">
-                      <p>Asnjë detyrë</p>
-                      <Button variant="link" className="mt-2" onClick={() => setIsCreateDialogOpen(true)}>
-                        Krijo detyrën e parë
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              </SortableContext>
-              <DragOverlay>
-                {activeTaskId && viewMode === 'list' ? (
-                  <div className="flex items-center gap-3 px-4 py-3 bg-background border shadow-xl rounded-md opacity-95">
-                    <div className="w-4 h-4 rounded-full bg-muted-foreground/20" />
-                    <span className="text-sm font-medium">{tasks.find(t => t.id === activeTaskId)?.title}</span>
-                  </div>
-                ) : null}
-              </DragOverlay>
-            </DndContext>
-          )}
-
-          {viewMode === 'list' && groupBy !== 'none' && (
-            <div>
-              {taskGroups.map(group => (
-                <div key={group.key}>
-                  <div className="sticky top-0 z-[1] flex items-center gap-2 px-4 py-1.5 bg-muted/60 backdrop-blur border-b">
-                    <ChevronDown className="w-3 h-3 text-muted-foreground" />
-                    <span className="text-xs font-semibold text-foreground">{group.label}</span>
-                    <span className="text-xs text-muted-foreground" title={group.tasks.length < group.total ? `${group.tasks.length} në këtë faqe nga ${group.total} gjithsej` : undefined}>
-                      {group.tasks.length < group.total ? `${group.tasks.length}/${group.total}` : group.total}
-                    </span>
-                  </div>
-                  <div className="space-y-2 p-3">
-                    {group.tasks.map(task => (
-                      <div key={task.id}>{renderTaskRow(task)}</div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-              {tasks.length === 0 && (
-                <div className="text-center py-12 text-muted-foreground">
-                  <p>Asnjë detyrë</p>
-                </div>
-              )}
-            </div>
+          {viewMode === 'list' && (
+            <TaskListView
+              key={todayKey}
+              groupBy={groupBy}
+              visibleTasks={visibleTasks}
+              taskGroups={taskGroups}
+              isEmpty={tasks.length === 0}
+              sensors={sensors}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+              dragOverlayTitle={activeDragTitle}
+              showOverlay={!!activeTaskId && viewMode === 'list'}
+              onCreateFirst={() => setIsCreateDialogOpen(true)}
+              renderRow={renderTaskRow}
+            />
           )}
 
           {/* Bulk action bar (floating) — list view only, where the checkboxes are */}
           {viewMode === 'list' && selectedIds.size > 0 && (
-            <div className="fixed bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3 py-2 rounded-xl bg-card border shadow-lg flex-wrap max-w-[95vw]">
-              <span className="text-sm font-medium px-1">{selectedIds.size} të zgjedhura</span>
-              <Select onValueChange={(v) => bulkUpdate({ status: v as any })}>
-                <SelectTrigger className="h-8 w-[120px] text-xs"><SelectValue placeholder="Statusi" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Todo">Për të bërë</SelectItem>
-                  <SelectItem value="In Progress">Në progres</SelectItem>
-                  <SelectItem value="Review">Rishikim</SelectItem>
-                  <SelectItem value="Done">Përfunduar</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select onValueChange={(v) => bulkUpdate({ priority: v as any })}>
-                <SelectTrigger className="h-8 w-[110px] text-xs"><SelectValue placeholder="Prioriteti" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="low">I ulët</SelectItem>
-                  <SelectItem value="medium">Mesatar</SelectItem>
-                  <SelectItem value="high">I lartë</SelectItem>
-                  <SelectItem value="urgent">Urgjent</SelectItem>
-                </SelectContent>
-              </Select>
-              {permissions.canAssignTasks && (
-                <Select onValueChange={(v) => bulkUpdate({ assignedToUserId: v })}>
-                  <SelectTrigger className="h-8 w-[120px] text-xs"><SelectValue placeholder="Cakto te" /></SelectTrigger>
-                  <SelectContent>
-                    {uniqueTeamMembers.filter((m: any) => !businessId || !m.businessId || m.businessId === businessId).map((m: any) => (
-                      <SelectItem key={m.userId} value={m.userId}>{getUserName(m.userId)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-              <Button variant="destructive" size="sm" className="h-8" onClick={bulkDelete}><Trash2 className="w-3.5 h-3.5 mr-1" />Fshi</Button>
-              <Button variant="ghost" size="sm" className="h-8 px-2" onClick={clearSelection}><X className="w-4 h-4" /></Button>
-            </div>
+            <TaskBulkBar
+              count={selectedIds.size}
+              canAssignTasks={permissions.canAssignTasks}
+              members={uniqueTeamMembers.filter((m: any) => !businessId || !m.businessId || m.businessId === businessId)}
+              getUserName={getUserName}
+              onUpdate={bulkUpdate}
+              onDelete={bulkDelete}
+              onClear={clearSelection}
+            />
           )}
 
           {viewMode === 'board' && (
-            <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-              <div className="flex gap-3 sm:gap-4 p-3 sm:p-4 h-full overflow-x-auto pb-4">
-                {columns.map((column) => {
-                  const columnTasks = boardColumns.get(column.status) || [];
-                  const columnColor = column.status === 'Todo' ? 'bg-gray-400' : column.status === 'In Progress' ? 'bg-blue-500' : column.status === 'Review' ? 'bg-amber-500' : 'bg-emerald-500';
-                  
-                  return (
-                    <KanbanColumn key={column.id} id={column.status}>
-                      <div className="flex items-center gap-2 mb-3">
-                        <div className={`w-2 h-2 rounded-full ${columnColor}`} />
-                        <h3 className="text-sm font-medium text-foreground">{column.title}</h3>
-                        <Badge variant="secondary" className="text-xs ml-auto">
-                          {columnTasks.length}
-                        </Badge>
-                      </div>
-
-                      <SortableContext items={columnTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
-                        <div className="space-y-2 flex-1 overflow-y-auto min-h-[60px]">
-                          {columnTasks.map((task) => {
-                            const dateInfo = formatDateCompact(new Date(task.endDate), task.status);
-                            const isOverdue = isOverdueDate(task.endDate) && task.status !== 'Done';
-                            const isBlocked = blockedTaskIds.has(task.id);
-                            const projectName = getProjectName(task.projectId);
-                            const subtaskInfo = subtaskCounts[task.id];
-                            const isBeingWorkedOn = tasksBeingWorkedOn.has(task.id);
-                            const priorityBorder = task.priority === 'urgent' ? 'border-l-red-500' : task.priority === 'high' ? 'border-l-orange-500' : task.priority === 'medium' ? 'border-l-blue-400' : 'border-l-gray-300';
-
-                            return (
-                              <SortableTaskCard key={task.id} id={task.id}>
-                                <Card
-                                  className={`p-3 cursor-grab active:cursor-grabbing hover:shadow-md transition-all border-l-[3px] ${priorityBorder} ${
-                                    selectedTask?.id === task.id ? 'ring-2 ring-primary shadow-md' : ''
-                                  } ${isOverdue ? 'bg-error/5' : ''}`}
-                                  onClick={() => setSelectedTask(task)}
-                                >
-                                  {/* Title + Working / Blocked indicator */}
-                                  <div className="flex items-start justify-between gap-2 mb-2">
-                                    <p className={`text-sm font-medium leading-snug ${task.status === 'Done' ? 'line-through text-muted-foreground' : ''}`}>
-                                      {task.title}
-                                    </p>
-                                    <div className="flex items-center gap-1 flex-shrink-0 mt-0.5">
-                                      {isBeingWorkedOn && (
-                                        <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
-                                      )}
-                                      {isBlocked && (
-                                        <span className="text-[9px] text-orange-600 bg-orange-50 dark:bg-orange-950 px-1 py-0.5 rounded-full border border-orange-200 dark:border-orange-800">🔒</span>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  {/* Project badge */}
-                                  {projectName && (
-                                    <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded mb-2">
-                                      <Target className="w-2.5 h-2.5" />
-                                      {projectName}
-                                    </span>
-                                  )}
-
-                                  {/* Subtask progress bar */}
-                                  {subtaskInfo && (
-                                    <div className="mb-2">
-                                      <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-0.5">
-                                        <span className="flex items-center gap-1">
-                                          <ListChecks className="w-2.5 h-2.5" />
-                                          Nën-detyra
-                                        </span>
-                                        <span>{subtaskInfo.done}/{subtaskInfo.total}</span>
-                                      </div>
-                                      <div className="h-1 bg-muted rounded-full overflow-hidden">
-                                        <div 
-                                          className="h-full bg-primary rounded-full transition-all"
-                                          style={{ width: `${subtaskInfo.total > 0 ? (subtaskInfo.done / subtaskInfo.total) * 100 : 0}%` }}
-                                        />
-                                      </div>
-                                    </div>
-                                  )}
-
-                                  {/* Footer: Assignee + Date */}
-                                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/50">
-                                    <div className="flex items-center gap-1.5">
-                                      <div className="w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-[9px] font-semibold text-primary">
-                                        {getUserName(task.assignedToUserId).slice(0, 2).toUpperCase()}
-                                      </div>
-                                      <span className="text-xs text-muted-foreground max-w-[80px] truncate">
-                                        {getUserName(task.assignedToUserId)}
-                                      </span>
-                                    </div>
-                                    <span className={`text-[11px] ${dateInfo.className}`}>
-                                      {dateInfo.text}
-                                    </span>
-                                  </div>
-                                </Card>
-                              </SortableTaskCard>
-                            );
-                          })}
-                        </div>
-                      </SortableContext>
-                    </KanbanColumn>
-                  );
-                })}
-              </div>
-              <DragOverlay>
-                {activeTaskId ? (
-                  <Card className="p-3 shadow-xl rotate-2 opacity-90 border-l-[3px] border-l-primary">
-                    <p className="text-sm font-medium">{tasks.find(t => t.id === activeTaskId)?.title}</p>
-                  </Card>
-                ) : null}
-              </DragOverlay>
-            </DndContext>
+            <TaskBoardView
+              key={todayKey}
+              boardColumns={boardColumns}
+              sensors={sensors}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+              dragOverlayTitle={activeDragTitle}
+              showOverlay={!!activeTaskId}
+              cardPropsFor={boardCardPropsFor}
+              onSelect={onRowSelect}
+            />
           )}
 
           {viewMode === 'timeline' && (
@@ -1787,13 +744,13 @@ const TasksView: React.FC = () => {
           )}
 
           {viewMode === 'calendar' && (
-            <CalendarView tasks={tasks} projects={projects} onTaskClick={setSelectedTask} />
+            <TaskCalendarView tasks={tasks} projects={projects} onTaskClick={setSelectedTask} />
           )}
         </div>
 
         {/* Persistent pagination footer (list view) — always visible, below the scroll area */}
         {viewMode === 'list' && (
-          <PaginationBar
+          <TaskPaginationBar
             page={page}
             totalPages={totalPages}
             totalItems={orderedTasks.length}
@@ -1843,56 +800,21 @@ const TasksView: React.FC = () => {
       )}
 
       {/* Delete confirmation modal */}
-      <Dialog open={!!deleteConfirmId} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader><DialogTitle>Fshi Detyrën</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            A jeni i sigurt që doni të fshini këtë detyrë? Ky veprim nuk mund të zhbëhet.
-          </p>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setDeleteConfirmId(null)}>Anulo</Button>
-            <Button variant="destructive" onClick={async () => {
-              if (deleteConfirmId) {
-                try {
-                  const s = await deleteTaskCascade(deleteConfirmId);
-                  if (selectedTask?.id === deleteConfirmId) setSelectedTask(null);
-                  const extra = s.tasks > 1 ? ` (${s.tasks - 1} nën-detyra u fshinë bashkë)` : '';
-                  toast({ title: `Detyra u fshi${extra}`, description: s.failed ? `${s.failed} veprime lidhëse dështuan` : undefined });
-                } catch (err: any) {
-                  console.error('[Tasks] fshirja dështoi:', err);
-                  toast({ title: 'Detyra nuk u fshi', description: err?.message, variant: 'destructive' });
-                }
-              }
-              setDeleteConfirmId(null);
-            }}>Fshi, jam i sigurt</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <TaskDeleteConfirmDialog
+        open={!!deleteConfirmId}
+        onCancel={() => setDeleteConfirmId(null)}
+        onConfirm={confirmSingleDelete}
+      />
 
       {/* Bulk delete confirmation — only the rows the user may delete are deleted */}
-      <Dialog open={bulkDeleteOpen} onOpenChange={(open) => { if (!open && !bulkDeleting) setBulkDeleteOpen(false); }}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader><DialogTitle>Fshi {bulkDeletePlan.allowed.length} detyra</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            {bulkDeletePlan.allowed.length > 0
-              ? `A jeni i sigurt që doni të fshini ${bulkDeletePlan.allowed.length} detyra (bashkë me nën-detyrat dhe komentet e tyre)? Ky veprim nuk mund të zhbëhet.`
-              : 'Nuk keni të drejtë të fshini asnjë nga detyrat e zgjedhura.'}
-          </p>
-          {bulkDeletePlan.skipped > 0 && (
-            <p className="text-xs text-amber-600 dark:text-amber-400">
-              {bulkDeletePlan.skipped} nga të zgjedhurat do të anashkalohen — mund t'i fshijë vetëm krijuesi, i caktuari ose një menaxher.
-            </p>
-          )}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" disabled={bulkDeleting} onClick={() => setBulkDeleteOpen(false)}>Anulo</Button>
-            {bulkDeletePlan.allowed.length > 0 && (
-              <Button variant="destructive" disabled={bulkDeleting} onClick={confirmBulkDelete}>
-                {bulkDeleting ? 'Duke fshirë…' : 'Fshi, jam i sigurt'}
-              </Button>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <TaskBulkDeleteDialog
+        open={bulkDeleteOpen}
+        deleting={bulkDeleting}
+        allowedCount={bulkDeletePlan.allowed.length}
+        skipped={bulkDeletePlan.skipped}
+        onClose={() => setBulkDeleteOpen(false)}
+        onConfirm={confirmBulkDelete}
+      />
 
       {/* Same-day warning: the assignee already has work on the chosen date */}
       <TaskDateConflictDialog
@@ -1908,286 +830,5 @@ const TasksView: React.FC = () => {
     </div>
   );
 };
-
-// Calendar View Component
-const CalendarView: React.FC<{
-  tasks: Task[];
-  /** For the recurrence ghosts: a series inside an archived/cancelled project
-   *  projects nothing (the engine spawns nothing there). */
-  projects?: Pick<Project, 'id' | 'status'>[] | null;
-  onTaskClick: (task: Task) => void;
-}> = ({ tasks, projects, onTaskClick }) => {
-  const [currentDate, setCurrentDate] = useState(new Date());
-
-  const daysInMonth = new Date(
-    currentDate.getFullYear(),
-    currentDate.getMonth() + 1,
-    0
-  ).getDate();
-
-  // Monday-first week (Albanian convention): convert JS getDay() (0=Sun..6=Sat)
-  // to a Monday-based index (Mon=0..Sun=6).
-  const firstDay = (new Date(
-    currentDate.getFullYear(),
-    currentDate.getMonth(),
-    1
-  ).getDay() + 6) % 7;
-
-  // Day keys in Europe/Tirane — the SAME keys recurringOccurrencesInMonth uses
-  // for the recurring ghosts (machine-local midnight put a real task and its
-  // projected sibling on different cells for a browser outside the zone).
-  const sod = (x: Date) => startOfRecurrenceDay(x);
-  const todayKey = startOfRecurrenceDay(new Date());
-
-  // Tasks with no date at all can't be placed on a day — surface them in a bar so
-  // they're never hidden. Clicking "+N" on a busy day opens the full day list.
-  const undatedTasks = tasks.filter(t => !t.endDate && !t.startDate);
-  const [dayDetail, setDayDetail] = useState<{ label: string; items: Task[] } | null>(null);
-
-  // Projected recurring occurrences for the displayed month — ONE engine shared
-  // with the project calendar (`recurringOccurrencesInMonth`): the tip's own day
-  // plus the future cycles the spawning engine would produce; anchor day only for
-  // old cycles and for series inside an archived/cancelled project.
-  const projectionsByDay = React.useMemo(
-    () => recurringOccurrencesInMonth(tasks, currentDate.getFullYear(), currentDate.getMonth(), { projects }),
-    [tasks, projects, currentDate],
-  );
-
-  const days = [];
-  for (let i = 0; i < firstDay; i++) {
-    days.push(<div key={`empty-${i}`} className="min-h-[80px] bg-muted/20" />);
-  }
-
-  for (let day = 1; day <= daysInMonth; day++) {
-    // Noon, like the engine's cell keys: noon-local cannot flip across a day
-    // boundary for any real browser offset.
-    const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day, 12);
-    const cell = sod(date);
-    // A recurring task is a single-day occurrence on its due date (the "afat") —
-    // the frequency, not a multi-day span, drives repetition. A non-recurring task
-    // may span [startDate, endDate], capped so an over-long span doesn't paint
-    // every single day (it then collapses to the due date).
-    const SPAN_CAP_DAYS = 14;
-    const dayTasks = tasks.filter(task => {
-      // Anchor on the due date; fall back to the start date so a task with only a
-      // start date still appears. Tasks with NO date at all go to the "Pa afat" bar.
-      const anchor = task.endDate || task.startDate;
-      if (!anchor) return false;
-      if ((task as any).isRecurring) return false; // recurring → handled by projectionsByDay
-      const end = sod(new Date(anchor));
-      const start = task.startDate ? sod(new Date(task.startDate)) : end;
-      const lo = Math.min(start, end), hi = Math.max(start, end);
-      // ALWAYS show on the start day and the end day; fill the days in between only
-      // for short spans (so a long task still marks both ends without painting
-      // every single day).
-      if (cell === lo || cell === hi) return true;
-      if ((hi - lo) / 86400000 <= SPAN_CAP_DAYS) return cell > lo && cell < hi;
-      return false;
-    // Earliest time-of-day first, then priority — the two visible per cell used
-    // to be whichever were created last (or last dragged), not the day's agenda.
-    }).sort(compareTasksByTimeOfDayThenPriority);
-    const isToday = cell === todayKey;
-    // Projected recurring occurrences for this day (not real docs yet).
-    const dayProjections = projectionsByDay.get(day) || [];
-    const realShown = dayTasks.slice(0, 2);
-    const projShown = dayProjections.slice(0, Math.max(0, 2 - realShown.length));
-    const overflow = (dayTasks.length + dayProjections.length) - realShown.length - projShown.length;
-
-    days.push(
-      <div key={day} className={`min-h-[50px] sm:min-h-[80px] border p-0.5 sm:p-1 ${isToday ? 'border-primary border-2 bg-primary/5' : 'border-border bg-background'}`}>
-        <div className={`font-medium text-[10px] sm:text-xs mb-0.5 sm:mb-1 ${isToday ? 'text-primary font-bold' : 'text-muted-foreground'}`}>
-          {day}
-        </div>
-        <div className="space-y-0.5 sm:space-y-1">
-          {realShown.map(task => {
-            // Mark whether this cell is the task's start or end day (multi-day only)
-            // so "fillon" and "mbaron" are both visible on the calendar.
-            const tEnd = sod(new Date(task.endDate || task.startDate!));
-            const tStart = task.startDate ? sod(new Date(task.startDate)) : tEnd;
-            const multiDay = tStart !== tEnd && !(task as any).isRecurring;
-            const isStart = multiDay && cell === tStart;
-            const isEnd = multiDay && cell === tEnd;
-            return (
-              <div
-                key={task.id}
-                className={`text-[10px] sm:text-xs p-0.5 sm:p-1 bg-primary/10 rounded cursor-pointer hover:bg-primary/20 truncate ${isStart ? 'border-l-2 border-emerald-500' : isEnd ? 'border-l-2 border-primary' : ''}`}
-                onClick={() => onTaskClick(task)}
-                title={isStart ? `Fillon — ${task.title}` : isEnd ? `Afati — ${task.title}` : task.title}
-              >
-                {isStart && <span className="text-emerald-600 dark:text-emerald-400 font-semibold mr-0.5">▶</span>}
-                {isEnd && <span className="text-primary font-semibold mr-0.5">■</span>}
-                {task.title}
-              </div>
-            );
-          })}
-          {projShown.map((task, i) => (
-            <div
-              key={`proj-${task.id}-${i}`}
-              className="text-[10px] sm:text-xs p-0.5 sm:p-1 rounded cursor-pointer truncate border border-dashed border-primary/30 text-primary dark:text-primary dark:border-primary/40 bg-accent-soft dark:bg-primary/10 hover:bg-accent-soft dark:hover:bg-primary/20 italic"
-              title={`Përsëritet — ${task.title}`}
-              onClick={() => onTaskClick(task)}
-            >
-              🔄 {task.title}
-            </div>
-          ))}
-          {overflow > 0 && (
-            <button
-              type="button"
-              className="text-[10px] sm:text-xs text-primary font-medium hover:underline"
-              onClick={(e) => {
-                e.stopPropagation();
-                setDayDetail({
-                  label: date.toLocaleDateString('sq-AL', { weekday: 'long', day: 'numeric', month: 'long' }),
-                  items: [...dayTasks, ...dayProjections],
-                });
-              }}
-            >
-              +{overflow} më shumë
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="p-2 sm:p-4 space-y-3 sm:space-y-4">
-      <div className="flex items-center justify-between">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1))}
-        >
-          Para
-        </Button>
-        <h2 className="text-xs sm:text-sm font-medium">
-          {currentDate.toLocaleDateString('sq-AL', { month: 'long', year: 'numeric' })}
-        </h2>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1))}
-        >
-          Pas
-        </Button>
-      </div>
-      <div className="grid grid-cols-7 gap-px bg-border">
-        {['Hë', 'Ma', 'Më', 'En', 'Pr', 'Sh', 'Di'].map(day => (
-          <div key={day} className="bg-muted p-0.5 sm:p-1 text-center text-[10px] sm:text-xs font-medium">
-            {day}
-          </div>
-        ))}
-        {days}
-      </div>
-
-      {/* Tasks with no date at all — never hidden from the calendar. */}
-      {undatedTasks.length > 0 && (
-        <div className="rounded-xl border border-dashed border-border bg-muted/20 p-3">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertCircle className="w-3.5 h-3.5 text-muted-foreground" />
-            <span className="text-xs font-semibold text-muted-foreground">Pa afat ({undatedTasks.length})</span>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {undatedTasks.map(task => (
-              <button
-                key={task.id}
-                type="button"
-                onClick={() => onTaskClick(task)}
-                className="text-[11px] px-2 py-1 rounded-lg bg-background border hover:bg-accent-soft hover:border-primary/30 transition-colors truncate max-w-[220px]"
-              >
-                {task.title}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Day detail — opened from "+N më shumë"; lists every task for that day. */}
-      <Dialog open={!!dayDetail} onOpenChange={(o) => { if (!o) setDayDetail(null); }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="capitalize">{dayDetail?.label}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
-            {(dayDetail?.items || []).map((task, i) => (
-              <button
-                key={`${task.id}-${i}`}
-                type="button"
-                onClick={() => { onTaskClick(task); setDayDetail(null); }}
-                className="w-full text-left text-sm px-3 py-2 rounded-lg bg-muted/50 hover:bg-accent-soft hover:text-primary transition-colors truncate"
-              >
-                {(task as any).isRecurring ? '🔄 ' : ''}{task.title}
-              </button>
-            ))}
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-};
-
-// Numbered pagination footer (Prev / "Faqja x / y" / Next). Hidden when single page.
-const PaginationBar: React.FC<{
-  page: number;
-  totalPages: number;
-  totalItems: number;
-  pageSize: number;
-  onPage: (p: number) => void;
-}> = ({ page, totalPages, totalItems, pageSize, onPage }) => {
-  if (totalPages <= 1) return null;
-  const from = page * pageSize + 1;
-  const to = Math.min((page + 1) * pageSize, totalItems);
-  return (
-    <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-t bg-background shrink-0">
-      <span className="text-xs text-muted-foreground tabular-nums">
-        {from}–{to} nga {totalItems}
-      </span>
-      <div className="flex items-center gap-1">
-        <Button variant="outline" size="sm" disabled={page === 0} onClick={() => onPage(page - 1)}>
-          <ChevronLeft className="w-4 h-4 sm:mr-1" />
-          <span className="hidden sm:inline">Para</span>
-        </Button>
-        <span className="text-xs text-muted-foreground px-2 tabular-nums whitespace-nowrap">
-          Faqja {page + 1} / {totalPages}
-        </span>
-        <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => onPage(page + 1)}>
-          <span className="hidden sm:inline">Pas</span>
-          <ChevronRight className="w-4 h-4 sm:ml-1" />
-        </Button>
-      </div>
-    </div>
-  );
-};
-
-// --- @dnd-kit helper components ---
-import { useDroppable } from '@dnd-kit/core';
-
-function KanbanColumn({ id, children }: { id: string; children: React.ReactNode }) {
-  const { setNodeRef, isOver } = useDroppable({ id });
-  return (
-    <div
-      ref={setNodeRef}
-      className={`flex flex-col min-w-[260px] sm:min-w-[300px] flex-shrink-0 transition-colors rounded-lg p-1 ${isOver ? 'bg-primary/5 ring-1 ring-primary/30' : ''}`}
-    >
-      {children}
-    </div>
-  );
-}
-
-function SortableTaskCard({ id, children }: { id: string; children: React.ReactNode }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
-  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
-  return <div ref={setNodeRef} style={style} {...attributes} {...listeners}>{children}</div>;
-}
-
-function SortableListItem({ id, children }: { id: string; children: React.ReactNode }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
-  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1, zIndex: isDragging ? 50 : undefined };
-  return (
-    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      {children}
-    </div>
-  );
-}
 
 export default TasksView;

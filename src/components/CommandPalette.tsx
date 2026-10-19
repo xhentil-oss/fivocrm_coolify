@@ -52,6 +52,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChange }) =
     { icon: FolderKanban, label: 'Shko te Projektet', path: '/app/projects' },
     { icon: BellRing, label: 'Shko te Ndjekjet (sot / vonuar)', path: '/app/follow-ups' },
     { icon: Users, label: 'Shko te Klientët / Lead-et', path: '/app/crm' },
+    { icon: CheckSquare, label: 'Shko te Detyrat e mia (sot / vonuar)', path: '/app/my-tasks' },
     { icon: CheckSquare, label: 'Shko te Detyrat', path: '/app/tasks' },
     { icon: Package, label: 'Shko te Dyqani', path: '/app/products' },
     { icon: Package, label: 'Shko te Porositë', path: '/app/shop-orders' },

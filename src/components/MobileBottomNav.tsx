@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   CheckSquare,
+  ListChecks,
   MessageSquare,
   Users,
   Grid3x3,
@@ -48,16 +49,25 @@ const MobileBottomNav: React.FC = () => {
   const canAccess = (key: string) =>
     !permissions.isLoading && permissions[key as keyof typeof permissions] === true;
 
+  // People who mostly DO the work (not Admin/Manager/Owner) get "Detyrat e mia" as
+  // the tasks tab; the full board moves into "Më shumë". Leads keep the board.
+  const leadsTeam = permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin;
+
   // ── 4 primary tabs ──
   const primaryItems = [
     { to: '/app/dashboard', icon: LayoutDashboard, label: 'Home',     perm: 'canAccessProfile' },
-    { to: '/app/tasks',     icon: CheckSquare,     label: 'Detyrat',  perm: 'canAccessTasks' },
+    leadsTeam
+      ? { to: '/app/tasks',    icon: CheckSquare, label: 'Detyrat',  perm: 'canAccessTasks' }
+      : { to: '/app/my-tasks', icon: ListChecks,  label: 'Të miat',  perm: 'canAccessTasks' },
     { to: '/app/chat',      icon: MessageSquare,   label: 'Chat',     perm: 'canAccessChat' },
     { to: '/app/customers', icon: Users,           label: 'Klientët', perm: 'canAccessCustomers' },
   ].filter(item => canAccess(item.perm) && isEnabled(item.to));
 
   // ── "Më shumë" drawer items ──
   const moreItems = [
+    leadsTeam
+      ? { to: '/app/my-tasks', icon: ListChecks,  label: 'Detyrat e mia', perm: 'canAccessTasks' }
+      : { to: '/app/tasks',    icon: CheckSquare, label: 'Të gjitha detyrat', perm: 'canAccessTasks' },
     { to: '/app/projects',      icon: FolderKanban, label: 'Projektet',   perm: 'canAccessProjects' },
     { to: '/app/follow-ups',    icon: BellRing,     label: 'Ndjekjet',    perm: 'canAccessCRM' },
     { to: '/app/crm',           icon: Shield,       label: 'CRM',         perm: 'canAccessCRM' },
