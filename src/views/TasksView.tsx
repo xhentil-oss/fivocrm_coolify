@@ -62,7 +62,7 @@ import QuickTaskForm, { QUICK_TASK_DIALOG_CLASS } from '../components/QuickTaskF
 import TaskDateConflictDialog from '../components/TaskDateConflictDialog';
 import { findSameDayTasks } from '../lib/taskConflicts';
 import { reminderPatchForDeadline, reminderAtFromOffset, parseTaskDate } from '../lib/taskReminders';
-import { sortByManualOrder, pruneManualOrder, compareTasksByDue, compareTasksByTimeOfDayThenPriority, taskDueMs } from '../lib/taskSort';
+import { sortByManualOrder, pruneManualOrder, doneLast, compareTasksByDue, compareTasksByTimeOfDayThenPriority, taskDueMs } from '../lib/taskSort';
 import { Bell as ReminderBellIcon } from 'lucide-react';
 import { deleteTaskCascade } from '../lib/deleteCascade';
 import { applyValuedTaskSideEffects } from '../lib/finance/taskValue';
@@ -774,7 +774,8 @@ const TasksView: React.FC = () => {
   // Tasks created AFTER the last drag are not in the map: they stay on top in
   // their `createdAt desc` order (src/lib/taskSort.ts). The old 99999 sentinel
   // sank every new task below all ordered ones — onto the last page.
-  const sortByOrder = React.useCallback((arr: Task[]) => sortByManualOrder(arr, orderMap), [orderMap]);
+  // Completed tasks always go below the open ones (a no-op inside a board column).
+  const sortByOrder = React.useCallback((arr: Task[]) => doneLast(sortByManualOrder(arr, orderMap)), [orderMap]);
 
   // Apply saved manual order for the list view
   const orderedTasks = useMemo(() => sortByOrder(tasks), [tasks, sortByOrder]);

@@ -37,6 +37,7 @@ import {
 } from '../lib/projectArchive';
 import { deleteProjectCascade, projectCascadeToastParts } from '../lib/deleteCascade';
 import { projectTaskProgress } from '../lib/projectProgress';
+import { projectNextDeadlines, sortProjectsByDeadline } from '../lib/projectSort';
 import {
   Search,
   Plus,
@@ -235,6 +236,12 @@ const ProjectsView: React.FC = () => {
     return ownerIds;
   }, [projects]);
 
+  // Next deadline per project (src/lib/projectSort.ts) — drives the list order.
+  const projectDeadlines = React.useMemo(
+    () => projectNextDeadlines(projects || [], allTasks),
+    [projects, allTasks]
+  );
+
   // Filter projects
   const filteredProjects = React.useMemo(() => {
     if (!projects) return [];
@@ -293,8 +300,10 @@ const ProjectsView: React.FC = () => {
       });
     }
     
-    return filtered;
-  }, [projects, searchQuery, filterOwner, filterTeam, filterStatus, filterMembers, filterMonthly, showArchive, teamMembers]);
+    // What is due next comes first: earliest unfinished-task deadline, then the
+    // project's own end date; undated projects keep the updatedAt order below.
+    return sortProjectsByDeadline(filtered, projectDeadlines);
+  }, [projects, searchQuery, filterOwner, filterTeam, filterStatus, filterMembers, filterMonthly, showArchive, teamMembers, projectDeadlines]);
 
   // Get members for a project:
   //  - if memberUserIds is set → show exactly those people
@@ -1393,6 +1402,16 @@ const ProjectsView: React.FC = () => {
                         </Badge>
                       )}
                     </div>
+                    {(() => {
+                      const due = projectDeadlines.get(project.id);
+                      if (due === undefined || archived) return null;
+                      const overdue = due < Date.now();
+                      return (
+                        <span className={`text-xs mr-2 ${overdue ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
+                          {overdue ? 'Vonuar · ' : 'Afati · '}{new Date(due).toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}
+                        </span>
+                      );
+                    })()}
                     {isJoined && !isGuestOnProject && (
                       <span className="text-xs text-success">Joined</span>
                     )}

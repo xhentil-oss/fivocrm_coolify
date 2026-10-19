@@ -76,7 +76,21 @@ export function compareTasksBySectionThenDue(a: Task, b: Task): number {
   if (!sa && sb) return 1;
   if (sa && !sb) return -1;
   const bySection = sa.localeCompare(sb, 'sq', { sensitivity: 'base' });
-  return bySection || compareTasksByDue(a, b);
+  return bySection || compareDoneLast(a, b) || compareTasksByDue(a, b);
+}
+
+/** Open tasks before completed ones; 0 when both are on the same side. */
+export function compareDoneLast(a: Pick<Task, 'status'>, b: Pick<Task, 'status'>): number {
+  return (a.status === 'Done' ? 1 : 0) - (b.status === 'Done' ? 1 : 0);
+}
+
+/**
+ * A completed task sinks below every open one, keeping the incoming order on
+ * each side (stable) — so ticking a task off moves it out of the way without
+ * disturbing the manual/createdAt order of the rest.
+ */
+export function doneLast<T extends Pick<Task, 'status'>>(arr: T[]): T[] {
+  return [...arr].sort(compareDoneLast);
 }
 
 /**

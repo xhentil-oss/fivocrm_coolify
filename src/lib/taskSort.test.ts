@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   taskDateMs, taskDueMs, compareTasksByDue, compareTasksByPriorityThenDue,
   compareTasksBySectionThenDue, compareTasksByTimeOfDayThenPriority,
-  sortByManualOrder, pruneManualOrder,
+  sortByManualOrder, pruneManualOrder, doneLast,
 } from './taskSort';
 import type { Task } from '../types';
 
@@ -93,5 +93,16 @@ describe('manual order', () => {
   });
   it('pruning drops ids of deleted tasks and keeps the order', () => {
     expect(pruneManualOrder(['gone', 'b', 'a', 'gone2'], [t('a'), t('b')])).toEqual(['b', 'a']);
+  });
+});
+
+describe('doneLast', () => {
+  it('sinks completed tasks below open ones, keeping each side in order', () => {
+    const arr = [t('a', { status: 'Done' }), t('b'), t('c', { status: 'Done' }), t('d', { status: 'In Progress' })];
+    expect(doneLast(arr).map(x => x.id)).toEqual(['b', 'd', 'a', 'c']);
+  });
+  it('a completed task goes last inside its own section', () => {
+    const arr = [t('a', { section: 'S', status: 'Done' }), t('b', { section: 'S' }), t('c')];
+    expect([...arr].sort(compareTasksBySectionThenDue).map(x => x.id)).toEqual(['b', 'a', 'c']);
   });
 });
