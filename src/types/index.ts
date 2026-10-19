@@ -994,9 +994,47 @@ export interface Task {
   cycleAnchorEndDay?: number | null;
   attachments?: string;
   collaboratorIds?: string[];
+  /**
+   * Client approval ("Kërko miratim nga klienti") — the CURRENT round. Staff open
+   * it (state 'pending'); the portal client writes ONLY its decision keys
+   * (state/decidedAt/decidedByUid/decisionNote — rules). Approval never completes
+   * the task: staff close it through completeTask(). See src/lib/taskApproval.ts.
+   */
+  clientApproval?: ClientApproval | null;
+  /** Earlier rounds, archived by staff when they open a new one. */
+  clientApprovalHistory?: ClientApproval[] | null;
+  /**
+   * "Parë" — when the ASSIGNEE first opened the task, and for WHICH assignee
+   * (a reassignment makes it stale even if a path forgets to clear it). Written
+   * only by the assignee themselves (rules). See src/lib/taskReceipts.ts.
+   */
+  assigneeSeenAt?: Date | null;
+  assigneeSeenFor?: string | null;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
+}
+
+export type ClientApprovalState = 'pending' | 'approved' | 'changes_requested' | 'cancelled';
+
+export interface ClientApproval {
+  state: ClientApprovalState;
+  /** 1-based; every new request is the next round. */
+  round: number;
+  requestedAt?: Date | null;
+  requestedByUserId?: string | null;
+  /** Shown to the client with the request. */
+  note?: string | null;
+  /** Optional deliverable link (one of the task's attachments). */
+  attachmentUrl?: string | null;
+  attachmentName?: string | null;
+  /** Client side — written only by the portal client (rules). */
+  decidedAt?: Date | null;
+  decidedByUid?: string | null;
+  decisionNote?: string | null;
+  /** Staff withdrew a pending request. */
+  cancelledAt?: Date | null;
+  cancelledByUserId?: string | null;
 }
 
 // ── Follow-up ("Ndjekja") — shared by Lead AND Customer ─────────────────────
@@ -2353,6 +2391,15 @@ export interface TaskComment {
   createdByUserId?: string;
   edited?: boolean;
   reactions?: Record<string, string[]>; // emoji -> userId[]
+  /** Client-visibility key (the task's customer) — absent on internal comments. */
+  customerId?: string;
+  businessId?: string;
+  /**
+   * Read receipts ("✓✓ Parë"): uid → when that person first saw the comment in
+   * an open panel / portal page. Each reader may add ONLY their own key (rules);
+   * the author never marks their own. See src/lib/taskReceipts.ts.
+   */
+  readBy?: Record<string, Date | null> | null;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -31,6 +31,8 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   goal_achieved: 'tasks',
   goal_overdue: 'tasks',
   blocker_reported: 'tasks',
+  task_approval_requested: 'tasks',
+  task_approval_decided: 'tasks',
   // messages
   client_message: 'messages',
   staff_message: 'messages',

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { MessageSquare, SmilePlus } from 'lucide-react';
 import { useAuth } from '../../../contexts/AuthContext';
 import { toast } from '../../../hooks/use-toast';
@@ -9,6 +9,9 @@ import CommentBody from '../../comments/CommentBody';
 import type { Task, TaskComment } from '../../../types';
 import { COMMENT_REACTIONS } from './panelShared';
 import { useTaskCommentSubmit } from './useTaskCommentSubmit';
+import { usePageVisible } from '../../../hooks/usePageVisible';
+import { commentReceipt, commentsToMarkRead } from '../../../lib/taskReceipts';
+import { markTaskCommentsRead } from '../../../lib/taskReceiptWrites';
 
 interface TaskCommentsSectionProps {
   task: Task;
@@ -93,6 +96,27 @@ const TaskCommentsSection: React.FC<TaskCommentsSectionProps> = ({
   const deleteComment = async (id: string) => {
     await onDeleteComment?.(id);
     setConfirmDeleteCommentId(null);
+  };
+
+  // "✓✓ Parë": every comment rendered here while the tab is visible is marked read
+  // for me (never my own; once per comment per mount). Viewers mark too — seen is
+  // not an edit (rules test 83g). A failure is logged once and NOT retried in a
+  // loop: the ids stay in the sent set until the panel remounts.
+  const pageVisible = usePageVisible();
+  const readSentRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!user?.uid || !pageVisible || comments.length === 0) return;
+    const ids = commentsToMarkRead(comments, user.uid, readSentRef.current);
+    if (ids.length === 0) return;
+    ids.forEach(id => readSentRef.current.add(id));
+    markTaskCommentsRead(ids, user.uid)
+      .then(failed => { if (failed) console.warn(`[Tasks] ${failed} komente nuk u shënuan si të lexuara`); })
+      .catch(err => console.warn('[Tasks] shënimi i komenteve si të lexuara dështoi:', err));
+  }, [comments, user?.uid, pageVisible]);
+  // Readers are staff (names) or the portal client (no staff record → "Klienti").
+  const readerName = (uid: string) => {
+    const n = getUserDisplayName(uid);
+    return n === uid.slice(0, 12) ? 'Klienti' : n;
   };
 
   const handleAddCommentSubmit = useTaskCommentSubmit({
@@ -224,6 +248,19 @@ const TaskCommentsSection: React.FC<TaskCommentsSectionProps> = ({
                         })()}
                         <div className={`flex items-center gap-2 px-1 ${isCurrentUser ? 'justify-end' : 'justify-start'}`}>
                           <span className="text-[10px] text-muted-foreground">{timeLabel}</span>
+                          {(() => {
+                            // WhatsApp-style receipt: who (else) has seen this comment.
+                            const r = commentReceipt(comment, readerName);
+                            if (!isCurrentUser && r.kind === 'sent') return null;
+                            return (
+                              <span
+                                title={r.title}
+                                className={`text-[10px] ${r.kind === 'read' ? 'text-sky-600 dark:text-sky-400' : 'text-muted-foreground'}`}
+                              >
+                                {r.label}
+                              </span>
+                            );
+                          })()}
                           {onToggleReaction && (
                             <div className="relative">
                               <button type="button" onClick={() => setReactionPickerId(reactionPickerId === comment.id ? null : comment.id)} aria-label="Reago" className="text-muted-foreground hover:text-foreground transition-colors flex items-center">

@@ -2,6 +2,7 @@ import React from 'react';
 import { Check, Eye, Maximize2, Minimize2, X } from 'lucide-react';
 import type { Task } from '../../../types';
 import { STATUS_OPTS } from './panelShared';
+import { approvalBadge } from '../../../lib/taskApproval';
 
 interface TaskPanelHeaderProps {
   task: Task;
@@ -32,6 +33,7 @@ const TaskPanelHeader: React.FC<TaskPanelHeaderProps> = ({
   onClose,
 }) => {
   const statusMeta = STATUS_OPTS.find(s => s.v === task.status) || STATUS_OPTS[0];
+  const approval = approvalBadge(task);
   return (
     <>
       {/* Mobile drag handle */}
@@ -72,6 +74,9 @@ const TaskPanelHeader: React.FC<TaskPanelHeaderProps> = ({
             </div>
           )}
         </div>
+        {approval && (
+          <span title={approval.title} className={`max-w-[150px] truncate rounded-md px-2 py-0.5 text-[10.5px] font-bold sm:max-w-none ${approval.className}`}>{approval.label}</span>
+        )}
         {justCreated && (
           <span className="rounded-md bg-emerald-500/15 px-2 py-0.5 text-[10.5px] font-bold text-emerald-700 dark:text-emerald-400">✓ U krijua tani</span>
         )}

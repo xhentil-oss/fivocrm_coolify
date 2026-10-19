@@ -29,6 +29,10 @@ import TaskAttachmentsSection from './tasks/panel/TaskAttachmentsSection';
 import TaskChatSection from './tasks/panel/TaskChatSection';
 import TaskCommentsSection from './tasks/panel/TaskCommentsSection';
 import TaskPanelFooter, { TaskDeleteDialog } from './tasks/panel/TaskPanelFooter';
+import TaskClientApprovalSection from './tasks/panel/TaskClientApprovalSection';
+import { usePageVisible } from '../hooks/usePageVisible';
+import { shouldMarkAssigneeSeen } from '../lib/taskReceipts';
+import { markAssigneeSeen } from '../lib/taskReceiptWrites';
 
 // The panel is composed from the sections in src/components/tasks/panel/ (the
 // design notes live in panelShared.tsx). Both mounts (TasksView,
@@ -201,6 +205,20 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     const known = allMentionable.some(m => m.userId === value) || !!userProfiles?.some(p => p.userId === value);
     return known ? getUserDisplayName(value) : null;
   };
+
+  // "Parë": the ASSIGNEE opening the task (tab visible) stamps it once — the
+  // assigner sees "Parë 14:32" in the assignee row. Guests are not staff of the
+  // business (the rules would refuse it). One attempt per task+assignee per mount.
+  const pageVisible = usePageVisible();
+  const seenAttemptRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (isGuestMode || !user?.uid) return;
+    if (!shouldMarkAssigneeSeen(task, user.uid, { visible: pageVisible })) return;
+    const key = `${task.id}:${task.assignedToUserId}`;
+    if (seenAttemptRef.current === key) return;
+    seenAttemptRef.current = key;
+    markAssigneeSeen(task.id, user.uid).catch(err => console.warn('[Tasks] shënimi "Parë" dështoi:', err));
+  }, [task, user?.uid, pageVisible, isGuestMode]);
 
   // Reset local edit state ONLY when switching to a different task. Keying on
   // task.title/description/dates would re-run on every live Firestore update and
@@ -418,6 +436,17 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
             <TaskPriorityLabelRows task={task} readOnly={readOnly} labelSuggestions={labelSuggestions} onUpdate={onUpdate} />
           </div>
+
+          {/* Client approval (portal-visible tasks) — Prano / Kërko ndryshime in the portal */}
+          {!isGuestMode && (
+            <TaskClientApprovalSection
+              task={task}
+              readOnly={readOnly}
+              onUpdate={onUpdate}
+              getUserDisplayName={getUserDisplayName}
+              onComplete={() => changeStatus('Done')}
+            />
+          )}
 
           {/* Activity history (audit trail) */}
           <TaskActivityTab taskId={task.id} getUserDisplayName={getUserDisplayName} />

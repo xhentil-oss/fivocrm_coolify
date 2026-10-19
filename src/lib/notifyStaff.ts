@@ -28,6 +28,10 @@ export interface NotifyStaffInput {
   /** Chat only: the message document id, so the reader can dismiss the row if it is deleted. */
   messageId?: string;
   projectId?: string;
+  /** The task this is about. REQUIRED for `task_approval_decided`: the server then
+   *  verifies the caller may act on that task and notifies its assignee + the
+   *  person who requested the approval (not the whole management team). */
+  taskId?: string;
   /** The responsible person, when the portal already knows it (validated server-side). */
   responsibleUserId?: string | null;
   /** Also upsert the persistent conversation thread (owner + watchers). */

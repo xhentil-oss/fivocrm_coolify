@@ -55,6 +55,11 @@ export const NOTIFICATION_TYPES = {
   goal_achieved:            { category: 'tasks',    priority: 'success' },
   goal_overdue:             { category: 'tasks',    priority: 'critical' },
   blocker_reported:         { category: 'tasks',    priority: 'warning',  groupLabel: 'pengesa të raportuara' },
+  // Client approval of a task (src/lib/taskApproval.ts): staff ask the PORTAL client
+  // ("Kërko miratim nga klienti") → the client decides (Prano / Kërko ndryshime) →
+  // the assignee + requester hear it through /api/notify-staff (taskId routing).
+  task_approval_requested:  { category: 'tasks',    priority: 'warning',  groupLabel: 'kërkesa miratimi', portal: true },
+  task_approval_decided:    { category: 'tasks',    priority: 'info',     groupLabel: 'vendime miratimi' },
 
   // ── Mesazhe & komunikim ─────────────────────────────────────────────────────
   client_message:           { category: 'messages', priority: 'info',     groupLabel: 'mesazhe klienti', portal: true },

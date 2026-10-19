@@ -28,6 +28,12 @@ const NOTIFY_STAFF_PER_HOUR = 120;
  *   - notifications can never fan out to another tenant's admins.
  */
 const ADMIN_ROLES = new Set(['Admin', 'Owner', 'SuperAdmin']);
+
+/** A registered type, or `client_request` (an unknown type would dodge every mute). */
+function safeTypeOf(type: unknown): string {
+  const raw = typeof type === 'string' && type ? type.slice(0, 60) : 'client_request';
+  return Object.prototype.hasOwnProperty.call(NOTIFICATION_TYPE_CATEGORY, raw) ? raw : 'client_request';
+}
 const FIRST_RESPONSE_SLA_HOURS = 2;
 
 interface RoutingMember {
@@ -132,6 +138,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // questionnaire → "contact this lead"). Assignment needs the staff list, so it
     // happens here rather than in the browser.
     task,
+    // Optional: the TASK this notification is about (client approval decision).
+    // For `task_approval_decided` the audience is that task's assignee + whoever
+    // requested the approval — never the whole management team.
+    taskId: aboutTaskId,
   } = (req.body || {}) as Record<string, any>;
 
   if (!type || !title) return res.status(400).json({ error: 'Missing type/title' });
@@ -318,6 +328,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } catch { /* keep the broad audience */ }
   }
 
+  // ── Task-scoped routing (client approval decision) ──
+  // The task id is client-supplied: it must be a task of THIS tenant that the caller
+  // can legitimately act on (their own customer's task, or a task of a project they
+  // are a portal member of). The recipients are read from the task, never the body.
+  if (safeTypeOf(type) === 'task_approval_decided') {
+    const tid = clean(aboutTaskId, 200);
+    if (!tid || !/^[A-Za-z0-9_-]+$/.test(tid)) return res.status(400).json({ error: 'Missing taskId' });
+    try {
+      const tSnap = await db.collection('tasks').doc(tid).get();
+      const td = tSnap.exists ? (tSnap.data() as any) : null;
+      if (!td || td.businessId !== businessId) return res.status(403).json({ error: 'Not your task' });
+      let allowed = !!td.customerId && td.customerId === customerId;
+      if (!allowed && td.customerId && typeof td.projectId === 'string' && td.projectId) {
+        const pSnap = await db.collection('projects').doc(td.projectId).get();
+        const pd = pSnap.exists ? (pSnap.data() as any) : null;
+        allowed = !!pd && pd.businessId === businessId
+          && Array.isArray(pd.memberUserIds) && pd.memberUserIds.includes(decoded.uid);
+      }
+      if (!allowed) return res.status(403).json({ error: 'Not your task' });
+      const memberIds = new Set(members.filter((m) => m.status !== 'Inactive' && m.userId).map((m) => m.userId));
+      const routed = [td.assignedToUserId, td.clientApproval?.requestedByUserId]
+        .filter((u: any): u is string => typeof u === 'string' && memberIds.has(u));
+      recipients.clear();
+      routed.forEach((uid) => recipients.add(uid));
+      // Nobody routable (unassigned, requester left): fall back to the managers.
+      if (recipients.size === 0) {
+        members.forEach((m) => {
+          if (m.status !== 'Inactive' && m.userId && (m.role === 'Admin' || m.role === 'Manager')) recipients.add(m.userId);
+        });
+      }
+    } catch {
+      return res.status(500).json({ error: 'Could not resolve task' });
+    }
+  }
+
   if (recipients.size === 0) return res.status(200).json({ success: true, notified: 0, taskId });
 
   // Doc + push + email per recipient. This was a plain batched write, so the single
@@ -327,10 +372,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // The type is client-supplied and MUST be registered: an unknown value fails OPEN
   // through every category mute (that fail-open exists for legacy rows), so an
   // unvalidated type would let the portal send notifications staff can never mute.
-  const rawType = clean(type, 60) || 'client_request';
-  const safeType = Object.prototype.hasOwnProperty.call(NOTIFICATION_TYPE_CATEGORY, rawType)
-    ? rawType
-    : 'client_request';
+  const safeType = safeTypeOf(type);
 
   const results = await Promise.allSettled([...recipients].map(uid => notifyUser({
     userId: uid,

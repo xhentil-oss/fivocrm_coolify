@@ -562,7 +562,7 @@ const TasksView: React.FC = () => {
     // reminderSetByUserId, goes with it). The work-cycle carry-over
     // stamps and the completion instant describe the ORIGINAL's
     // history — a fresh copy was never carried and is not done.
-    const { id, isRecurring, recurringFrequency, recurringInterval, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, recurringEndDate, nextRecurringDate, nextCycleCreated, seriesId, recurringSkippedReason, dueNotificationSent, overdueNotificationSent, reminderAt, reminderOffsetMinutes, reminderSentAt, reminderSetByUserId, carriedOverFromPeriod, carriedOverCount, completedAt, parentTaskId, dependsOn, attachments, value, valueAppliedToBudget, collaboratorIds, createdByUserId, seriesCreatedByUserId, cycleAnchorStartDay, cycleAnchorEndDay, ...rest } = task as any;
+    const { id, isRecurring, recurringFrequency, recurringInterval, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, recurringEndDate, nextRecurringDate, nextCycleCreated, seriesId, recurringSkippedReason, dueNotificationSent, overdueNotificationSent, reminderAt, reminderOffsetMinutes, reminderSentAt, reminderSetByUserId, carriedOverFromPeriod, carriedOverCount, completedAt, parentTaskId, dependsOn, attachments, value, valueAppliedToBudget, collaboratorIds, createdByUserId, seriesCreatedByUserId, cycleAnchorStartDay, cycleAnchorEndDay, clientApproval, clientApprovalHistory, assigneeSeenAt, assigneeSeenFor, ...rest } = task as any;
     // The copy is MINE (rules: created as yourself), and without the
     // assign right it can only be assigned to me — the rules refuse
     // handing a colleague work through a copy.

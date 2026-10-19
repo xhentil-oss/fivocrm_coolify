@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { addDoc, collection, Timestamp } from 'firebase/firestore';
+import { addDoc, collection, doc, serverTimestamp, Timestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useClientPortal } from '../../hooks/useClientPortal';
@@ -26,6 +26,82 @@ import { useCommentFocus, COMMENT_FLASH_CLASS } from '../../hooks/useCommentFocu
 import { taskDeepLink, projectCommentDeepLink } from '../../lib/deepLinks';
 import { currencySymbol } from '../../lib/utils';
 import CommentBody from '../../components/comments/CommentBody';
+import { approvalBadge, clientDecisionBlockReason, clientDecisionUpdate, isApprovalPending, MAX_DECISION_NOTE, type ClientDecision } from '../../lib/taskApproval';
+import { commentReceipt, commentsToMarkRead } from '../../lib/taskReceipts';
+import { markTaskCommentsRead } from '../../lib/taskReceiptWrites';
+import { usePageVisible } from '../../hooks/usePageVisible';
+import { safeExternalUrl } from '../../lib/safeUrl';
+
+/**
+ * "Pret miratimin tënd" — the client's side of a task approval round
+ * (src/lib/taskApproval.ts). Prano records the decision; Kërko ndryshime needs a
+ * comment, which is also posted on the task. The rules accept only the decision
+ * keys (tests 83d-83f); staff then close the task through their completion flow.
+ */
+const PortalTaskApprovalCard: React.FC<{
+  task: Task;
+  busy: boolean;
+  onDecide: (task: Task, decision: ClientDecision, note: string) => Promise<boolean>;
+}> = ({ task, busy, onDecide }) => {
+  const [mode, setMode] = useState<'idle' | 'changes'>('idle');
+  const [note, setNote] = useState('');
+  const a = task.clientApproval;
+  if (!a) return null;
+  if (a.state !== 'pending') {
+    const b = approvalBadge(task);
+    if (!b) return null;
+    const label = a.state === 'approved' ? '✓ E miratuat' : '↺ Kërkuat ndryshime';
+    return <span title={b.title} className={`inline-block text-[10px] px-1.5 py-0.5 rounded-full font-medium ${b.className}`}>{label}</span>;
+  }
+  if (task.status === 'Done') return null;
+  const href = safeExternalUrl(a.attachmentUrl);
+  const changesBlock = clientDecisionBlockReason(task, 'changes_requested', note);
+  return (
+    <div
+      className="rounded-xl border border-amber-300/70 bg-amber-50/70 p-3 dark:bg-amber-950/20"
+      onClick={e => e.stopPropagation()}
+    >
+      <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">Pret miratimin tënd</p>
+      {a.note && <p className="mt-1 whitespace-pre-wrap text-sm text-foreground">{a.note}</p>}
+      {href && (
+        <a href={href} target="_blank" rel="noopener noreferrer" className="mt-1 inline-block text-xs text-primary hover:underline">
+          📎 {a.attachmentName || 'Shiko materialin'}
+        </a>
+      )}
+      {mode === 'idle' ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button size="sm" disabled={busy} onClick={() => { void onDecide(task, 'approved', ''); }} className="gap-1.5">
+            <CheckCircle2 className="h-4 w-4" /> Prano
+          </Button>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => setMode('changes')}>
+            Kërko ndryshime
+          </Button>
+        </div>
+      ) : (
+        <div className="mt-2 space-y-2">
+          <Textarea
+            value={note}
+            onChange={e => setNote(e.target.value.slice(0, MAX_DECISION_NOTE))}
+            rows={3}
+            autoFocus
+            placeholder="Çfarë duhet ndryshuar? (e detyrueshme)"
+            className="text-sm"
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              disabled={busy || changesBlock !== null}
+              onClick={async () => { if (await onDecide(task, 'changes_requested', note)) { setMode('idle'); setNote(''); } }}
+            >
+              Dërgo kërkesën për ndryshime
+            </Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setMode('idle'); setNote(''); }}>Anulo</Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface ProjectComment {
   id: string;
@@ -47,11 +123,16 @@ const PortalProjectDetailView: React.FC = () => {
   // scroll to that comment instead of dropping the client on the overview.
   const [searchParams] = useSearchParams();
   const focusCommentId = searchParams.get('comment');
+  // Arriving from "Pret miratimin tuaj": open that task (approval card + its comments).
+  const focusTaskId = searchParams.get('task');
   const { registerComment, isFlashing } = useCommentFocus(focusCommentId);
   const [activeTab, setActiveTab] = useState(() => (focusCommentId ? 'comments' : 'overview'));
   const [commentText, setCommentText] = useState('');
   const commentScrollRef = useRef<HTMLDivElement>(null);
-  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(focusTaskId);
+  const [decidingTaskId, setDecidingTaskId] = useState<string | null>(null);
+  const pageVisible = usePageVisible();
+  const readSentRef = useRef<Set<string>>(new Set());
   const [taskCommentTexts, setTaskCommentTexts] = useState<Record<string, string>>({});
   const [sendingTaskComment, setSendingTaskComment] = useState<string | null>(null);
 
@@ -270,6 +351,72 @@ const PortalProjectDetailView: React.FC = () => {
       toast({ title: 'Komenti u dërgua' });
     } catch {
       toast({ title: 'Gabim', description: 'Komenti nuk u dërgua.', variant: 'destructive' });
+    }
+  };
+
+  // "Parë" for the team: the comments of the EXPANDED task are marked read by
+  // this client while the tab is visible (never their own; once per comment).
+  // Only client-visible comments are ever loaded here, and the rules accept
+  // exactly the caller's own readBy key (tests 83h-83i).
+  useEffect(() => {
+    if (!user?.uid || !expandedTaskId || !pageVisible) return;
+    const list = taskComments.filter(c => c.taskId === expandedTaskId);
+    const ids = commentsToMarkRead(list, user.uid, readSentRef.current);
+    if (ids.length === 0) return;
+    ids.forEach(id => readSentRef.current.add(id));
+    markTaskCommentsRead(ids, user.uid).catch(err => console.warn('[Portal] shënimi i komenteve si të lexuara dështoi:', err));
+  }, [taskComments, expandedTaskId, pageVisible, user?.uid]);
+
+  // The client's decision on a pending approval round. Written as dotted paths
+  // (clientDecisionUpdate) so only the four decision keys change; "Kërko
+  // ndryshime" also posts the reason as a task comment the team sees.
+  const handleApprovalDecision = async (task: Task, decision: ClientDecision, note: string): Promise<boolean> => {
+    if (!user || !projectId) return false;
+    if (clientDecisionBlockReason(task, decision, note)) return false;
+    setDecidingTaskId(task.id);
+    try {
+      await updateDoc(doc(db, 'tasks', task.id), clientDecisionUpdate(task, decision, {
+        uid: user.uid, note, serverNow: serverTimestamp(),
+      }) as any);
+      if (decision === 'changes_requested') {
+        const t: any = task;
+        try {
+          await addDoc(collection(db, 'taskComments'), {
+            taskId: task.id,
+            content: `↺ Kërkoj ndryshime: ${note.trim()}`,
+            userId: user.uid,
+            senderType: 'client',
+            createdByUserId: user.uid,
+            ...((project as any)?.teamId ? { teamId: (project as any).teamId } : {}),
+            ...(t.customerId ? { customerId: t.customerId } : {}),
+            ...(t.businessId ? { businessId: t.businessId } : {}),
+            createdAt: Timestamp.now(),
+            updatedAt: Timestamp.now(),
+          });
+        } catch (err) {
+          console.warn('[Portal] komenti i ndryshimeve nuk u ruajt:', err);
+        }
+      }
+      void notifyStaff({
+        type: 'task_approval_decided',
+        taskId: task.id,
+        title: decision === 'approved'
+          ? `✓ Klienti miratoi — ${task.title}`
+          : `↺ Klienti kërkoi ndryshime — ${task.title}`,
+        message: decision === 'approved'
+          ? (note.trim() || 'Detyra mund të mbyllet.')
+          : note.trim().slice(0, 300),
+        actionUrl: taskDeepLink(task.id, projectId),
+        actionLabel: 'Shiko Detyrën',
+        projectId,
+      });
+      toast({ title: decision === 'approved' ? 'Faleminderit — e miratuat' : 'Kërkesa për ndryshime u dërgua' });
+      return true;
+    } catch {
+      toast({ title: 'Gabim', description: 'Vendimi nuk u ruajt. Provoni përsëri.', variant: 'destructive' });
+      return false;
+    } finally {
+      setDecidingTaskId(null);
     }
   };
 
@@ -527,6 +674,11 @@ const PortalProjectDetailView: React.FC = () => {
                             })()}
                           </div>
                         </div>
+                        {isApprovalPending(task) && task.status !== 'Done' && (
+                          <span className="flex-shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                            Pret miratimin
+                          </span>
+                        )}
                         {/* Comment count + expand chevron */}
                         <div className="flex items-center gap-1.5 flex-shrink-0 text-muted-foreground">
                           {commentCount > 0 && (
@@ -546,6 +698,7 @@ const PortalProjectDetailView: React.FC = () => {
                     {/* Expanded comments section */}
                     {isExpanded && (
                       <div className="border-t px-4 pb-4 pt-3 space-y-3">
+                        <PortalTaskApprovalCard task={task} busy={decidingTaskId === task.id} onDecide={handleApprovalDecision} />
                         {/* Existing comments */}
                         {taskCommentList.length === 0 ? (
                           <p className="text-xs text-muted-foreground text-center py-2 italic">
@@ -583,6 +736,11 @@ const PortalProjectDetailView: React.FC = () => {
                                     </div>
                                     <span className="text-[10px] text-muted-foreground px-1">
                                       {createdAt.toLocaleString('sq-AL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                                      {isOwn && (() => {
+                                        // Your own comment: did the team see it? (names stay internal)
+                                        const r = commentReceipt(comment, () => 'Ekipi', { anonymous: true });
+                                        return <span title={r.title} className={`ml-1.5 ${r.kind === 'read' ? 'text-sky-600 dark:text-sky-400' : ''}`}>{r.label}</span>;
+                                      })()}
                                     </span>
                                   </div>
                                 </div>

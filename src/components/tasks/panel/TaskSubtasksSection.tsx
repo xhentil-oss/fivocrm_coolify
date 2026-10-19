@@ -154,6 +154,8 @@ const TaskSubtasksSection: React.FC<TaskSubtasksSectionProps> = ({
         delete data.assignedToUserId;
       }
       const reassigned = !!sub && !!data.assignedToUserId && data.assignedToUserId !== prevAssignee;
+      // A new assignee has not seen it yet — clear the old "Parë" mark.
+      if (reassigned) data = { ...data, assigneeSeenAt: null, assigneeSeenFor: null };
       // Re-opening (Done → anything else) runs the same rule as the main pill.
       if (sub && data.status && data.status !== 'Done') {
         data = { ...data, ...reopenPatchFor(sub, allTasks || subtasks) };

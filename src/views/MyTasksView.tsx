@@ -13,6 +13,7 @@ import { ToastAction } from '../components/ui/toast';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
+import { approvalBadge } from '../lib/taskApproval';
 import TaskDetailPanel from '../components/TaskDetailPanel';
 import { openDailyReport } from '../components/DailyReportPopup';
 import { getTodayString, isReportingDay } from '../components/DailyReportForm';
@@ -333,6 +334,10 @@ const MyTasksView: React.FC = () => {
             {task.parentTaskId && <span>Nën-detyrë</span>}
             {task.isRecurring && <span title="Detyrë që përsëritet">🔄</span>}
             {isCollab && <span className="inline-flex items-center gap-0.5"><Users className="h-3 w-3" />Bashkëpunim</span>}
+            {(() => {
+              const a = approvalBadge(task);
+              return a ? <span title={a.title} className={`rounded-full px-1.5 py-px text-[10px] font-medium ${a.className}`}>{a.label}</span> : null;
+            })()}
           </div>
         </button>
         {canSnooze && (

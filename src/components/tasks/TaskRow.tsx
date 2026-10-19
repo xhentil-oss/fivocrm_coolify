@@ -25,6 +25,8 @@ import { TaskLabels } from '../TaskLabels';
 import { getTaskStatusLabel } from '../../lib/statusColors';
 import { parseTaskDate } from '../../lib/taskReminders';
 import type { Task } from '../../types';
+import { approvalBadge } from '../../lib/taskApproval';
+import { assigneeSeenLabel, isAssigneeSeen } from '../../lib/taskReceipts';
 import { formatDateCompact, hashColor, isOverdueDate, taskPropsEqual } from './taskListUtils';
 
 export interface TaskRowProps {
@@ -90,6 +92,10 @@ const TaskRowInner: React.FC<TaskRowProps> = ({
   const isOverdue = isOverdueDate(task.endDate) && task.status !== 'Done';
   const subtaskInfo = subtaskTotal !== undefined ? { done: subtaskDone ?? 0, total: subtaskTotal } : undefined;
   const initials = assigneeName.slice(0, 2).toUpperCase();
+  const approval = approvalBadge(task);
+  // "Parë 14:32" / "Pa parë ende" — the assigner's answer to "has she opened it?"
+  const seenLabel = task.status !== 'Done' ? assigneeSeenLabel(task) : null;
+  const seen = isAssigneeSeen(task);
   const initialsColor = hashColor(assigneeName);
   const priorityFlagColor = task.priority === 'urgent' || task.priority === 'high'
     ? '#EF4444' : task.priority === 'medium' ? '#F97316' : '#9CA3AF';
@@ -209,6 +215,12 @@ const TaskRowInner: React.FC<TaskRowProps> = ({
           }`}>
             {getTaskStatusLabel(task.status)}
           </span>
+          {/* Client approval state (portal Prano / Kërko ndryshime) */}
+          {approval && (
+            <span title={approval.title} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${approval.className}`}>
+              {approval.label}
+            </span>
+          )}
           {/* Project name */}
           {projectName && (
             <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded flex items-center gap-1">
@@ -241,13 +253,21 @@ const TaskRowInner: React.FC<TaskRowProps> = ({
       {/* Assignee initials — 28px, hash color, tooltip */}
       <div
         className="hidden sm:flex items-center gap-1.5 flex-shrink-0"
-        title={assigneeName}
+        title={seenLabel ? `${assigneeName} · ${seenLabel}` : assigneeName}
       >
         <div
-          className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0 ring-2 ring-white dark:ring-white/80 shadow-sm transition-transform duration-[180ms] ease-[cubic-bezier(.4,0,.2,1)] group-hover:scale-[1.06]"
+          className="relative w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0 ring-2 ring-white dark:ring-white/80 shadow-sm transition-transform duration-[180ms] ease-[cubic-bezier(.4,0,.2,1)] group-hover:scale-[1.06]"
           style={{ backgroundColor: initialsColor }}
         >
           {initials}
+          {seenLabel && seen && (
+            <span
+              aria-label={seenLabel}
+              className="absolute -bottom-1 -right-1 rounded-full bg-white px-[3px] text-[8px] font-extrabold leading-[11px] text-sky-600 shadow-sm dark:bg-card"
+            >
+              ✓✓
+            </span>
+          )}
         </div>
       </div>
       {/* Date — inline reschedule (preserves time-of-day) */}

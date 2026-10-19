@@ -45,3 +45,7 @@ export const reportDeepLink = (reportId: string, commentId?: string | null) =>
 /** Client portal: the project page, focused on one comment of the discussion. */
 export const portalProjectCommentDeepLink = (projectId: string, commentId?: string | null) =>
   withParams(`/portal/projects/${projectId}`, { comment: commentId });
+
+/** Client portal: the project page with one task expanded (approval card / its comments). */
+export const portalTaskDeepLink = (projectId: string, taskId: string) =>
+  withParams(`/portal/projects/${projectId}`, { task: taskId });

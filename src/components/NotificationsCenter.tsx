@@ -35,6 +35,7 @@ import {
 } from '../lib/notificationTypes';
 import { dndZoneStamp, isInDndWindow as isInDndWindowShared } from '../lib/notificationPrefs';
 import { useNotificationPrefs } from '../hooks/useNotificationPrefs';
+import { markAssigneeSeenIfNeeded } from '../lib/taskReceiptWrites';
 
 // ── Presentation ───────────────────────────────────────────────────────────────
 // Priority, category and group label now come from the SHARED registry
@@ -78,6 +79,8 @@ const TYPE_ICON: Record<string, React.ReactNode> = {
   task_collaborator_added:  <Users className="w-4 h-4 text-primary" />,
   task_mention:             <MessageSquare className="w-4 h-4 text-primary" />,
   task_comment:             <MessageSquare className="w-4 h-4 text-blue-500" />,
+  task_approval_requested:  <Clock className="w-4 h-4 text-amber-500" />,
+  task_approval_decided:    <CheckCircle className="w-4 h-4 text-emerald-500" />,
   lead_assigned:            <User className="w-4 h-4 text-blue-500" />,
   lead_created:             <UserPlus className="w-4 h-4 text-blue-500" />,
   goal_assigned:            <Target className="w-4 h-4 text-blue-500" />,
@@ -783,6 +786,7 @@ const NotificationItem: React.FC<{
   onClose: () => void;
 }> = ({ notification, onMarkAsRead, onDelete, onClose }) => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const config   = getConfig(notification.type);
 
   const timeAgo = (date: Date) => {
@@ -801,6 +805,12 @@ const NotificationItem: React.FC<{
 
   const handleAction = () => {
     if (!notification.isRead) onMarkAsRead(notification.id);
+    // Opening "Detyrë e re e caktuar" IS seeing the assignment ("Parë" for the
+    // assigner) — written once, only while this person is still the assignee.
+    if (notification.type === 'task_assigned' && user?.uid && notification.actionUrl) {
+      const taskId = new URLSearchParams(notification.actionUrl.split('?')[1] || '').get('taskId');
+      if (taskId) void markAssigneeSeenIfNeeded(taskId, user.uid);
+    }
     onClose();
     // For a CHAT notification a channel-id linkTo is the most specific target:
     // `client_message` arrives with BOTH linkTo (the channel) and a generic

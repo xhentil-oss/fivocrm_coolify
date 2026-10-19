@@ -10,6 +10,7 @@ import { taskDeepLink } from '../../../lib/deepLinks';
 import { Input } from '../../ui/input';
 import type { Task } from '../../../types';
 import { PickerPanel, hashColor, rowCls, rowLabelCls } from './panelShared';
+import { assigneeSeenLabel, assigneeSeenMs, receiptTimeLabel, reassignPatch } from '../../../lib/taskReceipts';
 
 interface TaskPeopleRowsProps {
   task: Task;
@@ -70,7 +71,8 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
     setAssignQuery('');
     const prevAssignee = task.assignedToUserId;
     if (!newUserId || newUserId === prevAssignee) return;
-    await onUpdate(task.id, { assignedToUserId: newUserId });
+    // A new assignee has not seen it yet — the old "Parë" mark is cleared.
+    await onUpdate(task.id, reassignPatch(task, newUserId));
     const link = taskDeepLink(task.id, task.projectId);
     if (newUserId !== user?.uid) {
       await notificationMutation.create({
@@ -291,6 +293,19 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
             <span className="truncate text-[13.5px] font-bold text-foreground">{assigneeName}</span>
             {!readOnly && <span className="text-[10px] text-muted-foreground">{assignOpen ? '▲' : '▼'}</span>}
           </button>
+          {/* "Parë 14:32" / "Pa parë ende" — for the assigner and everyone else
+              (the assignee themselves just opened it). */}
+          {task.assignedToUserId && task.assignedToUserId !== user?.uid && (() => {
+            const ms = assigneeSeenMs(task);
+            return (
+              <span
+                title={ms !== null ? `${assigneeName} e hapi detyrën ${receiptTimeLabel(ms)}` : `${assigneeName} nuk e ka hapur ende detyrën`}
+                className={`mt-1 flex items-center gap-1 pl-1 text-[11px] font-semibold ${ms !== null ? 'text-sky-600 dark:text-sky-400' : 'text-muted-foreground'}`}
+              >
+                {ms !== null ? '✓✓' : '✓'} {assigneeSeenLabel(task)}
+              </span>
+            );
+          })()}
           {assignOpen && (
             <PickerPanel
               title="Cakto anëtarin"

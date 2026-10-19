@@ -74,7 +74,8 @@ export function useTaskBulkActions({
       // the previous one hear about it (the panel's assignTo already did; the
       // bar reassigned in silence). Notification failures never fail the update.
       if (patch.assignedToUserId && t && user?.uid && patch.assignedToUserId !== t.assignedToUserId) {
-        return taskMutation.update(id, patch).then(res => {
+        // …and has not seen it yet: the previous "Parë" mark is cleared.
+        return taskMutation.update(id, { ...patch, assigneeSeenAt: null, assigneeSeenFor: null }).then(res => {
           taskAssignedNotifications(t, patch.assignedToUserId as string, user.uid, {
             actorName: user.displayName || undefined,
             newAssigneeName: getUserName(patch.assignedToUserId as string),

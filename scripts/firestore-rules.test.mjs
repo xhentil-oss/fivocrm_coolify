@@ -35,7 +35,7 @@ import {
   assertFails,
   assertSucceeds,
 } from '@firebase/rules-unit-testing';
-import { doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, collection, query, where, orderBy, limit, writeBatch, deleteField } from 'firebase/firestore';
+import { doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, collection, query, where, orderBy, limit, writeBatch, deleteField, serverTimestamp } from 'firebase/firestore';
 
 const PROJECT_ID = 'fivocrm-rules-test';
 const VICTIM_BIZ = 'bizVictim';
@@ -3659,4 +3659,162 @@ test('82h. a Viewer writes no taskCollaborators rows', async () => {
   await assertFails(updateDoc(doc(vera, 'taskCollaborators', 'tk82h2'), { role: 'x' }));
   await assertFails(deleteDoc(doc(vera, 'taskCollaborators', 'tk82h2')));
   await assertSucceeds(deleteDoc(doc(alice, 'taskCollaborators', 'tk82h2')));
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 83. Client approval of a task + "Parë" receipts (src/lib/taskApproval.ts,
+// src/lib/taskReceipts.ts).
+// ══════════════════════════════════════════════════════════════════════════════
+const seedApproval = async () => {
+  await seedTasksAudit();
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'projects', 'projShared83'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, name: 'Shared', status: 'Active', customerId: 'cust1', memberUserIds: ['dave'],
+    });
+    const pending = {
+      state: 'pending', round: 1, requestedAt: new Date('2026-10-19T10:00:00Z'), requestedByUserId: 'mia',
+      note: 'Shiko logon', decidedAt: null, decidedByUid: null, decisionNote: null,
+    };
+    const t = {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'Logo', status: 'Review', projectId: 'projCust',
+      customerId: 'cust1', assignedToUserId: 'mia', createdByUserId: 'alice',
+    };
+    await setDoc(doc(db, 'tasks', 't83pending'), { ...t, clientApproval: pending });
+    await setDoc(doc(db, 'tasks', 't83pending2'), { ...t, clientApproval: pending });
+    await setDoc(doc(db, 'tasks', 't83member'), { ...t, projectId: 'projShared83', clientApproval: pending });
+    await setDoc(doc(db, 'tasks', 't83open'), { ...t, status: 'In Progress' });
+    await setDoc(doc(db, 'tasks', 't83approved'), { ...t, clientApproval: { ...pending, state: 'approved', decidedByUid: 'carol' } });
+    await setDoc(doc(db, 'tasks', 't83seen'), { ...t, status: 'Todo', assignedToUserId: 'vera' });
+    await setDoc(doc(db, 'tasks', 't83reassign'), { ...t, status: 'Todo', assigneeSeenAt: new Date(), assigneeSeenFor: 'mia' });
+    await setDoc(doc(db, 'taskComments', 'tc83'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, taskId: 'taskAuditClient', customerId: 'cust1', senderType: 'team',
+      content: 'Gati per miratim', createdByUserId: 'alice',
+    });
+    await setDoc(doc(db, 'taskComments', 'tc83internal'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, taskId: 'taskAuditClient', content: 'internal', createdByUserId: 'alice',
+    });
+  });
+};
+
+test('83a. the assignee (even a Viewer) stamps their own seen mark: only the two keys, at request.time', async () => {
+  await seedApproval();
+  const mia = staffOf('mia', MY_BIZ, MY_TEAM, ['member']);
+  const vera = staffOf('vera', MY_BIZ, MY_TEAM, ['viewer']);
+  const gus = staffOf('gus', MY_BIZ, MY_TEAM, ['member']);
+  const T = (db, id) => doc(db, 'tasks', id);
+  await assertSucceeds(updateDoc(T(mia, 't83open'), { assigneeSeenAt: serverTimestamp(), assigneeSeenFor: 'mia' }));
+  await assertSucceeds(updateDoc(T(vera, 't83seen'), { assigneeSeenAt: serverTimestamp(), assigneeSeenFor: 'vera' }));
+  // Not the assignee / forged for someone else / a client-chosen time / riding with another field.
+  await assertFails(updateDoc(T(gus, 't83pending'), { assigneeSeenAt: serverTimestamp(), assigneeSeenFor: 'mia' }));
+  await assertFails(updateDoc(T(gus, 't83pending'), { assigneeSeenAt: serverTimestamp(), assigneeSeenFor: 'gus' }));
+  await assertFails(updateDoc(T(mia, 't83pending'), { assigneeSeenAt: new Date('2020-01-01'), assigneeSeenFor: 'mia' }));
+  await assertFails(updateDoc(T(vera, 't83seen'), { assigneeSeenAt: serverTimestamp(), assigneeSeenFor: 'vera', status: 'Done' }));
+  // The portal client cannot stamp it either.
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+  await assertFails(updateDoc(T(carol, 't83pending'), { assigneeSeenAt: serverTimestamp(), assigneeSeenFor: 'carol' }));
+});
+
+test('83b. other staff writes may only CLEAR the seen mark (reassignment), never set it', async () => {
+  await seedApproval();
+  const gus = staffOf('gus', MY_BIZ, MY_TEAM, ['member']);
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(updateDoc(doc(alice, 'tasks', 't83pending'), { assigneeSeenAt: new Date(), assigneeSeenFor: 'mia' }));
+  await assertSucceeds(updateDoc(doc(gus, 'tasks', 't83reassign'), { assignedToUserId: 'alice', assigneeSeenAt: null, assigneeSeenFor: null }));
+});
+
+test('83c. staff open / withdraw an approval round; they can never write a client decision', async () => {
+  await seedApproval();
+  const mia = staffOf('mia', MY_BIZ, MY_TEAM, ['member']);       // assignee
+  const gus = staffOf('gus', MY_BIZ, MY_TEAM, ['member']);       // neither assignee nor creator
+  const vera = staffOf('vera', MY_BIZ, MY_TEAM, ['viewer']);
+  const mgr = staffOf('mgr82', MY_BIZ, MY_TEAM, ['manager']);
+  const req = (uid) => ({ status: 'Review', clientApproval: { state: 'pending', round: 1, requestedAt: new Date(), requestedByUserId: uid, note: null } });
+  await assertFails(updateDoc(doc(gus, 'tasks', 't83open'), req('gus')));
+  await assertFails(updateDoc(doc(vera, 'tasks', 't83open'), req('vera')));
+  await assertFails(updateDoc(doc(mia, 'tasks', 't83open'), req('alice')));            // requested as someone else
+  await assertFails(updateDoc(doc(mia, 'tasks', 't83open'), { clientApproval: { state: 'approved', round: 1, decidedByUid: 'carol' } }));
+  await assertSucceeds(updateDoc(doc(mia, 'tasks', 't83open'), req('mia')));
+  await assertSucceeds(updateDoc(doc(mgr, 'tasks', 't83approved'), { clientApproval: { state: 'cancelled', round: 1, cancelledByUserId: 'mgr82' } }));
+  // A task with no client can't be sent for approval.
+  await assertFails(updateDoc(doc(mia, 'tasks', 'taskAudit'), req('mia')));
+});
+
+test('83d. the portal client approves a pending round: decision keys only, as themselves, status untouched', async () => {
+  await seedApproval();
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+  const T = doc(carol, 'tasks', 't83pending');
+  const ok = { 'clientApproval.state': 'approved', 'clientApproval.decidedAt': serverTimestamp(), 'clientApproval.decidedByUid': 'carol', 'clientApproval.decisionNote': null };
+  await assertFails(updateDoc(T, { ...ok, status: 'Done' }));                                   // no completion by the client
+  await assertFails(updateDoc(T, { ...ok, 'clientApproval.decidedByUid': 'mia' }));             // as someone else
+  await assertFails(updateDoc(T, { ...ok, 'clientApproval.decidedAt': new Date('2020-01-01') }));
+  await assertFails(updateDoc(T, { ...ok, 'clientApproval.round': 9 }));                        // request half is pinned
+  await assertFails(updateDoc(T, { ...ok, title: 'renamed' }));
+  await assertSucceeds(updateDoc(T, ok));
+  // Already decided: no second decision.
+  await assertFails(updateDoc(doc(carol, 'tasks', 't83approved'), { ...ok, 'clientApproval.state': 'changes_requested', 'clientApproval.decisionNote': 'x' }));
+});
+
+test('83e. asking for changes needs a note and may only send the task back to In Progress', async () => {
+  await seedApproval();
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+  const T = doc(carol, 'tasks', 't83pending2');
+  const ch = { 'clientApproval.state': 'changes_requested', 'clientApproval.decidedAt': serverTimestamp(), 'clientApproval.decidedByUid': 'carol' };
+  await assertFails(updateDoc(T, { ...ch, 'clientApproval.decisionNote': null, status: 'In Progress' }));
+  await assertFails(updateDoc(T, { ...ch, 'clientApproval.decisionNote': 'Ngjyra', status: 'Done' }));
+  await assertFails(updateDoc(T, { ...ch, 'clientApproval.decisionNote': 'Ngjyra', 'clientApproval.state': 'cancelled' }));
+  await assertSucceeds(updateDoc(T, { ...ch, 'clientApproval.decisionNote': 'Ngjyra', status: 'In Progress' }));
+});
+
+test('83f. another client, an outsider and a stranger portal user cannot decide; a project member can', async () => {
+  await seedApproval();
+  const ok = { 'clientApproval.state': 'approved', 'clientApproval.decidedAt': serverTimestamp() };
+  const bclient = portalOf('bclient83', 'custB', 'b@client.com');
+  await assertFails(updateDoc(doc(bclient, 'tasks', 't83member'), { ...ok, 'clientApproval.decidedByUid': 'bclient83' }));
+  await assertFails(updateDoc(doc(outsider(), 'tasks', 't83member'), { ...ok, 'clientApproval.decidedByUid': 'mallory' }));
+  const erin = portalOf('erin', 'custOther', 'erin@partner.com');
+  await assertFails(updateDoc(doc(erin, 'tasks', 't83member'), { ...ok, 'clientApproval.decidedByUid': 'erin' }));
+  const dave = portalOf('dave', 'custOther', 'dave@partner.com');
+  await assertSucceeds(updateDoc(doc(dave, 'tasks', 't83member'), { ...ok, 'clientApproval.decidedByUid': 'dave' }));
+});
+
+test('83g. any staff reader (Viewer included) adds ONLY their own readBy key, at request.time, never on their own comment', async () => {
+  await seedApproval();
+  const vera = staffOf('vera', MY_BIZ, MY_TEAM, ['viewer']);
+  const gus = staffOf('gus', MY_BIZ, MY_TEAM, ['member']);
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  const C = (db, id = 'tc83') => doc(db, 'taskComments', id);
+  await assertSucceeds(updateDoc(C(vera), { 'readBy.vera': serverTimestamp() }));
+  await assertSucceeds(updateDoc(C(gus, 'tc83internal'), { 'readBy.gus': serverTimestamp() }));
+  await assertFails(updateDoc(C(gus), { 'readBy.vera': serverTimestamp() }));             // someone else's key
+  await assertFails(updateDoc(C(gus), { 'readBy.gus': new Date('2020-01-01') }));         // forged time
+  await assertFails(updateDoc(C(gus), { 'readBy.gus': serverTimestamp(), content: 'x' }));
+  await assertFails(updateDoc(C(gus), { readBy: { gus: serverTimestamp() } }));           // wipes vera's key
+  await assertFails(updateDoc(C(alice), { 'readBy.alice': serverTimestamp() }));          // own comment
+  await assertFails(updateDoc(C(alice), { 'readBy.vera': serverTimestamp() }));           // author forging a reader
+  await assertSucceeds(updateDoc(C(alice), { content: 'edited' }));
+  await assertFails(updateDoc(C(outsider()), { 'readBy.mallory': serverTimestamp() }));
+});
+
+test('83h. the portal client marks client-visible comments read, never internal ones', async () => {
+  await seedApproval();
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+  await assertSucceeds(updateDoc(doc(carol, 'taskComments', 'tc83'), { 'readBy.carol': serverTimestamp() }));
+  await assertFails(updateDoc(doc(carol, 'taskComments', 'tc83internal'), { 'readBy.carol': serverTimestamp() }));
+  const bclient = portalOf('bclient83', 'custB', 'b@client.com');
+  await assertFails(updateDoc(doc(bclient, 'taskComments', 'tc83'), { 'readBy.bclient83': serverTimestamp() }));
+});
+
+test('83i. a portal project member marks the client-visible comments of the project tasks read', async () => {
+  await seedApproval();
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'taskComments', 'tc83member'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, taskId: 't83member', customerId: 'cust1', senderType: 'team',
+      content: 'Shikojeni', createdByUserId: 'alice',
+    });
+  });
+  const dave = portalOf('dave', 'custOther', 'dave@partner.com');
+  await assertSucceeds(updateDoc(doc(dave, 'taskComments', 'tc83member'), { 'readBy.dave': serverTimestamp() }));
+  const erin = portalOf('erin', 'custOther', 'erin@partner.com');
+  await assertFails(updateDoc(doc(erin, 'taskComments', 'tc83member'), { 'readBy.erin': serverTimestamp() }));
 });

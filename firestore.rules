@@ -545,8 +545,79 @@ service cloud.firestore {
                         && businessOfTeam(request.resource.data.get('teamId', '')) == resource.data.businessId))))
         && taskAssigneeAllowed(resource.data.businessId, resource.data.get('teamId', ''),
                                resource.data.get('assignedToUserId', null))
-        && taskCustomerAllowed(resource.data.get('customerId', null));
+        && taskCustomerAllowed(resource.data.get('customerId', null))
+        && taskApprovalStaffAllowed()
+        && taskSeenUntouchedOrCleared();
+      // "Parë" (src/lib/taskReceipts.ts): the ASSIGNEE stamps that they opened the
+      // task — only the two seen keys, only for themselves, at request.time. A
+      // dedicated branch so a Viewer who is the assignee can mark it too (seen is
+      // not an edit) and nobody can forge it for someone else (tests 83a-83b).
+      allow update: if isAuth()
+        && resource.data.get('assignedToUserId', '') == request.auth.uid
+        && isBusinessMember(resource.data.businessId)
+        && tenantActive(resource.data.businessId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['assigneeSeenAt', 'assigneeSeenFor'])
+        && request.resource.data.get('assigneeSeenFor', '') == request.auth.uid
+        && request.resource.data.get('assigneeSeenAt', null) == request.time;
+      // The PORTAL client's decision on a pending approval round (src/lib/taskApproval.ts,
+      // tests 83c-83f): the task's own client (or a portal member of its project) may
+      // write ONLY clientApproval.{state, decidedAt, decidedByUid, decisionNote}
+      // (+ status -> In Progress when asking for changes, + updatedAt). Approval never
+      // completes the task — completion stays staff's completeTask() flow.
+      allow update: if taskClientDecision();
       allow delete: if canManageBusinessDoc() && !isViewerRole();
+    }
+
+    // Staff side of the client approval: the round may only be OPENED (pending,
+    // requested as yourself, on a portal-visible task) or WITHDRAWN (cancelled) —
+    // by an Admin/Manager or the task's assignee/creator. Staff can never write a
+    // client decision (approved / changes_requested) into it.
+    function taskApprovalStaffAllowed() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['clientApproval'])
+        || isSuperAdmin()
+        || (request.resource.data.get('clientApproval', null) is map
+            && request.resource.data.clientApproval.get('state', '') in ['pending', 'cancelled']
+            && (isBusinessAdmin(resource.data.businessId)
+                || resource.data.get('assignedToUserId', '') == request.auth.uid
+                || resource.data.get('createdByUserId', '') == request.auth.uid)
+            && (request.resource.data.clientApproval.get('state', '') != 'pending'
+                || (request.resource.data.clientApproval.get('requestedByUserId', '') == request.auth.uid
+                    && request.resource.data.get('customerId', '') != '')));
+    }
+    // The seen mark is the assignee's own (branch above). Any other write may only
+    // leave it alone or CLEAR it (a reassignment resets it).
+    function taskSeenUntouchedOrCleared() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['assigneeSeenAt', 'assigneeSeenFor'])
+        || (request.resource.data.get('assigneeSeenAt', null) == null
+            && request.resource.data.get('assigneeSeenFor', null) == null);
+    }
+    function taskClientDecision() {
+      return isAuth()
+        && resource.data.get('customerId', '') != ''
+        && (isPortalClientFor(resource.data.get('customerId', ''))
+            || isPortalProjectMember(resource.data.get('projectId', '')))
+        && tenantActive(resource.data.get('businessId', ''))
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clientApproval', 'status', 'updatedAt'])
+        && resource.data.get('clientApproval', null) is map
+        && resource.data.clientApproval.get('state', '') == 'pending'
+        && request.resource.data.clientApproval is map
+        && request.resource.data.clientApproval.diff(resource.data.clientApproval).affectedKeys()
+             .hasOnly(['state', 'decidedAt', 'decidedByUid', 'decisionNote'])
+        && request.resource.data.clientApproval.get('decidedByUid', '') == request.auth.uid
+        && request.resource.data.clientApproval.get('decidedAt', null) == request.time
+        && (request.resource.data.clientApproval.get('decisionNote', null) == null
+            || (request.resource.data.clientApproval.decisionNote is string
+                && request.resource.data.clientApproval.decisionNote.size() <= 2000))
+        && (request.resource.data.get('updatedAt', null) == resource.data.get('updatedAt', null)
+            || request.resource.data.get('updatedAt', null) == request.time)
+        && (
+          (request.resource.data.clientApproval.state == 'approved'
+            && request.resource.data.get('status', '') == resource.data.get('status', ''))
+          || (request.resource.data.clientApproval.state == 'changes_requested'
+            && request.resource.data.clientApproval.get('decisionNote', null) is string
+            && request.resource.data.clientApproval.decisionNote.size() > 0
+            && request.resource.data.get('status', '') in [resource.data.get('status', ''), 'In Progress'])
+        );
     }
 
     // "Cakto detyra te të tjerët" (CLAUDE.md → Roles: canAssignTasks). Handing a
@@ -1991,7 +2062,9 @@ service cloud.firestore {
         (resource.data.createdByUserId == request.auth.uid && keepsBusinessId()
          && request.resource.data.get('createdByUserId', '') == resource.data.get('createdByUserId', '')
          && request.resource.data.get('taskId', null) == resource.data.get('taskId', null)
-         && request.resource.data.get('customerId', null) == resource.data.get('customerId', null))
+         && request.resource.data.get('customerId', null) == resource.data.get('customerId', null)
+         // …and never the read receipts (a forged "Parë nga …" on their own comment).
+         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['readBy']))
         || (
           request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['reactions', 'updatedAt'])
@@ -2018,6 +2091,23 @@ service cloud.firestore {
               || (exists(/databases/$(database)/documents/tasks/$(resource.data.taskId))
                   && get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.get('businessId', '') == resource.data.businessId
                   && get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.get('customerId', '') == request.resource.data.customerId))
+        )
+        // Read receipt ("Parë", src/lib/taskReceipts.ts — tests 83g-83i): anyone
+        // who can READ the comment (staff incl. Viewer; the portal client / project
+        // member on a client-visible one) adds THEIR OWN key to `readBy`, valued
+        // request.time — nothing else changes, and never on their own comment.
+        || (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
+          && request.resource.data.readBy is map
+          && request.resource.data.readBy.diff(resource.data.get('readBy', {})).affectedKeys().hasOnly([request.auth.uid])
+          && request.resource.data.readBy[request.auth.uid] == request.time
+          && resource.data.get('createdByUserId', '') != request.auth.uid
+          && (
+            isBusinessMember(resource.data.businessId)
+            || isPortalClientFor(resource.data.get('customerId', ''))
+            || (resource.data.get('customerId', '') != ''
+                && isPortalProjectMemberOfTask(resource.data.get('taskId', '')))
+          )
         )
       );
       // Deleting: the author, an Admin/Manager of the tenant, or — for the

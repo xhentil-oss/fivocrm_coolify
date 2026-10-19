@@ -2510,7 +2510,12 @@ async function runRecurringProjectReset(opts?: { businessId?: string | null }) {
       if (action === 'reopen') {
         reopened++;
         // `completedAt: null` — re-opened, no longer "done" (taskCompletedMs).
-        ops.push(taskDoc.ref.update({ ...common, status: 'Todo', completedAt: null, carriedOverFromPeriod: null, carriedOverCount: 0 }));
+        // Last cycle's client approval belongs to last cycle's work: archive the
+        // round and start the new cycle without an "approved" badge.
+        const approvalReset = t.clientApproval
+          ? { clientApproval: null, clientApprovalHistory: admin.firestore.FieldValue.arrayUnion(t.clientApproval) }
+          : {};
+        ops.push(taskDoc.ref.update({ ...common, ...approvalReset, status: 'Todo', completedAt: null, carriedOverFromPeriod: null, carriedOverCount: 0 }));
       } else {
         // Unfinished: it stays open (status kept) and moves into the new period,
         // marked so the board and the responsible can see it came from last cycle.
