@@ -64,9 +64,12 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChange }) =
   const actions = [
     { icon: FolderKanban, label: 'Krijo Projekt të Ri', path: '/app/projects' },
     { icon: Users, label: 'Krijo Lead të Ri', path: '/app/crm' },
-    { icon: CheckSquare, label: 'Krijo Detyrë të Re', path: '/app/tasks' },
+    // `?new=1` makes TasksView open its create form (and drop the param) — the
+    // action used to land on the list and leave the user to find the button.
+    { icon: CheckSquare, label: 'Krijo Detyrë të Re', path: '/app/tasks?new=1' },
     { icon: Package, label: 'Krijo Produkt të Ri', path: '/app/products' },
-  ].filter(a => isEnabled(a.path));
+    // The module registry resolves routes, not query strings.
+  ].filter(a => isEnabled(a.path.split('?')[0]));
 
   const handleSelect = (path: string) => {
     navigate(path);

@@ -178,18 +178,24 @@ const QuickTaskForm: React.FC<{
   const [prio, setPrio] = useState('medium');
   const [projectId, setProjectId] = useState(defaultProjectId);
   const [labels, setLabels] = useState<string[]>([]);
-  const [dayIdx, setDayIdx] = useState(0);
   // Default slot: 09–11, or — when it is already past 09:00 today — the next
-  // whole hour for two hours (capped at 22–23). A task created at 15:00 used to
-  // be born overdue, and a "1 orë para" reminder on it fired within 5 minutes.
-  const defaultSlot = (() => {
-    const h = new Date().getHours();
-    if (h < 9) return [9, 11] as const;
-    const from = Math.min(h + 1, 22);
-    return [from, Math.min(from + 2, 23)] as const;
-  })();
-  const [timeFrom, setTimeFrom] = useState<number>(defaultSlot[0]);
-  const [timeTo, setTimeTo] = useState<number>(defaultSlot[1]);
+  // whole hour for two hours. A task created at 15:00 used to be born overdue,
+  // and a "1 orë para" reminder on it fired within 5 minutes. From 22:00 on no
+  // two-hour window is left today (the old 22–23 cap was already running or
+  // past), so the default moves to the NEXT workday's first slot. On a weekend
+  // the first cell is already Monday — no reason to start it at "now + 1h".
+  const [defaultSchedule] = useState(() => {
+    const now = new Date();
+    const h = now.getHours();
+    const firstIsToday = sameCalendarDay(nextWorkdays(1)[0], now);
+    if (!firstIsToday || h < 9) return { day: 0, slot: [9, 11] as const };
+    if (h >= 22) return { day: 1, slot: [9, 11] as const };
+    const from = h + 1;
+    return { day: 0, slot: [from, Math.min(from + 2, 23)] as const };
+  });
+  const [dayIdx, setDayIdx] = useState(defaultSchedule.day);
+  const [timeFrom, setTimeFrom] = useState<number>(defaultSchedule.slot[0]);
+  const [timeTo, setTimeTo] = useState<number>(defaultSchedule.slot[1]);
   const [rec, setRec] = useState<'never' | 'weekly' | 'monthly' | 'custom'>('never');
   const [recInterval, setRecInterval] = useState(2);
   const [recUnit, setRecUnit] = useState<'dite' | 'jave' | 'muaj'>('jave');

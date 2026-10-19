@@ -39,6 +39,7 @@ import EmailComposerDialog, { useContactEmailAvailable, type EmailTarget } from 
 import { useFollowUpActions, targetFromCustomer } from '../hooks/useFollowUpActions';
 import { dueState, daysSinceContact, touchContactPatch } from '../lib/crm/followUp';
 import { Bell, CheckCircle2, ExternalLink } from 'lucide-react';
+import { projectTaskProgress } from '../lib/projectProgress';
 import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service, FollowUpType, Subscription, Domain, TimeEntry, Expense, TeamMember } from '../types';
 
 const Customer360View: React.FC = () => {
@@ -292,13 +293,12 @@ const Customer360View: React.FC = () => {
     return { row: clientRowFor(result, customerId || ''), basis: result.basis, thresholds: result.settings.marginThresholds };
   }, [customer, customerId, allProjects, timeEntries, compMembers, allExpenses, allInvoices, tenantSettings?.financeSettings, tenantSettings?.rateCard, pnlPeriod]);
 
-  // Project task progress
+  // Project task progress — the shared definition (top-level tasks only, over
+  // the unfiltered task list) so this card matches ProjectsView / the project page.
   const projectProgress = useMemo(() => {
     return customerProjects.map(p => {
-      const projectTasks = tasks?.filter(t => t.projectId === p.id) || [];
-      const done = projectTasks.filter(t => t.status === 'Done').length;
-      const total = projectTasks.length;
-      return { ...p, done, total, pct: total > 0 ? Math.round((done / total) * 100) : 0 };
+      const { done, total, pct } = projectTaskProgress(tasks, p.id);
+      return { ...p, done, total, pct };
     });
   }, [customerProjects, tasks]);
 

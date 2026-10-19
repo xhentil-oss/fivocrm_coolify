@@ -20,8 +20,10 @@ import {
   monthlyFeeFromCycleFee,
   projectWorkCycle,
   reexpressBillingClaim,
+  resolveCycleAnchorDay,
   seedWorkPeriodKey,
   shiftByWorkCycles,
+  taskPeriodsBehind,
   workCycleBlockReason,
   workCycleTaskAction,
   workPeriodsSince,
@@ -207,6 +209,31 @@ describe('work cycle', () => {
     expect(day(shiftByWorkCycles(at('2026-01-31'), 'monthly', 1)!)).toBe('2026-02-28');
     expect(day(shiftByWorkCycles(at('2026-01-31'), 'monthly', 2)!)).toBe('2026-03-31');
     expect(day(shiftByWorkCycles(at('2026-10-05'), 'weekly', 2)!)).toBe('2026-10-19');
+  });
+
+  it('keeps a month-end task on its anchor day across clamps', () => {
+    // 31 Jan -> 28 Feb -> 31 Mar, not -> 28 Mar forever.
+    const feb = shiftByWorkCycles(at('2026-01-31'), 'monthly', 1, 31)!;
+    expect(day(feb)).toBe('2026-02-28');
+    const anchor = resolveCycleAnchorDay(feb, 31);
+    expect(anchor).toBe(31);
+    expect(day(shiftByWorkCycles(feb, 'monthly', 1, anchor)!)).toBe('2026-03-31');
+    // A date moved by hand re-anchors on its new day.
+    expect(resolveCycleAnchorDay(at('2026-02-20'), 31)).toBe(20);
+    expect(resolveCycleAnchorDay(null, 31)).toBeNull();
+  });
+
+  it('moves a task by ITS OWN lag, and leaves current/future tasks alone', () => {
+    const now = at('2026-10-02');
+    expect(taskPeriodsBehind({ endDate: at('2026-09-25') }, 'monthly', now)).toBe(1);
+    expect(taskPeriodsBehind({ endDate: at('2026-07-10') }, 'monthly', now)).toBe(3);
+    expect(taskPeriodsBehind({ endDate: at('2026-10-20') }, 'monthly', now)).toBe(0);
+    expect(taskPeriodsBehind({ endDate: at('2026-11-05') }, 'monthly', now)).toBe(0);
+    // Deadline wins over start: started last month, due this month -> not moved.
+    expect(taskPeriodsBehind({ startDate: at('2026-09-28'), endDate: at('2026-10-03') }, 'monthly', now)).toBe(0);
+    expect(taskPeriodsBehind({ startDate: at('2026-09-01') }, 'monthly', now)).toBe(1);
+    expect(taskPeriodsBehind({}, 'monthly', now)).toBe(0);
+    expect(taskPeriodsBehind({ endDate: at('2026-09-23') }, 'weekly', at('2026-10-07'))).toBe(2);
   });
 
   it('formats the month input in the business zone', () => {

@@ -1227,8 +1227,10 @@ const ChatView: React.FC = () => {
     let created = 0;
     for (const a of selected) {
       // Try to match assignee name to teamMember.userId
+      // Only someone with the "Cakto detyra te të tjerët" right may hand an
+      // AI-proposed task to a colleague; everyone else gets it for themselves.
       let assigneeUid: string | undefined;
-      if (a.assignee) {
+      if (a.assignee && permissions.canAssignTasks) {
         const needle = a.assignee.toLowerCase();
         const match = teamMembers?.find((m: any) =>
           (m.displayName || '').toLowerCase().includes(needle) ||
@@ -1266,7 +1268,7 @@ const ChatView: React.FC = () => {
     setActionExtractOpen(false);
     setProposedActions([]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [proposedActions, user?.uid, teamMembers, taskMutation, toast]);
+  }, [proposedActions, user?.uid, teamMembers, taskMutation, toast, permissions.canAssignTasks]);
 
   // ── #5 Snooze / Remind me ──
   const reminderMutation = useMutation<any>('chatReminders');
@@ -1508,7 +1510,9 @@ const ChatView: React.FC = () => {
       // due/overdue alert and was invisible on calendar/timeline.
       const due = taskFromMsgDueDate ? new Date(taskFromMsgDueDate) : undefined;
       if (due) due.setHours(17, 0, 0, 0);
-      const assignee = taskFromMsgAssignee || user.uid;
+      // Without the "Cakto detyra te të tjerët" right a task is only ever for
+      // yourself — the same gate QuickTaskForm applies (and the rules enforce).
+      const assignee = permissions.canAssignTasks ? (taskFromMsgAssignee || user.uid) : user.uid;
       const created = await taskMutation.create({
         title: taskFromMsgTitle.trim() || 'Detyrë nga chat',
         description,
@@ -1540,7 +1544,7 @@ const ChatView: React.FC = () => {
       toast({ title: 'Gabim', description: 'Detyra nuk u krijua.', variant: 'destructive' });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskFromMsgSource, taskFromMsgTitle, taskFromMsgAssignee, taskFromMsgDueDate, taskFromMsgPriority, user?.uid, taskMutation, toast]);
+  }, [taskFromMsgSource, taskFromMsgTitle, taskFromMsgAssignee, taskFromMsgDueDate, taskFromMsgPriority, user?.uid, taskMutation, toast, permissions.canAssignTasks]);
 
 
   // Typing indicators — scoped to the OPEN conversation only. The old unscoped
@@ -5242,14 +5246,24 @@ const ChatView: React.FC = () => {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs">Caktuar</Label>
-                <Select value={taskFromMsgAssignee} onValueChange={setTaskFromMsgAssignee}>
+                <Select value={taskFromMsgAssignee} onValueChange={setTaskFromMsgAssignee} disabled={!permissions.canAssignTasks}>
                   <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh..." /></SelectTrigger>
                   <SelectContent>
-                    {teamMembers?.map(m => (
-                      <SelectItem key={m.userId} value={m.userId}>{m.displayName || m.email || 'Pa emër'}</SelectItem>
-                    ))}
+                    {teamMembers
+                      ?.filter(m => permissions.canAssignTasks || m.userId === user?.uid)
+                      .map(m => (
+                        <SelectItem key={m.userId} value={m.userId}>{m.displayName || m.email || 'Pa emër'}</SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
+                {!permissions.canAssignTasks && (
+                  <p
+                    className="mt-1 text-[11px] text-muted-foreground"
+                    title="Një admin mund të të japë lejen «Cakto detyra te të tjerët» te Ekipet → Ndrysho Lejet."
+                  >
+                    vetëm për vete · pa lejen «Cakto detyra te të tjerët»
+                  </p>
+                )}
               </div>
               <div>
                 <Label className="text-xs">Prioriteti</Label>

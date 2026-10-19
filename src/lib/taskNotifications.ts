@@ -9,7 +9,8 @@
  *
  * Rules:
  *   • The actor never notifies themselves.
- *   • Recipients: creator + assignee + collaborators, deduped.
+ *   • Recipients: creator (+ the series' original author) + assignee +
+ *     collaborators, deduped.
  *   • The payload deep-links the task (`taskDeepLink`), so tapping the
  *     notification opens the task panel, not a bare list.
  *
@@ -34,6 +35,10 @@ export interface TaskCompletedNotification {
 export function taskCompletionRecipients(task: Task, actorUid: string): string[] {
   const targets = new Set<string>();
   if (task.createdByUserId) targets.add(task.createdByUserId);
+  // A recurring occurrence's `createdByUserId` is whoever completed the previous
+  // cycle (the create() stamp); the series' real author rides along separately.
+  const seriesCreator = (task as Task & { seriesCreatedByUserId?: string | null }).seriesCreatedByUserId;
+  if (seriesCreator) targets.add(seriesCreator);
   if (task.assignedToUserId) targets.add(task.assignedToUserId);
   for (const id of task.collaboratorIds || []) if (id) targets.add(id);
   targets.delete(actorUid);

@@ -7,17 +7,22 @@ import { taskDateMs, taskDueMs } from './taskSort';
 // (overdue ones included — they are the most urgent), falling back to the
 // project's own `endDate` while it is still open. Projects with nothing dated
 // go last and keep their incoming order (the list's `updatedAt desc`).
+//
+// Subtasks are ignored (a checklist line of its parent — same altitude rule as
+// `projectTaskProgress`), and a CLOSED project gets no deadline at all: its
+// leftover open tasks must not float a finished project to the top.
 
 const CLOSED_PROJECT = new Set(['Completed', 'Cancelled', 'Archived']);
 
 export function projectNextDeadlines(
   projects: Array<Pick<Project, 'id' | 'status' | 'endDate'>>,
-  tasks: Array<Pick<Task, 'projectId' | 'status' | 'endDate' | 'dueDate'>> | undefined | null,
+  tasks: Array<Pick<Task, 'projectId' | 'status' | 'endDate' | 'dueDate'> & { parentTaskId?: string | null }> | undefined | null,
 ): Map<string, number> {
   const out = new Map<string, number>();
+  const closed = new Set(projects.filter(p => CLOSED_PROJECT.has(p.status as string)).map(p => p.id));
   for (const t of tasks || []) {
     const pid = (t as any).projectId as string | undefined;
-    if (!pid || t.status === 'Done') continue;
+    if (!pid || t.status === 'Done' || t.parentTaskId || closed.has(pid)) continue;
     const due = taskDueMs(t);
     if (due === null) continue;
     const cur = out.get(pid);

@@ -183,12 +183,45 @@ export function addFrequency(
     // as the billing anchors: add months in the zone, clamped, anchor day kept.
     return addZonedMonthsClamped(date, step, dayOfMonth ?? undefined);
   } else if (frequency === 'yearly') {
-    // 29 Feb + 1 year is 28 Feb, not 1 Mar.
+    // 29 Feb + 1 year is 28 Feb, not 1 Mar — and the series must come BACK to
+    // 29 Feb in the next leap year, so the anchor day (`recurringDayOfMonth`,
+    // seeded by buildNextRecurringTask) wins over the clamped day.
     const p = zonedParts(date);
+    const day = yearlyAnchorDay(p, dayOfMonth);
     const lastDay = daysInZonedMonth(p.year + step, p.month);
-    return zonedDate(p.year + step, p.month, Math.min(p.day, lastDay), p.hours, p.minutes, p.seconds, p.ms);
+    return zonedDate(p.year + step, p.month, Math.min(day, lastDay), p.hours, p.minutes, p.seconds, p.ms);
   }
   return fromZoned(d, RECURRENCE_TIMEZONE);
+}
+
+/**
+ * The day a yearly step lands on. The month never changes in a yearly series,
+ * so the anchor DAY is all it needs. A stored anchor is honoured only when the
+ * current date IS that anchor clamped to its month (28 Feb <- 29): a stale
+ * `recurringDayOfMonth` left over from a monthly rule ("çdo muaj, ditën 15") on
+ * a 3 March task must not move the series to the 15th.
+ * MIRRORED in api/cron/run.ts (`yearlyAnchorDay`) — keep in sync.
+ */
+function yearlyAnchorDay(p: { year: number; month: number; day: number }, anchor?: number | null): number {
+  if (anchor == null || !(anchor >= 1 && anchor <= 31)) return p.day;
+  return Math.min(anchor, daysInZonedMonth(p.year, p.month)) === p.day ? anchor : p.day;
+}
+
+/**
+ * The anchor day a monthly/yearly child carries. An explicit
+ * `recurringDayOfMonth` wins; a series created without one is anchored on its
+ * parent's start day, so a 31st (or 29 Feb) series survives its first clamp
+ * instead of drifting to the 28th for good. Other frequencies carry nothing.
+ * MIRRORED in api/cron/run.ts (`seriesAnchorDay`) — keep in sync.
+ */
+export function seriesAnchorDay(
+  frequency: string | null | undefined,
+  dayOfMonth: number | null | undefined,
+  baseStart: Date,
+): number | null {
+  if (dayOfMonth != null) return dayOfMonth;
+  if (frequency !== 'monthly' && frequency !== 'yearly') return null;
+  return isNaN(baseStart.getTime()) ? null : recurrenceDayOfMonth(baseStart);
 }
 
 /**
@@ -254,11 +287,11 @@ export function buildNextRecurringTask(
   const freq = task.recurringFrequency!;
   const interval = task.recurringInterval ?? 1;
   const dow = task.recurringDayOfWeek ?? null;
-  const dom = task.recurringDayOfMonth ?? null;
   const dows = task.recurringDaysOfWeek ?? null;
 
   const baseStart = parseDate(task.startDate);
   const baseEnd = parseDate(task.endDate);
+  const dom = seriesAnchorDay(freq, task.recurringDayOfMonth ?? null, baseStart);
   const baseNext = task.nextRecurringDate ? parseDate(task.nextRecurringDate) : new Date();
 
   // ONLY startDate is advanced by the recurrence rule; endDate and
@@ -328,11 +361,31 @@ export function buildNextRecurringTask(
       ? {
           reminderOffsetMinutes: task.reminderOffsetMinutes,
           reminderAt: new Date(newEnd.getTime() - Math.max(0, task.reminderOffsetMinutes) * 60_000),
+          // The person who asked for the reminder keeps receiving it.
+          reminderSetByUserId: task.reminderSetByUserId ?? null,
         }
       : {}),
     collaboratorIds: task.collaboratorIds ?? undefined,
     createdByUserId: task.createdByUserId,
+    // `useMutation.create` stamps `createdByUserId` with the CALLER (whoever
+    // completed the previous cycle) — the rules may require it, so it is not
+    // overridden. The series' real author travels in its own field instead, and
+    // the completion notifications include them (taskCompletionRecipients).
+    // The cron writes the same field.
+    ...seriesCreatorPatch(task),
   };
+}
+
+/** The original author of a series: carried, else the tip's own creator. */
+export function seriesCreatorOf(task: Pick<Task, 'createdByUserId'> & { seriesCreatedByUserId?: string | null }): string | null {
+  return task.seriesCreatedByUserId || task.createdByUserId || null;
+}
+
+// Not on the shared `Task` interface yet — spread through an untyped object so
+// the builder's return type stays `Omit<Task, ...>`.
+function seriesCreatorPatch(task: Task): Record<string, unknown> {
+  const creator = seriesCreatorOf(task as Task & { seriesCreatedByUserId?: string | null });
+  return creator ? { seriesCreatedByUserId: creator } : {};
 }
 
 /**
@@ -416,7 +469,7 @@ export async function completeTask(task: Task, deps: CompleteTaskDeps): Promise<
     // for recurring billing.
     const projectBlock = projectRecurrenceBlockReason(task, deps.projects);
     if (projectBlock) {
-      await deps.updateTask(task.id, { status: 'Done' });
+      await deps.updateTask(task.id, { status: 'Done', completedAt: new Date() });
       return { kind: 'recurring-stopped', reason: projectBlock };
     }
     // Reserve the cycle BEFORE creating anything. Losing the race means another
@@ -424,7 +477,7 @@ export async function completeTask(task: Task, deps: CompleteTaskDeps): Promise<
     if (deps.claimNextCycle) {
       const claimed = await deps.claimNextCycle(task.id);
       if (!claimed) {
-        await deps.updateTask(task.id, { status: 'Done' });
+        await deps.updateTask(task.id, { status: 'Done', completedAt: new Date() });
         return { kind: 'completed' };
       }
     }
@@ -433,7 +486,7 @@ export async function completeTask(task: Task, deps: CompleteTaskDeps): Promise<
       if (!ended) {
         await deps.createTask(buildNextRecurringTask(task, { allTasks: deps.allTasks }) as Omit<Task, 'id' | 'createdAt' | 'updatedAt'>);
       }
-      await deps.updateTask(task.id, { status: 'Done', nextCycleCreated: true });
+      await deps.updateTask(task.id, { status: 'Done', nextCycleCreated: true, completedAt: new Date() });
       return ended ? { kind: 'recurring-ended' } : { kind: 'recurring-created' };
     } catch (error) {
       // The child never landed — hand the claim back so the cron backstop can
@@ -441,13 +494,37 @@ export async function completeTask(task: Task, deps: CompleteTaskDeps): Promise<
       if (deps.releaseNextCycle) {
         try { await deps.releaseNextCycle(task.id); } catch { /* best effort */ }
       }
-      await deps.updateTask(task.id, { status: 'Done' });
+      await deps.updateTask(task.id, { status: 'Done', completedAt: new Date() });
       return { kind: 'error', error };
     }
   }
 
-  await deps.updateTask(task.id, { status: 'Done' });
+  // `completedAt` is THE "when was it done" (taskCompletedMs): `updatedAt`
+  // moves on every edit and cron touch, so "completed today" read week-old
+  // tasks. Every Done write in this function stamps it; reopenTaskPatch clears it.
+  await deps.updateTask(task.id, { status: 'Done', completedAt: new Date() });
   return { kind: 'completed' };
+}
+
+/**
+ * The patch that RE-OPENS a task (Done -> any open status). One helper for every
+ * surface (detail panel, list, board, daily report, subtask checkbox):
+ *   · `completedAt: null` — it is no longer done (explicit null: removeUndefined
+ *     would strip `undefined` and leave the old stamp);
+ *   · a recurring tip gets `nextCycleCreated: false` back ONLY when the series
+ *     has no live occurrence left (child deleted by mistake -> revive). Re-arming
+ *     while the child is alive would double the series on re-complete — so
+ *     without a task list to prove that, it is NOT re-armed (the safe side).
+ * A task that is not Done gets just `{ status }`.
+ */
+export function reopenTaskPatch(
+  task: Task,
+  status: Task['status'],
+  allTasks: Task[] | undefined | null,
+): Partial<Task> {
+  if (task.status !== 'Done' || status === 'Done') return { status };
+  const rearm = !!task.isRecurring && !!allTasks && !hasLiveSeriesSibling(task, allTasks);
+  return { status, completedAt: null, ...(rearm ? { nextCycleCreated: false } : {}) };
 }
 
 /** True when the next cycle would fall after the recurrence's "repeat until" date,
@@ -542,13 +619,21 @@ export function recurringOccurrencesInMonth(
     if (isNaN(anchorDate.getTime())) continue;
     const anchorKey = startOfRecurrenceDay(anchorDate);
     push(anchorKey, task);
+    // The ENGINE advances startDate by the rule and keeps the start->end span
+    // (buildNextRecurringTask). Walking the deadline through the rule instead
+    // put the ghosts on the wrong day whenever start and end differ (a weekly
+    // "Monday" task due Tuesday painted every Monday). So: walk the START,
+    // paint start + span — the day the next occurrence's deadline will be on.
+    const rawStart = task.startDate ? new Date(task.startDate as any) : null;
+    const startDate = rawStart && !isNaN(rawStart.getTime()) ? rawStart : anchorDate;
+    const spanMs = Math.max(0, anchorDate.getTime() - startDate.getTime());
     // Anchor only: the engine spawns nothing past this occurrence.
     if (t.nextCycleCreated === true) continue;
     if (projectRecurrenceBlockReason(task, opts.projects)) continue;
     if (anchorKey > monthEndKey) continue;
 
     const recEndKey = t.recurringEndDate ? startOfRecurrenceDay(new Date(t.recurringEndDate)) : null;
-    let occ = anchorDate;
+    let occ = startDate;
     // Fast-forward a stale anchor arithmetically (whole pattern-periods only, so
     // the phase is preserved) — otherwise the 500-step walk below exhausts itself
     // before ever reaching the viewed month for an old daily series.
@@ -561,11 +646,14 @@ export function recurringOccurrencesInMonth(
       const behindMs = cellKeys[0] - periodMs - occ.getTime();
       if (behindMs > 0) occ = new Date(occ.getTime() + Math.floor(behindMs / periodMs) * periodMs);
     }
+    // Same anchor-day seeding as the engine (a 31st / 29 Feb series keeps its day).
+    const dom = seriesAnchorDay(t.recurringFrequency, t.recurringDayOfMonth ?? null, startDate);
     let guard = 0;
     while (guard++ < 500) {
-      occ = addFrequency(occ, t.recurringFrequency, t.recurringDayOfWeek ?? null, t.recurringDayOfMonth ?? null, interval, t.recurringDaysOfWeek ?? null);
-      const key = startOfRecurrenceDay(occ);
-      if (recEndKey != null && key > recEndKey) break;
+      occ = addFrequency(occ, t.recurringFrequency, t.recurringDayOfWeek ?? null, dom, interval, t.recurringDaysOfWeek ?? null);
+      // "Repeat until" is checked on the START, exactly as recurrenceHasEnded does.
+      if (recEndKey != null && startOfRecurrenceDay(occ) > recEndKey) break;
+      const key = startOfRecurrenceDay(new Date(occ.getTime() + spanMs));
       if (key > monthEndKey) break;
       if (key === anchorKey) continue;
       push(key, task);

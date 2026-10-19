@@ -18,6 +18,11 @@ describe('taskCompletionRecipients', () => {
       .toEqual(['assignee', 'collab1', 'collab2', 'creator']);
   });
 
+  it('includes the series author of a recurring occurrence (create() stamped the completer)', () => {
+    const t = task({ createdByUserId: 'last-completer', seriesCreatedByUserId: 'author' } as any);
+    expect(taskCompletionRecipients(t, 'assignee').sort()).toEqual(['author', 'last-completer']);
+  });
+
   it('never notifies the actor themselves', () => {
     expect(taskCompletionRecipients(task(), 'assignee')).toEqual(['creator']);
     expect(taskCompletionRecipients(task(), 'creator')).toEqual(['assignee']);

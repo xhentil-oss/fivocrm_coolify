@@ -137,6 +137,18 @@ describe('on-time rate & throughput trend', () => {
     expect(m.tasksCompletedPrev).toBe(1);
     expect(m.onTimeRate).toBeCloseTo(0.5, 5);
   });
+
+  it('reads completedAt, not updatedAt (an edit this week does not re-count an old completion)', () => {
+    const tasks = [
+      // Done two weeks ago, renamed this week → NOT this week's throughput.
+      task({ id: 'old', status: 'Done', assignedToUserId: 'u1', completedAt: d('2026-07-06T10:00:00'), updatedAt: d('2026-07-17T10:00:00') }),
+      // Done this week on time, touched again after its deadline → still on time.
+      task({ id: 'new', status: 'Done', assignedToUserId: 'u1', endDate: d('2026-07-16T17:00:00'), completedAt: d('2026-07-16T09:00:00'), updatedAt: d('2026-07-18T10:00:00') }),
+    ];
+    const m = computeMomentum(baseInput({ tasks }), NOW).members[0];
+    expect(m.tasksCompleted).toBe(1);
+    expect(m.onTimeRate).toBe(1);
+  });
 });
 
 describe('WIP (Little\'s Law)', () => {

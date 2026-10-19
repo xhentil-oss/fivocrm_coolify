@@ -1,4 +1,5 @@
 import type { Task } from '../types';
+import { isOverdueDate } from './taskDue';
 
 // ── One definition of project progress ────────────────────────────────────────
 //
@@ -25,10 +26,8 @@ export function projectTaskProgress(
   const top = (tasks || []).filter(t => (t as any).projectId === projectId && !t.parentTaskId);
   const total = top.length;
   const done = top.filter(t => t.status === 'Done').length;
-  const overdue = top.filter(t => {
-    if (t.status === 'Done' || !t.endDate) return false;
-    const end = new Date(t.endDate as any).getTime();
-    return !isNaN(end) && end < now;
-  }).length;
+  // Overdue = the deadline's Europe/Tirane DAY has passed (a task due today at
+  // 12:00 is not late at 13:00) — the same rule as TasksView's "Vonuar".
+  const overdue = top.filter(t => t.status !== 'Done' && isOverdueDate(t.endDate, now)).length;
   return { total, done, overdue, pct: total ? Math.round((done / total) * 100) : 0 };
 }

@@ -27,6 +27,15 @@ export function taskDueMs(task: Pick<Task, 'endDate' | 'dueDate'>): number | nul
   return taskDateMs(task.endDate) ?? taskDateMs(task.dueDate);
 }
 
+/**
+ * When the task was completed, or null when it is not Done. Reads `completedAt`;
+ * a legacy Done row without it falls back to `updatedAt` (the only signal it has).
+ */
+export function taskCompletedMs(task: Pick<Task, 'status' | 'updatedAt'> & { completedAt?: unknown }): number | null {
+  if (task.status !== 'Done') return null;
+  return taskDateMs(task.completedAt) ?? taskDateMs(task.updatedAt);
+}
+
 /** The day a task sits on for calendars: deadline, else start. */
 export function taskAnchorMs(task: Pick<Task, 'endDate' | 'dueDate' | 'startDate'>): number | null {
   return taskDueMs(task) ?? taskDateMs(task.startDate);

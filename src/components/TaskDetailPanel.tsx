@@ -2,8 +2,12 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { dayKeyOf as timeEntryDayKey } from '../lib/finance/timeEntries';
 import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { TaskLabels, LabelEditor } from './TaskLabels';
-import { useCollection, useMutation } from '../hooks/useFirestore';
-import { completeTask, addFrequency, recurrenceDayOfWeek, recurrenceDayOfMonth, hasLiveSeriesSibling } from '../lib/recurringUtils';
+import { useCollection, useMutation, getGlobalBusinessId } from '../hooks/useFirestore';
+import { collection, getDocs, query as fsQuery, where as fsWhere } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import { completeTask, addFrequency, recurrenceDayOfWeek, recurrenceDayOfMonth, hasLiveSeriesSibling, recurrenceHasEnded } from '../lib/recurringUtils';
+import { wouldCreateDependencyCycle } from '../lib/taskDependencies';
+import { resolvePortalUserId } from '../lib/notifyClient';
 import { deleteTaskCascade } from '../lib/deleteCascade';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { entryDurationMinutes, totalTrackedMinutes } from '../lib/timeTracking';
@@ -65,7 +69,7 @@ import { toast } from '../hooks/use-toast';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { batchLabel } from '../lib/uploadQueue';
 import { useCommentFocus, COMMENT_FLASH_CLASS } from '../hooks/useCommentFocus';
-import { taskDeepLink } from '../lib/deepLinks';
+import { taskDeepLink, portalProjectCommentDeepLink } from '../lib/deepLinks';
 import { taskCompletedNotifications } from '../lib/taskNotifications';
 import type { Task, TaskComment } from '../types';
 
@@ -284,9 +288,14 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     setEditingRecurring(false);
   };
   // Turn an existing (non-recurring) task into a recurring one. Anchors on the
-  // task's due date (or today) and seeds the day-of-week/month + next occurrence.
+  // task's START date (falling back to the due date, then today) and seeds the
+  // day-of-week/month + next occurrence. The engine (buildNextRecurringTask)
+  // snaps ONLY startDate to the rule and re-derives endDate by offset, so a
+  // weekday taken from the due date disagreed with the series whenever the two
+  // sat on different days (Mon start / Wed deadline → "çdo të mërkurë" that the
+  // engine then applied to the Monday start).
   const enableRecurring = async (freq: 'daily' | 'weekly' | 'monthly' | 'yearly') => {
-    const base = task.endDate ? new Date(task.endDate) : new Date();
+    const base = parseTaskDate(task.startDate) ?? parseTaskDate(task.endDate) ?? new Date();
     // Zone-explicit getters: a browser outside Europe/Tirane would otherwise
     // store a weekday/day the recurrence engine disagrees with.
     const dow = recurrenceDayOfWeek(base);
@@ -318,6 +327,31 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       ...(mayRearm ? { nextCycleCreated: false } : {}),
     } as any);
   };
+  // "Përsërit deri" — extending (or removing) the end of a series that had
+  // already ENDED must revive it. The ended tip is Done with
+  // `nextCycleCreated: true` and no child, so the cron skips it forever; it is
+  // re-armed only when it really was the series' end under the OLD date and
+  // is no longer the end under the NEW one (an older Done occurrence, whose
+  // next cycle exists, is never re-armed — that would fork the series).
+  const changeRecurringEndDate = async (nd: Date | null) => {
+    const extendsEndedSeries = task.status === 'Done'
+      && !!task.isRecurring
+      && task.nextCycleCreated === true
+      && !hasLiveSeriesSibling(task, allTasks)
+      && recurrenceHasEnded(task)
+      && !recurrenceHasEnded({ ...task, recurringEndDate: nd } as Task);
+    try {
+      await onUpdate(task.id, {
+        recurringEndDate: nd,
+        ...(extendsEndedSeries ? { nextCycleCreated: false } : {}),
+      } as any);
+      if (extendsEndedSeries) {
+        toast({ title: 'Përsëritja vazhdon', description: 'Cikli i ardhshëm do të krijohet automatikisht.' });
+      }
+    } catch (err: any) {
+      toast({ title: 'Data nuk u ruajt', description: err?.message, variant: 'destructive' });
+    }
+  };
   const fileInputRef = useRef<HTMLInputElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   
@@ -341,9 +375,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     return isNaN(parsed.getTime()) ? new Date() : parsed;
   };
 
-  // Date editing state
+  // Date editing state. The DEADLINE is nullable: an undated task used to get
+  // "now" here, so the Afati row lit up "Sot", a reminder preset resolved
+  // against that phantom deadline (and fired at once) and moving the START date
+  // past it wrote a deadline the user never chose.
   const [startDate, setStartDate] = useState<Date>(parseDate(task.startDate));
-  const [endDate, setEndDate] = useState<Date>(parseDate(task.endDate));
+  const [endDate, setEndDate] = useState<Date | null>(parseTaskDate(task.endDate));
   const [blockerSearch, setBlockerSearch] = useState('');
 
   // Time tracking state
@@ -409,6 +446,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const timeEntryMutation = useMutation<any>('timeEntries');
   const notificationMutation = useMutation<any>('notifications');
   const messageMutation = useMutation<any>('messages');
+  const commentMutation = useMutation<any>('taskComments');
   const logActivity = useActivityLogger();
   const manualInputRef = useRef<string>('');
 
@@ -533,7 +571,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     setTitleText(task.title);
     setDescriptionText(task.description || '');
     setStartDate(parseDate(task.startDate));
-    setEndDate(parseDate(task.endDate));
+    setEndDate(parseTaskDate(task.endDate));
     setShowSubtaskForm(false);
     setEditingSubtask(null);
     setIsEditingTitle(false);
@@ -552,7 +590,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const endDateKey = task.endDate ? parseDate(task.endDate).getTime() : 0;
   useEffect(() => {
     setStartDate(parseDate(task.startDate));
-    setEndDate(parseDate(task.endDate));
+    setEndDate(parseTaskDate(task.endDate));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startDateKey, endDateKey]);
 
@@ -643,9 +681,43 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     setShowSubtaskForm(false);
   };
 
-  const handleUpdateSubtask = async (subtaskId: string, data: any) => {
+  // What leaving Done must also write — ONE rule for the main status pill and
+  // the subtask checkbox/form. Re-opening a Done recurring tip re-arms it ONLY
+  // when the series has no live occurrence left (child deleted by mistake →
+  // revive); re-arming while the child is alive would double the series on
+  // re-complete. `completedAt` is cleared (explicit null) so a re-opened task
+  // stops counting as "completed today".
+  const reopenPatchFor = (t: Task, pool: Task[] | undefined | null): Partial<Task> => {
+    if (t.status !== 'Done') return {};
+    const rearm = !!t.isRecurring && !hasLiveSeriesSibling(t, pool);
+    return { completedAt: null, ...(rearm ? { nextCycleCreated: false } : {}) };
+  };
+
+  const handleUpdateSubtask = async (subtaskId: string, rawData: any) => {
     try {
       const sub = (subtasks || []).find(t => t.id === subtaskId);
+      let data = { ...rawData };
+      // A moved deadline follows the main panel's law: re-arm the due/overdue
+      // alerts and carry a RELATIVE reminder along (reminderPatchForDeadline).
+      if (sub && data.endDate instanceof Date) {
+        const prevEnd = parseTaskDate(sub.endDate);
+        if (!prevEnd || prevEnd.getTime() !== data.endDate.getTime()) {
+          data = { ...data, ...rearmDeadlineAlerts, ...reminderPatchForDeadline(sub, data.endDate) };
+        } else {
+          delete data.endDate;
+        }
+      }
+      const prevAssignee = sub?.assignedToUserId;
+      // Without canAssignTasks a subtask may only be handed to yourself.
+      if (data.assignedToUserId && data.assignedToUserId !== prevAssignee
+          && !permissions.canAssignTasks && data.assignedToUserId !== user?.uid) {
+        delete data.assignedToUserId;
+      }
+      const reassigned = !!sub && !!data.assignedToUserId && data.assignedToUserId !== prevAssignee;
+      // Re-opening (Done → anything else) runs the same rule as the main pill.
+      if (sub && data.status && data.status !== 'Done') {
+        data = { ...data, ...reopenPatchFor(sub, allTasks || subtasks) };
+      }
       // Closing a subtask is a completion like any other: it must run the shared
       // flow (blocker guard, recurrence, task_completed notifications) instead of
       // a raw status write. Everything else on the row is a plain update.
@@ -660,16 +732,47 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           claimNextCycle: claimTaskNextCycle,
           releaseNextCycle: releaseTaskNextCycle,
         });
+        // Blocked: the other fields (incl. a new assignee) were already saved
+        // above, so fall through to the reassignment notice instead of returning.
         if (outcome.kind === 'blocked') {
           toast({ title: '⛔ Nën-detyrë e bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera.`, variant: 'destructive' });
-          return;
-        }
-        if (user?.uid) {
+        } else if (user?.uid) {
           taskCompletedNotifications(sub, user.uid, user.displayName || undefined).forEach(n =>
             notificationMutation.create(n as any).catch(err => console.error('[Notifications] task_completed (nën-detyrë) dërgim dështoi:', err)));
         }
       } else {
         await taskMutation.update(subtaskId, data);
+      }
+      // Reassignment notifies exactly like the main assignee picker (assignTo):
+      // the new assignee and the previous one, never the actor.
+      if (sub && reassigned) {
+        const link = taskDeepLink(sub.id, sub.projectId ?? task.projectId);
+        const newAssignee = data.assignedToUserId as string;
+        const sends: Promise<unknown>[] = [];
+        if (newAssignee !== user?.uid) {
+          sends.push(notificationMutation.create({
+            userId: newAssignee,
+            type: 'task_assigned',
+            title: 'Nën-detyrë e Re e Caktuar',
+            message: `${user?.displayName || 'Dikush'} ju caktoi nën-detyrën: ${data.title || sub.title}`,
+            isRead: false,
+            actionUrl: link,
+            actionLabel: 'Shiko Detyrën',
+          }));
+        }
+        if (prevAssignee && prevAssignee !== user?.uid) {
+          sends.push(notificationMutation.create({
+            userId: prevAssignee,
+            type: 'task_assigned',
+            title: 'Nën-detyrë e Ri-caktuar',
+            message: `Nën-detyra "${data.title || sub.title}" u ri-caktua te ${getUserDisplayName(newAssignee)}`,
+            isRead: false,
+            actionUrl: link,
+            actionLabel: 'Shiko Detyrën',
+          }));
+        }
+        const results = await Promise.allSettled(sends);
+        results.forEach(r => { if (r.status === 'rejected') console.error('[Notifications] task_assigned (nën-detyrë) dërgim dështoi:', r.reason); });
       }
     } catch (err: any) {
       console.error('[Tasks] përditësimi i nën-detyrës dështoi:', err);
@@ -679,7 +782,17 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     }
   };
 
+  // Same delete authority as the main task's footer button: manager rank, or
+  // owning the task (creator/assignee) — and never from a read-only panel.
+  const canDeleteTask = (t: Task) => !readOnly && permissions.canEdit
+    && (permissions.isAdmin || permissions.isManager
+        || t.createdByUserId === user?.uid || t.assignedToUserId === user?.uid);
+  const [confirmDeleteSubtaskId, setConfirmDeleteSubtaskId] = useState<string | null>(null);
+
   const handleDeleteSubtask = async (subtaskId: string) => {
+    setConfirmDeleteSubtaskId(null);
+    const sub = (subtasks || []).find(t => t.id === subtaskId);
+    if (!sub || !canDeleteTask(sub)) return;
     // Cascade: the subtask's comments/collaborator records go with it, and any
     // logged hours are unlinked rather than left pointing at a dead id.
     try {
@@ -848,12 +961,14 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     const mentionedUids = new Set<string>(commentMentionUids(finalText));
     let saved = false;
 
+    // Captured BEFORE the save: the checkbox resets right after it.
+    const clientVisible = commentVisibleToClient && !!(task as any).customerId;
     try {
       // Save comment first — then notify. The created id (when the parent hands it
       // back) turns every notification below into a link to THIS comment, not just
       // to the task.
       const created = await onAddComment(task.id, finalText, {
-        visibleToClient: commentVisibleToClient && !!(task as any).customerId,
+        visibleToClient: clientVisible,
       });
       saved = true;
       const newCommentId: string | undefined = (created as any)?.id;
@@ -862,7 +977,17 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       setCommentVisibleToClient(false);
       playFrogSound();
 
-      const mentionedArray = [...mentionedUids].filter(uid => uid !== user?.uid);
+      // Portal clients who commented on this task. They are reached ONLY by the
+      // explicit client-visible branch at the end — never by mentions,
+      // follower pings or the participant fan-out (see THE CLIENT BOUNDARY).
+      const portalUids = new Set<string>();
+      comments.forEach(c => {
+        if ((c as any).senderType === 'client') {
+          if (c.userId) portalUids.add(c.userId);
+          if (c.createdByUserId) portalUids.add(c.createdByUserId);
+        }
+      });
+      const mentionedArray = [...mentionedUids].filter(uid => uid !== user?.uid && !portalUids.has(uid));
 
       // Followers model (Asana / Linear / Salesforce Chatter): the people who get
       // notified on a record are its *followers*, not the whole team. You become a
@@ -871,15 +996,27 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       const currentCollaboratorIds: string[] = Array.isArray((task as any).collaboratorIds)
         ? (task as any).collaboratorIds
         : [];
-      const newCollaborators = mentionedArray.filter(uid => !currentCollaboratorIds.includes(uid));
+      const wantedCollaborators = mentionedArray.filter(uid => !currentCollaboratorIds.includes(uid));
       // Commenting auto-follows YOU (so future replies reach you) — but you don't get
       // an "added as collaborator" ping for your own action.
-      const senderFollows = !!user?.uid && !currentCollaboratorIds.includes(user.uid) && !newCollaborators.includes(user.uid);
-      const collaboratorAdditions = [...newCollaborators, ...(senderFollows ? [user!.uid] : [])];
-      if (collaboratorAdditions.length > 0) {
-        await taskMutation.update(task.id, {
-          collaboratorIds: [...currentCollaboratorIds, ...collaboratorAdditions],
-        });
+      const senderFollows = !!user?.uid && !currentCollaboratorIds.includes(user.uid) && !wantedCollaborators.includes(user.uid);
+      const collaboratorAdditions = [...wantedCollaborators, ...(senderFollows ? [user!.uid] : [])];
+      // The follower write is a TASK update: a read-only panel (Viewer, guest) is
+      // denied it by the rules, and the old code let that throw into the outer
+      // catch — which returned before a single notification went out, so a
+      // Viewer's comment notified nobody. Skip it there, and contain any other
+      // failure: the comment is saved and must still be announced. When the
+      // write did not happen, the mentioned people get the plain mention ping.
+      let newCollaborators: string[] = [];
+      if (collaboratorAdditions.length > 0 && !readOnly) {
+        try {
+          await taskMutation.update(task.id, {
+            collaboratorIds: [...currentCollaboratorIds, ...collaboratorAdditions],
+          });
+          newCollaborators = wantedCollaborators;
+        } catch (err) {
+          console.warn('[Tasks] ndjekësit e detyrës nuk u përditësuan:', err);
+        }
       }
       if (newCollaborators.length > 0) {
         // Notify newly-mentioned staff they now follow (and can see) the task.
@@ -920,6 +1057,13 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       // the sender and anyone already notified above (mentions/new collaborators), so
       // no one gets a double ping. This is scoped to people involved in the task, not
       // the whole team, to avoid notification spam.
+      //
+      // THE CLIENT BOUNDARY: portal users are only ever reached through the
+      // explicit client-visible branch below. Staff comments carry their author
+      // in `createdByUserId` (stamped by useMutation); only PORTAL comments carry
+      // `userId` (senderType 'client'). Collecting `c.userId` used to gather
+      // exactly the portal clients and push/email them the text of INTERNAL
+      // comments — while staff commenters were never collected at all.
       const excluded = new Set<string>(
         [user?.uid, ...mentionedArray, ...newCollaborators].filter(Boolean) as string[],
       );
@@ -927,11 +1071,15 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       if (task.assignedToUserId) participantIds.add(task.assignedToUserId);
       if (task.createdByUserId) participantIds.add(task.createdByUserId);
       currentCollaboratorIds.forEach(uid => participantIds.add(uid));
-      comments.forEach(c => { if (c.userId) participantIds.add(c.userId); });
+      comments.forEach(c => {
+        if ((c as any).senderType === 'client') return;
+        const author = c.createdByUserId || c.userId;
+        if (author) participantIds.add(author);
+      });
 
       const commentPreview = commentToPlainText(finalText).replace(/\s*\n\s*/g, ' ').slice(0, 120);
       const participantNotifPromises = [...participantIds]
-        .filter(uid => !excluded.has(uid))
+        .filter(uid => !excluded.has(uid) && !portalUids.has(uid))
         .map(uid => notificationMutation.create({
           userId: uid,
           type: 'task_comment',
@@ -942,6 +1090,28 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           actionLabel: taskLabel,
         }));
       await Promise.allSettled(participantNotifPromises);
+
+      // A CLIENT-VISIBLE reply is the one case the client hears about it — via
+      // the portal login resolved from the task's customerId, on the portal
+      // project page (the only place the client can read task comments).
+      if (clientVisible && task.projectId) {
+        try {
+          const portalUid = await resolvePortalUserId((task as any).customerId);
+          if (portalUid && portalUid !== user?.uid) {
+            await notificationMutation.create({
+              userId: portalUid,
+              type: 'project_comment',
+              title: `💬 Përgjigje nga ekipi — ${task.title}`,
+              message: commentPreview,
+              isRead: false,
+              actionUrl: portalProjectCommentDeepLink(task.projectId, newCommentId),
+              actionLabel: 'Shiko Komentin',
+            });
+          }
+        } catch (err) {
+          console.error('[Notifications] njoftimi i klientit për komentin dështoi:', err);
+        }
+      }
       return true;
     } catch (err: any) {
       if (saved) {
@@ -1070,20 +1240,26 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   // start, start follows.
   // A moved deadline also carries a RELATIVE reminder ("1 orë para") with it —
   // see reminderPatchForDeadline. Every path that writes endDate spreads it.
+  // An undated task stays undated: only an EXISTING deadline is pushed along
+  // when the start moves past it.
   const handleStartDateChange = async (date: Date | undefined) => {
     if (!date) return;
     const nd = new Date(date);
     nd.setHours(startDate.getHours(), startDate.getMinutes(), 0, 0);
     setStartDate(nd);
     const patch: Partial<Task> = { startDate: nd };
-    if (nd > endDate) { setEndDate(nd); Object.assign(patch, { endDate: nd }, rearmDeadlineAlerts, reminderPatchForDeadline(task, nd)); }
+    if (endDate && nd > endDate) { setEndDate(nd); Object.assign(patch, { endDate: nd }, rearmDeadlineAlerts, reminderPatchForDeadline(task, nd)); }
     await onUpdate(task.id, patch);
   };
 
   const handleEndDateChange = async (date: Date | undefined) => {
     if (!date) return;
     const nd = new Date(date);
-    nd.setHours(endDate.getHours(), endDate.getMinutes(), 0, 0);
+    // Keep the deadline's time-of-day; a first deadline lands at 17:00 (end of
+    // the working day) rather than the calendar's midnight, which read as
+    // overdue from the first minute of that day.
+    if (endDate) nd.setHours(endDate.getHours(), endDate.getMinutes(), 0, 0);
+    else nd.setHours(17, 0, 0, 0);
     setEndDate(nd);
     const patch: Partial<Task> = { endDate: nd, ...rearmDeadlineAlerts, ...reminderPatchForDeadline(task, nd) };
     if (nd < startDate) { setStartDate(nd); patch.startDate = nd; }
@@ -1096,10 +1272,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     const nd = new Date(startDate); nd.setHours(h || 0, m || 0, 0, 0);
     setStartDate(nd);
     const patch: Partial<Task> = { startDate: nd };
-    if (nd > endDate) { setEndDate(nd); Object.assign(patch, { endDate: nd }, rearmDeadlineAlerts, reminderPatchForDeadline(task, nd)); }
+    if (endDate && nd > endDate) { setEndDate(nd); Object.assign(patch, { endDate: nd }, rearmDeadlineAlerts, reminderPatchForDeadline(task, nd)); }
     await onUpdate(task.id, patch);
   };
   const handleEndTimeChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    // The time input only renders for a dated task; never invent a deadline here.
+    if (!endDate) return;
     const [h, m] = e.target.value.split(':').map(Number);
     const nd = new Date(endDate); nd.setHours(h || 0, m || 0, 0, 0);
     setEndDate(nd);
@@ -1114,24 +1292,35 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const reminderAt = parseTaskDate(task.reminderAt);
   const reminderPreset = activeReminderPreset(task);
   const reminderIsCustom = !!reminderAt && !reminderPreset;
+  // `reminderSetByUserId` = who asked to be reminded: the cron delivers to that
+  // person (not to the assignee), so it is stamped on every SET and cleared
+  // (explicit null) on every clear.
+  const clearReminderPatch = (): Partial<Task> => ({ ...setReminderPatch(task, null), reminderSetByUserId: null });
+  const setByMe = (p: Partial<Task>): Partial<Task> =>
+    ({ ...p, reminderSetByUserId: p.reminderAt ? (user?.uid ?? null) : null });
+  // A preset is RELATIVE to the deadline, so it resolves against the TASK's
+  // stored deadline — never the panel's local state. No deadline → no reminder
+  // (setReminderPatch returns the clear patch), and the chips are hidden.
+  const hasDeadline = !!parseTaskDate(task.endDate);
   const handleReminderPreset = async (minutes: number) => {
     // Tapping the active preset clears it (chips toggle, like labels).
-    if (reminderPreset?.minutes === minutes) { await onUpdate(task.id, setReminderPatch(task, null)); return; }
-    await onUpdate(task.id, setReminderPatch({ endDate }, { offsetMinutes: minutes }));
+    if (reminderPreset?.minutes === minutes) { await onUpdate(task.id, clearReminderPatch()); return; }
+    if (!hasDeadline) return;
+    await onUpdate(task.id, setByMe(setReminderPatch(task, { offsetMinutes: minutes })));
   };
-  const handleReminderClear = async () => { await onUpdate(task.id, setReminderPatch(task, null)); };
+  const handleReminderClear = async () => { await onUpdate(task.id, clearReminderPatch()); };
   const handleReminderCustomDate = async (date: Date | undefined) => {
     if (!date) return;
     const at = new Date(date);
     // Keep the time-of-day already chosen; default to 09:00 for a fresh pick.
     if (reminderAt) at.setHours(reminderAt.getHours(), reminderAt.getMinutes(), 0, 0);
     else at.setHours(9, 0, 0, 0);
-    await onUpdate(task.id, setReminderPatch(task, { at }));
+    await onUpdate(task.id, setByMe(setReminderPatch(task, { at })));
   };
   const handleReminderCustomTime = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const [h, m] = e.target.value.split(':').map(Number);
-    const at = new Date(reminderAt ?? endDate); at.setHours(h || 0, m || 0, 0, 0);
-    await onUpdate(task.id, setReminderPatch(task, { at }));
+    const at = new Date(reminderAt ?? endDate ?? new Date()); at.setHours(h || 0, m || 0, 0, 0);
+    await onUpdate(task.id, setByMe(setReminderPatch(task, { at })));
   };
 
   const handleSendChatMessage = async () => {
@@ -1210,11 +1399,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           return;
       }
     }
-    // Re-opening a Done recurring tip re-arms it ONLY when the series has no
-    // live occurrence left (child deleted by mistake → revive); re-arming while
-    // the child is alive would double the series on re-complete.
-    const reopening = task.status === 'Done' && task.isRecurring && !hasLiveSeriesSibling(task, allTasks);
-    await onUpdate(task.id, { status: newStatus as Task['status'], ...(reopening ? { nextCycleCreated: false } : {}) });
+    await onUpdate(task.id, { status: newStatus as Task['status'], ...reopenPatchFor(task, allTasks) });
     const labels: Record<string, string> = { Todo: 'Për të bërë', 'In Progress': 'Në progres', Review: 'Rishikim', Done: 'Përfunduar' };
     toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${labels[newStatus] ?? newStatus}` });
   };
@@ -1275,6 +1460,40 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     await Promise.allSettled(
       (subtasks || []).map(st => taskMutation.update(st.id, patch as any)),
     );
+    // Client-VISIBLE comments carry the client's customerId too (it is what the
+    // portal's `customerId == mine` query and the rules key on). Left behind,
+    // the OLD client kept reading the discussion of a task that is no longer
+    // theirs. Only comments that already HAVE a customerId are touched — an
+    // internal comment must never become visible by a move. Best effort: the
+    // move itself is already saved.
+    void repointClientComments([task.id, ...(subtasks || []).map(st => st.id)], patch.customerId || null);
+  };
+
+  const repointClientComments = async (taskIds: string[], customerId: string | null) => {
+    const businessId = (task as any).businessId || getGlobalBusinessId();
+    // businessId makes the list provable for staff under the rules (rules are
+    // not filters) — without it the query is denied outright.
+    if (!businessId || taskIds.length === 0) return;
+    try {
+      const chunks: string[][] = [];
+      for (let i = 0; i < taskIds.length; i += 30) chunks.push(taskIds.slice(i, i + 30));
+      const snaps = await Promise.all(chunks.map(ids => getDocs(fsQuery(
+        collection(db, 'taskComments'),
+        fsWhere('businessId', '==', businessId),
+        fsWhere('taskId', 'in', ids),
+      ))));
+      const toUpdate = snaps.flatMap(s => s.docs).filter(d => {
+        const cur = (d.data() as any).customerId;
+        return !!cur && cur !== customerId;
+      });
+      const results = await Promise.allSettled(
+        toUpdate.map(d => commentMutation.update(d.id, { customerId } as any)),
+      );
+      const failed = results.filter(r => r.status === 'rejected').length;
+      if (failed) console.warn(`[Tasks] ${failed} komente të dukshme për klientin nuk u ri-lidhën me klientin e ri`);
+    } catch (err) {
+      console.warn('[Tasks] ri-lidhja e komenteve të klientit dështoi:', err);
+    }
   };
 
   // Assignee load: open tasks per person — colours match the create form's bars.
@@ -1319,7 +1538,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     if (k === 'jave') d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7));
     return d;
   };
-  const dueKey = dayKeyOf(endDate);
+  // 'none' matches no chip: an undated task must not light up "Sot".
+  const dueKey = endDate ? dayKeyOf(endDate) : 'none';
   const startKey = dayKeyOf(startDate);
 
   // "krijuar sot 09:40 nga ti" — the subtitle under the title (per the design).
@@ -1344,7 +1564,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     createdLabel ? `krijuar ${createdLabel}${creatorLabel ? ` nga ${creatorLabel}` : ''}` : null,
   ].filter(Boolean).join(' · ');
 
-  const footerSummary = `${assigneeName.split(' ')[0]} · ${formatDateCompact(endDate)}${task.isRecurring ? ' · përsëritet' : ''}`;
+  const footerSummary = `${assigneeName.split(' ')[0]} · ${endDate ? formatDateCompact(endDate) : 'pa afat'}${task.isRecurring ? ' · përsëritet' : ''}`;
 
   // "Ruaj ndryshimet" — commits any in-progress title/description edit and closes.
   // Every other field already saved on tap (chips/pickers write straight through).
@@ -1630,13 +1850,13 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 ))}
                 <Popover>
                   <PopoverTrigger asChild>
-                    <button type="button" disabled={readOnly} className={chipCls(dueKey === 'date')}>📅 {formatDateCompact(endDate)}</button>
+                    <button type="button" disabled={readOnly} className={chipCls(dueKey === 'date')}>📅 {endDate ? formatDateCompact(endDate) : 'Pa afat'}</button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar mode="single" selected={endDate} onSelect={handleEndDateChange} initialFocus />
+                    <Calendar mode="single" selected={endDate ?? undefined} onSelect={handleEndDateChange} initialFocus />
                   </PopoverContent>
                 </Popover>
-                {!readOnly && (
+                {!readOnly && endDate && (
                   <input
                     type="time"
                     value={timeStr(endDate)}
@@ -1651,7 +1871,11 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             <div className={rowCls}>
               <span className={rowLabelCls}>Kujtesë</span>
               <div className="flex flex-wrap items-center gap-1.5">
-                {REMINDER_PRESETS.map(p => (
+                {/* Presets are "X before the deadline" — meaningless without one. */}
+                {!readOnly && !hasDeadline && !reminderAt && (
+                  <span className="text-[11.5px] text-muted-foreground">Vendos një afat për kujtesat relative, ose zgjidh një datë.</span>
+                )}
+                {hasDeadline && REMINDER_PRESETS.map(p => (
                   <button
                     key={p.key}
                     type="button"
@@ -1723,7 +1947,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             </div>
 
             {/* Përsëritet */}
-            {(task.isRecurring || permissions.canEdit) && (
+            {(task.isRecurring || !readOnly) && (
               <div className={`${rowCls} items-start`}>
                 <span className={`${rowLabelCls} pt-1`}>Përsërit.</span>
                 <div className="flex flex-col gap-2">
@@ -1766,7 +1990,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                                  ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' muaj' : 'muaj'}, ditën ${(task as any).recurringDayOfMonth ?? 1}`
                                  : `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' vite' : 'vit'}`}
                           </span>
-                          {permissions.canEdit && (task.recurringFrequency === 'weekly' || task.recurringFrequency === 'daily') && (
+                          {!readOnly && (task.recurringFrequency === 'weekly' || task.recurringFrequency === 'daily') && (
                             <button
                               type="button"
                               onClick={() => setEditingRecurring(true)}
@@ -1808,12 +2032,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                         <input
                           type="date"
                           defaultValue={(task as any).recurringEndDate ? (() => { const d = new Date((task as any).recurringEndDate); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })() : ''}
-                          disabled={!permissions.canEdit}
-                          onChange={(e) => { const v = e.target.value; const nd = v ? (() => { const [y, mo, dd] = v.split('-').map(Number); return new Date(y, mo - 1, dd); })() : (null as any); onUpdate(task.id, { recurringEndDate: nd } as any); }}
+                          disabled={readOnly}
+                          onChange={(e) => { const v = e.target.value; const nd = v ? (() => { const [y, mo, dd] = v.split('-').map(Number); return new Date(y, mo - 1, dd); })() : null; changeRecurringEndDate(nd); }}
                           className="h-6 rounded border border-border/50 bg-muted/40 px-1.5 text-[11px] text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
                         />
                         {(task as any).recurringEndDate
-                          ? <button type="button" onClick={() => onUpdate(task.id, { recurringEndDate: null as any } as any)} className="text-[11px] text-muted-foreground underline hover:text-foreground">Hiq</button>
+                          ? (!readOnly && <button type="button" onClick={() => changeRecurringEndDate(null)} className="text-[11px] text-muted-foreground underline hover:text-foreground">Hiq</button>)
                           : <span className="text-[11px] text-muted-foreground/70">pa fund</span>}
                       </div>
                     </>
@@ -1867,7 +2091,17 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                                 <button
                                   key={t.id}
                                   type="button"
-                                  onClick={() => { onUpdate(task.id, { dependsOn: [...(task.dependsOn || []), t.id] } as any); setBlockerSearch(''); }}
+                                  onClick={() => {
+                                    // A blocker that already waits (directly or through a chain)
+                                    // on THIS task would lock both forever — completeTask's
+                                    // blocker guard refuses either side.
+                                    if (wouldCreateDependencyCycle(task.id, t.id, allTasks)) {
+                                      toast({ title: 'Varësi rrethore', description: `"${t.title}" pret tashmë këtë detyrë — nuk mund ta bllokojë.`, variant: 'destructive' });
+                                      return;
+                                    }
+                                    onUpdate(task.id, { dependsOn: [...(task.dependsOn || []), t.id] } as any);
+                                    setBlockerSearch('');
+                                  }}
                                   className="w-full truncate rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
                                 >
                                   {t.title}
@@ -2122,15 +2356,16 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                         onClick={() => {
                           if (onSelectSubtask) {
                             onSelectSubtask(subtask);
-                          } else if (editingSubtask !== subtask.id) {
+                          } else if (!readOnly && editingSubtask !== subtask.id) {
                             startEditingSubtask(subtask);
                           }
                         }}
                       >
                         {/* Top row: Checkbox + Title + Delete */}
                         <div className="flex items-start gap-3">
-                          <Checkbox 
+                          <Checkbox
                             checked={subtask.status === 'Done'}
+                            disabled={readOnly}
                             onClick={(e) => e.stopPropagation()}
                             onCheckedChange={(checked) => {
                               handleUpdateSubtask(subtask.id, { 
@@ -2151,19 +2386,26 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                               </p>
                             )}
                           </div>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteSubtask(subtask.id);
-                              }}
-                            >
-                              <Trash2 className="w-3 h-3 text-muted-foreground" />
-                            </Button>
-                          </div>
+                          {canDeleteTask(subtask) && (
+                            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                              {confirmDeleteSubtaskId === subtask.id ? (
+                                <span className="inline-flex items-center gap-1.5">
+                                  <button type="button" onClick={() => handleDeleteSubtask(subtask.id)} className="text-[11px] font-semibold text-red-500 hover:text-red-600">Fshi vërtet</button>
+                                  <button type="button" onClick={() => setConfirmDeleteSubtaskId(null)} className="text-[11px] text-muted-foreground hover:text-foreground">Jo</button>
+                                </span>
+                              ) : (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100"
+                                  aria-label="Fshi nën-detyrën"
+                                  onClick={() => setConfirmDeleteSubtaskId(subtask.id)}
+                                >
+                                  <Trash2 className="w-3 h-3 text-muted-foreground" />
+                                </Button>
+                              )}
+                            </div>
+                          )}
                         </div>
                         
                         {/* Bottom row: Priority + Assignee + Due Date */}
@@ -2273,13 +2515,32 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                               <SelectValue placeholder="Cakto personin përgjegjës" />
                             </SelectTrigger>
                             <SelectContent>
-                              {teamMembers?.map(member => (
-                                <SelectItem key={member.id} value={member.userId}>
-                                  {getUserDisplayName(member.userId)}
-                                </SelectItem>
-                              ))}
+                              {/* Same rule as the main assignee picker: without
+                                  canAssignTasks only YOU are pickable; the current
+                                  assignee stays listed (disabled) so the value renders. */}
+                              {permissions.canAssignTasks
+                                ? teamMembers?.map(member => (
+                                    <SelectItem key={member.id} value={member.userId}>
+                                      {getUserDisplayName(member.userId)}
+                                    </SelectItem>
+                                  ))
+                                : (
+                                  <>
+                                    {user && (
+                                      <SelectItem value={user.uid}>{getUserDisplayName(user.uid)}</SelectItem>
+                                    )}
+                                    {subtask.assignedToUserId && subtask.assignedToUserId !== user?.uid && (
+                                      <SelectItem value={subtask.assignedToUserId} disabled>
+                                        {getUserDisplayName(subtask.assignedToUserId)}
+                                      </SelectItem>
+                                    )}
+                                  </>
+                                )}
                             </SelectContent>
                           </Select>
+                          {!permissions.canAssignTasks && (
+                            <p className="text-[11px] text-muted-foreground">Roli yt cakton detyra vetëm për vete.</p>
+                          )}
                           <div className="flex gap-2 pt-2">
                             <Button 
                               size="sm" 

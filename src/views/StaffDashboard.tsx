@@ -38,6 +38,8 @@ import type {
 import { taskCompletedNotifications } from '../lib/taskNotifications';
 import { completeTask } from '../lib/recurringUtils';
 import { taskDueMs, compareTasksByDue, compareTaskIds } from '../lib/taskSort';
+import { dayDiffFromToday, isTaskOverdue, isTaskDueToday, isTaskCompletedToday } from '../lib/taskDue';
+import { projectTaskProgress } from '../lib/projectProgress';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { useFilteredTasks, useFilteredProjects, useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import MomentumWidget from '../components/MomentumWidget';
@@ -170,28 +172,29 @@ const StaffDashboard: React.FC = () => {
   }), [adminTeamIds]);
   const { data: crossTeamTasks } = useCollection<Task>('tasks', crossTeamTasksQuery);
 
+  // Tasks of an ARCHIVED or CANCELLED project are dead work (same rule as
+  // DailyReportForm's plan): they must not count as due today / overdue / mine,
+  // or a shelved project keeps the dashboard red forever.
+  const deadProjectIds = useMemo(() => new Set(
+    (rawProjects || [])
+      .filter(p => p.status === 'Archived' || p.status === 'Cancelled')
+      .map(p => p.id),
+  ), [rawProjects]);
+  const isLiveTask = (t: Task) => !t.projectId || !deadProjectIds.has(t.projectId);
+
   const teamDueTodayByPerson = useMemo(() => {
     if (!canSeeTeamDay) return [];
     // Admin → all tasks across their admin teams; otherwise the role-filtered set.
     const source: Task[] = (dataScope === 'all' && adminTeamIds.length > 0) ? (crossTeamTasks || []) : (tasks || []);
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const endOfToday = new Date(startOfToday.getTime() + 86400000);
-    const dueOf = (t: Task): Date | null => {
-      const due: any = (t as any).endDate || (t as any).dueDate;
-      if (!due) return null;
-      if (typeof due?.toDate === 'function') return due.toDate();
-      if (due instanceof Date) return due;
-      const d = new Date(due);
-      return isNaN(d.getTime()) ? null : d;
-    };
+    const now = Date.now();
     const UNASSIGNED = '__unassigned__';
     const groups = new Map<string, { userId: string; name: string; tasks: { task: Task; overdue: boolean }[]; overdue: number }>();
     for (const t of source) {
-      if (t.status === 'Done') continue;            // open only
-      const due = dueOf(t);
-      if (!due || due >= endOfToday) continue;       // due today or earlier (overdue)
-      const isOverdue = due < startOfToday;
+      if (t.status === 'Done' || !isLiveTask(t)) continue; // open, live projects only
+      // Europe/Tirane calendar days (src/lib/taskDue.ts), not the browser's midnight.
+      const diff = dayDiffFromToday(taskDueMs(t), now);
+      if (diff === null || diff > 0) continue;       // due today or earlier (overdue)
+      const isOverdue = diff < 0;
       const uid = t.assignedToUserId || UNASSIGNED;
       if (!groups.has(uid)) {
         const profile = uid === UNASSIGNED ? null : userProfiles?.find((p: any) => p.userId === uid);
@@ -207,7 +210,7 @@ const StaffDashboard: React.FC = () => {
       if (b.userId === UNASSIGNED) return -1;
       return b.tasks.length - a.tasks.length;
     });
-  }, [canSeeTeamDay, dataScope, adminTeamIds, crossTeamTasks, tasks, userProfiles]);
+  }, [canSeeTeamDay, dataScope, adminTeamIds, crossTeamTasks, tasks, userProfiles, deadProjectIds]);
 
   const teamDueTodayTotal = useMemo(
     () => teamDueTodayByPerson.reduce((s, g) => s + g.tasks.length, 0),
@@ -257,52 +260,37 @@ const StaffDashboard: React.FC = () => {
 
   const myTasks = useMemo(() => {
     if (!tasks || !user) return [];
-    return tasks.filter(t => isMine(t) && t.status !== 'Done');
-  }, [tasks, user, myIds]);
+    return tasks.filter(t => isMine(t) && t.status !== 'Done' && isLiveTask(t));
+  }, [tasks, user, myIds, deadProjectIds]);
 
   const myCompletedToday = useMemo(() => {
     if (!tasks || !user) return [];
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return tasks.filter(t => {
-      if (!isMine(t) || t.status !== 'Done') return false;
-      const updated = t.updatedAt instanceof Date ? t.updatedAt : new Date(t.updatedAt);
-      return updated >= today;
-    });
+    // `completedAt` (legacy rows: updatedAt) on today's Europe/Tirane day —
+    // `updatedAt` alone moved on every edit, so old Done tasks counted as today's.
+    const now = Date.now();
+    return tasks.filter(t => isMine(t) && isTaskCompletedToday(t, now));
   }, [tasks, user, myIds]);
 
   const myOverdueTasks = useMemo(() => {
-    const now = new Date();
-    return myTasks.filter(t => {
-      const due = t.endDate || t.dueDate;
-      if (!due) return false;
-      const d = due instanceof Date ? due : new Date(due);
-      return d < now;
-    });
+    // Overdue = the deadline's DAY has passed (Tirane): a task due today at
+    // 09:00 is today's work at 15:00, not "vonuar".
+    const now = Date.now();
+    return myTasks.filter(t => isTaskOverdue(t, now));
   }, [myTasks]);
 
   const myDueToday = useMemo(() => {
-    const now = new Date();
-    const todayStr = now.toLocaleDateString('sv');
-    return myTasks.filter(t => {
-      const due = t.endDate || t.dueDate;
-      if (!due) return false;
-      const d = (due as any)?.toDate?.() instanceof Date ? (due as any).toDate() : (due instanceof Date ? due : new Date(due as any));
-      return d.toLocaleDateString('sv') === todayStr;
-    });
+    const now = Date.now();
+    return myTasks.filter(t => isTaskDueToday(t, now));
   }, [myTasks]);
 
   const myDueThisWeek = useMemo(() => {
-    const now = new Date();
     // From the start of TODAY, not from this instant: a task due at 09:00 viewed
     // at 15:00 is still "this week" (and still today's work), not vanished.
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const weekEnd = new Date(now);
-    weekEnd.setDate(weekEnd.getDate() + 7);
-    const weekEndMs = weekEnd.getTime();
+    // Tirane calendar days: today … today + 7.
+    const now = Date.now();
     return myTasks.filter(t => {
-      const d = taskDueMs(t); // Date | Timestamp | string — one normaliser, never `.getTime()` on a raw value
-      return d !== null && d >= startOfToday && d <= weekEndMs;
+      const diff = dayDiffFromToday(taskDueMs(t), now); // one normaliser, never `.getTime()` on a raw value
+      return diff !== null && diff >= 0 && diff <= 7;
     }).sort(compareTasksByDue);
   }, [myTasks]);
 
@@ -436,8 +424,9 @@ const StaffDashboard: React.FC = () => {
   const formatDate = (date?: Date) => {
     if (!date) return '';
     const d = date instanceof Date ? date : new Date(date);
-    const now = new Date();
-    const diff = Math.ceil((d.getTime() - now.getTime()) / 86400000);
+    // Calendar-day difference in Europe/Tirane, not ceil(ms / 24h).
+    const diff = dayDiffFromToday(d);
+    if (diff === null) return '';
     if (diff < 0) return `${Math.abs(diff)}d vonuar`;
     if (diff === 0) return 'Sot';
     if (diff === 1) return 'Nesër';
@@ -726,7 +715,8 @@ const StaffDashboard: React.FC = () => {
               <div className="divide-y">
                 {tasksToShow.map((task, i) => {
                   const due = task.endDate || task.dueDate;
-                  const isOverdue = due && new Date(due) < new Date();
+                  // Day-based (Tirane): due earlier today is not "vonuar".
+                  const isOverdue = isTaskOverdue(task);
                   const projectName = getProjectName(task.projectId);
 
                   return (
@@ -816,10 +806,9 @@ const StaffDashboard: React.FC = () => {
               </div>
               <div className="divide-y">
                 {myProjects.map(project => {
-                  const projectTasks = tasks?.filter(t => t.projectId === project.id) || [];
-                  const doneTasks = projectTasks.filter(t => t.status === 'Done').length;
-                  const totalTasks = projectTasks.length;
-                  const pct = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+                  // Shared definition over the RAW task list (top-level only):
+                  // the role-filtered list made a Member's own Done task read 100 %.
+                  const { done: doneTasks, total: totalTasks, pct } = projectTaskProgress(rawTasks, project.id);
                   const customer = customers?.find(c => c.id === project.customerId);
 
                   return (

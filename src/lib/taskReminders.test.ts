@@ -7,6 +7,7 @@ import {
   activeReminderPreset,
   describeReminder,
   reminderAtFromOffset,
+  taskReminderRecipient,
 } from './taskReminders';
 import type { Task } from '../types';
 
@@ -32,11 +33,17 @@ describe('setReminderPatch', () => {
   it('a custom moment stores no offset', () => {
     const at = new Date('2026-09-09T09:30:00');
     const p = setReminderPatch(task(), { at });
-    expect(p).toEqual({ reminderAt: at, reminderOffsetMinutes: null, reminderSentAt: null });
+    expect(p).toEqual({ reminderAt: at, reminderOffsetMinutes: null, reminderSentAt: null, reminderSetByUserId: null });
   });
 
   it('clearing writes explicit nulls (undefined would be stripped and clear nothing)', () => {
-    expect(setReminderPatch(task(), null)).toEqual({ reminderAt: null, reminderOffsetMinutes: null, reminderSentAt: null });
+    expect(setReminderPatch(task(), null)).toEqual({ reminderAt: null, reminderOffsetMinutes: null, reminderSentAt: null, reminderSetByUserId: null });
+  });
+
+  it('records who asked for the reminder, and clears it with the reminder', () => {
+    expect(setReminderPatch(task(), { offsetMinutes: 60 }, 'boss').reminderSetByUserId).toBe('boss');
+    expect(setReminderPatch(task(), { at: new Date() }, 'boss').reminderSetByUserId).toBe('boss');
+    expect(setReminderPatch(task(), null).reminderSetByUserId).toBeNull();
   });
 
   it('a preset on a task with no deadline cannot resolve — it clears instead of writing Invalid Date', () => {
@@ -108,5 +115,17 @@ describe('presentation', () => {
   it('presets stay a short, unique list', () => {
     expect(new Set(REMINDER_PRESETS.map(p => p.minutes)).size).toBe(REMINDER_PRESETS.length);
     expect(REMINDER_PRESETS.length).toBeLessThanOrEqual(5);
+  });
+});
+
+describe('taskReminderRecipient', () => {
+  it('reminds the person who set it, not the assignee', () => {
+    expect(taskReminderRecipient(task({ assignedToUserId: 'a', reminderSetByUserId: 'boss' })))
+      .toEqual({ userId: 'boss', selfRequested: true });
+  });
+  it('falls back to the assignee, then the creator (legacy rows)', () => {
+    expect(taskReminderRecipient(task({ assignedToUserId: 'a' }))).toEqual({ userId: 'a', selfRequested: false });
+    expect(taskReminderRecipient(task({}))).toEqual({ userId: 'u1', selfRequested: false });
+    expect(taskReminderRecipient(task({ createdByUserId: undefined }))).toBeNull();
   });
 });

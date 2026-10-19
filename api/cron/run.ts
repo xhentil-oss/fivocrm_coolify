@@ -62,13 +62,14 @@ import {
   nextBillingPeriodStart,
   nextWorkPeriodStart,
   projectWorkCycle,
+  resolveCycleAnchorDay,
   seedWorkPeriodKey,
   shiftByWorkCycles,
   startOfCycleWeek,
+  taskPeriodsBehind,
   workCycleBlockReason,
   workCycleTaskAction,
   workPeriodKey,
-  workPeriodsSince,
 } from '../_projectCycles.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
@@ -400,12 +401,30 @@ function addFrequency(date: Date, frequency: string, dayOfWeek?: number, dayOfMo
     // month-end series. Zone-clamped, anchor day kept — same as the client.
     return addZonedMonthsClamped(date, step, dayOfMonth ?? undefined);
   } else if (frequency === 'yearly') {
-    // 29 Feb + 1 year is 28 Feb, not 1 Mar.
+    // 29 Feb + 1 year is 28 Feb, not 1 Mar — and back to 29 Feb in the next leap
+    // year via the anchor day. MIRRORS src/lib/recurringUtils.ts addFrequency.
     const p = zonedParts(date);
+    const day = yearlyAnchorDay(p, dayOfMonth);
     const lastDay = daysInZonedMonth(p.year + step, p.month);
-    return zonedDate(p.year + step, p.month, Math.min(p.day, lastDay), p.hours, p.minutes, p.seconds, p.ms);
+    return zonedDate(p.year + step, p.month, Math.min(day, lastDay), p.hours, p.minutes, p.seconds, p.ms);
   }
   return fromRecurrenceZone(d);
+}
+
+/** MIRRORS `yearlyAnchorDay` in src/lib/recurringUtils.ts — a stored anchor
+ *  counts only while the date IS that anchor clamped to its month. */
+function yearlyAnchorDay(p: { year: number; month: number; day: number }, anchor?: number | null): number {
+  if (anchor == null || !(anchor >= 1 && anchor <= 31)) return p.day;
+  return Math.min(anchor, daysInZonedMonth(p.year, p.month)) === p.day ? anchor : p.day;
+}
+
+/** MIRRORS `seriesAnchorDay` in src/lib/recurringUtils.ts: an explicit
+ *  recurringDayOfMonth wins; a monthly/yearly series without one is anchored on
+ *  its parent's start day so a 31st / 29 Feb survives the first clamp. */
+function seriesAnchorDay(frequency: string | null | undefined, dayOfMonth: number | null | undefined, baseStart: Date): number | null {
+  if (dayOfMonth !== null && dayOfMonth !== undefined) return dayOfMonth;
+  if (frequency !== 'monthly' && frequency !== 'yearly') return null;
+  return isNaN(baseStart.getTime()) ? null : zonedParts(baseStart).day;
 }
 
 
@@ -691,7 +710,11 @@ async function runTaskReminders(opts?: { businessId?: string | null }) {
     const reason = taskReminderBlockReason(task, now);
     if (reason) { blocked[reason] = (blocked[reason] || 0) + 1; continue; }
 
-    const recipientId = task.assignedToUserId || task.createdByUserId;
+    // MIRRORS taskReminderRecipient (src/lib/taskReminders.ts): "Më kujto" is
+    // the reminder of the person who SET it — a manager reminding themselves to
+    // check a colleague's task used to remind the colleague instead.
+    const selfRequested = !!task.reminderSetByUserId;
+    const recipientId = task.reminderSetByUserId || task.assignedToUserId || task.createdByUserId;
     if (!recipientId) {
       // Nobody to remind — mark it so the row leaves the window instead of being
       // re-read every 5 minutes for two days.
@@ -718,7 +741,9 @@ async function runTaskReminders(opts?: { businessId?: string | null }) {
       userId: recipientId,
       type: 'task_reminder',
       title: `🔔 Kujtesë: ${task.title}`,
-      message: `Ke kërkuar të të kujtojmë për këtë detyrë.${deadline}`,
+      message: selfRequested
+        ? `Ke kërkuar të të kujtojmë për këtë detyrë.${deadline}`
+        : `Kujtesë për këtë detyrë.${deadline}`,
       actionUrl: task.projectId
         ? `/app/projects/${task.projectId}?taskId=${doc.id}`
         : `/app/tasks?taskId=${doc.id}`,
@@ -1141,6 +1166,7 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
   let suspendedSkipped = 0;
   let created = 0;
   let skippedDuplicate = 0;
+  let claimedElsewhere = 0;
   const ops: Promise<any>[] = [];
 
   // Occurrence fingerprints that already exist. A recurring series that got
@@ -1155,23 +1181,39 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
   // person) used to collide on it and the second parent was closed with no
   // child and no reason.
   const seriesIdOf = (t: any, id: string) => t.seriesId || id;
-  const occurrenceKey = (t: any, id: string, start: Date) =>
-    t.seriesId
-      ? ['s', t.seriesId, start.toISOString().slice(0, 10)].join('||')
-      : [t.businessId || '-', (t.title || '').toLowerCase().replace(/\s+/g, ' ').trim(),
-         t.assignedToUserId || '-', t.projectId || '-', start.toISOString().slice(0, 10)].join('||');
+  // The occurrence's calendar day in the business zone (not UTC: a 00:30
+  // Tirana start is the previous UTC day).
+  const dayKeyOf = (d: Date) => {
+    const p = zonedParts(d);
+    return `${p.year}-${String(p.month + 1).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
+  };
+  // EVERY row is keyed by its series (`seriesIdOf`) — a ROOT tip has no
+  // `seriesId`, and keying it by title used to miss its own child (which
+  // carries `seriesId = root id`), so the root's cycle could be spawned twice.
+  // Rows that predate `seriesId` are ALSO keyed by the legacy fingerprint, which
+  // is what collapses two duplicated legacy parents into one child.
+  const occurrenceKey = (t: any, id: string, start: Date) => ['s', seriesIdOf(t, id), dayKeyOf(start)].join('||');
+  const legacyOccurrenceKey = (t: any, start: Date) =>
+    [t.businessId || '-', (t.title || '').toLowerCase().replace(/\s+/g, ' ').trim(),
+     t.assignedToUserId || '-', t.projectId || '-', dayKeyOf(start)].join('||');
   const existingOccurrences = new Set<string>();
   const allRecurring: Array<{ id: string; data: any }> = [];
   for (const d of tasksSnap.docs) {
     const t = d.data();
     allRecurring.push({ id: d.id, data: t });
     const s: Date | null = t.startDate?.toDate ? t.startDate.toDate() : (t.startDate ? new Date(t.startDate) : null);
-    if (s && !isNaN(s.getTime())) existingOccurrences.add(occurrenceKey(t, d.id, s));
+    if (s && !isNaN(s.getTime())) {
+      existingOccurrences.add(occurrenceKey(t, d.id, s));
+      if (!t.seriesId) existingOccurrences.add(legacyOccurrenceKey(t, s));
+    }
   }
   // MIRRORS `remapDependsOnForNextCycle` (client): a Done recurring blocker is
   // re-pointed to its live sibling, a Done one-off blocker is dropped, anything
   // unknown/open is kept. This set holds recurring rows only, so a one-off
   // blocker is "unknown" here and kept — harmless (Done ids never block).
+  // Children spawned in THIS run are added to the set before any dependsOn is
+  // remapped (two-phase loop below), so a blocker whose next cycle is created
+  // in the same run is followed to it instead of being dropped.
   const sameSeries = (a: { id: string; data: any }, b: { id: string; data: any }) => {
     if (a.data.seriesId || b.data.seriesId) return seriesIdOf(a.data, a.id) === seriesIdOf(b.data, b.id);
     return a.data.title === b.data.title &&
@@ -1208,10 +1250,21 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
     return projectCache.get(projectId) ?? null;
   };
 
+  // Phase 1 decides every spawn; phase 2 (after the loop) executes them. See
+  // `remapDependsOn` above for why the dependsOn of a child is computed only
+  // once every child of this run is known.
+  type SpawnPlan = {
+    parentRef: FirebaseFirestore.DocumentReference;
+    childRef: FirebaseFirestore.DocumentReference;
+    task: any;
+    childData: Record<string, any>;
+    newNext: Date;
+  };
+  const plans: SpawnPlan[] = [];
+
   const bizCache = new Map<string, string | null>();
   for (const doc of tasksSnap.docs) {
     const task = doc.data();
-    if (task.businessId && suspended.has(task.businessId)) { suspendedSkipped++; continue; }
     if (!(await recurrenceEnabledFor(task.teamId))) { toggledOffSkipped++; continue; }
     // Self-heal: a recurring task must carry businessId or it disappears from the
     // business-scoped list & calendar. If it's missing, derive it from the project
@@ -1233,6 +1286,9 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
         ops.push(doc.ref.update({ businessId: bid, updatedAt: admin.firestore.Timestamp.now() }));
       }
     }
+    // AFTER the self-heal: a legacy row with no businessId used to slip past
+    // this check and get its next cycle even when its (healed) tenant is suspended.
+    if (task.businessId && suspended.has(task.businessId)) { suspendedSkipped++; continue; }
     if (!task.nextRecurringDate || !task.recurringFrequency) { if (task.status === 'Done' && !task.nextCycleCreated) skippedNoDates++; continue; }
     // Skip if frontend already created the next cycle ("after completion" model)
     if (task.nextCycleCreated) continue;
@@ -1264,8 +1320,11 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
     // days, which produced 22 tasks whose end was up to 6 days BEFORE their start.
     const spanMs = Math.max(0, endDate.getTime() - startDate.getTime());
     const nextOffsetMs = nextRecurringDate.getTime() - startDate.getTime();
+    // MIRRORS seriesAnchorDay (client): a monthly/yearly series is anchored on
+    // its day so 31 Jan / 29 Feb come back after a clamp.
+    const dom = seriesAnchorDay(task.recurringFrequency, task.recurringDayOfMonth, startDate);
 
-    let newStart = addFrequency(startDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
+    let newStart = addFrequency(startDate, task.recurringFrequency, task.recurringDayOfWeek, dom ?? undefined, task.recurringInterval, task.recurringDaysOfWeek);
 
     // Day comparison in the recurrence zone, not this process's (UTC on Vercel) —
     // otherwise "is the next occurrence still in the past?" is answered on a
@@ -1277,7 +1336,7 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
     const todayMs = startOfDayMs(now);
     let rollGuard = 0;
     while (startOfDayMs(newStart) < todayMs && rollGuard++ < 500) {
-      newStart = addFrequency(newStart, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
+      newStart = addFrequency(newStart, task.recurringFrequency, task.recurringDayOfWeek, dom ?? undefined, task.recurringInterval, task.recurringDaysOfWeek);
     }
 
     const newEnd = new Date(newStart.getTime() + spanMs);
@@ -1294,7 +1353,8 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
     // Someone else (the UI, or a duplicated sibling parent) already produced this
     // exact occurrence — close this parent out instead of doubling the series.
     const key = occurrenceKey(task, doc.id, newStart);
-    if (existingOccurrences.has(key)) {
+    const legacyKey = task.seriesId ? null : legacyOccurrenceKey(task, newStart);
+    if (existingOccurrences.has(key) || (legacyKey && existingOccurrences.has(legacyKey))) {
       // Named, visible reason (never a silent close): the row says why it has
       // no child of its own.
       ops.push(doc.ref.update({ nextCycleCreated: true, recurringSkippedReason: 'duplicate-occurrence', updatedAt: admin.firestore.Timestamp.now() }));
@@ -1302,30 +1362,99 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
       continue;
     }
     existingOccurrences.add(key);
+    if (legacyKey) existingOccurrences.add(legacyKey);
 
-    // Create new task ref first so we can reference its ID in the notification
-    const newTaskRef = db.collection('tasks').doc();
+    // DETERMINISTIC child id = the idempotency guarantee (same law as the
+    // invoice / expense occurrences): one series, one calendar day, one doc.
+    // A second run, a manual trigger racing the scheduled one, or a retry after
+    // a half-applied run gets ALREADY_EXISTS instead of a twin.
+    const seriesId = seriesIdOf(task, doc.id);
+    const childRef = db.collection('tasks').doc(`rec_task_${seriesId}_${dayKeyOf(newStart)}`);
+    const hasOffset = task.reminderOffsetMinutes !== null && task.reminderOffsetMinutes !== undefined;
     // MIRRORS buildNextRecurringTask's payload — keep in sync. The backstop's
     // child used to drop labels/section/collaborators/estimate/blockers, so a
     // series degraded (lost its board column, capacity estimate, 🔒 deps)
     // whenever THIS engine spawned the cycle instead of the UI.
-    ops.push(newTaskRef.set({ title: task.title, description: task.description ?? null, status: 'Todo', priority: task.priority ?? null, projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null, labels: task.labels ?? null, section: task.section ?? null, collaboratorIds: task.collaboratorIds ?? null, estimatedHours: task.estimatedHours ?? null, dependsOn: remapDependsOn(task.dependsOn), seriesId: seriesIdOf(task, doc.id), startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd), isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1, recurringDayOfWeek: task.recurringDayOfWeek ?? null, recurringDayOfMonth: task.recurringDayOfMonth ?? null, recurringDaysOfWeek: task.recurringDaysOfWeek ?? null, recurringEndDate: recEnd ? admin.firestore.Timestamp.fromDate(recEnd) : null, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), nextCycleCreated: false, dueNotificationSent: false, ...(task.reminderOffsetMinutes !== null && task.reminderOffsetMinutes !== undefined ? { reminderOffsetMinutes: task.reminderOffsetMinutes, reminderAt: admin.firestore.Timestamp.fromDate(new Date(newEnd.getTime() - Math.max(0, Number(task.reminderOffsetMinutes)) * 60_000)), reminderSentAt: null } : {}), parentTaskId: task.parentTaskId ?? null, createdByUserId: task.createdByUserId ?? null, teamId: task.teamId ?? null, businessId: task.businessId ?? null, customerId: task.customerId ?? null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
-    ops.push(doc.ref.update({ nextCycleCreated: true, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), updatedAt: admin.firestore.Timestamp.now() }));
+    const childData: Record<string, any> = {
+      title: task.title, description: task.description ?? null, status: 'Todo', priority: task.priority ?? null,
+      projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null,
+      labels: task.labels ?? null, section: task.section ?? null, collaboratorIds: task.collaboratorIds ?? null,
+      estimatedHours: task.estimatedHours ?? null,
+      dependsOn: null, // phase 2 — remapDependsOn once every child of this run is known
+      seriesId,
+      startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd),
+      isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1,
+      recurringDayOfWeek: task.recurringDayOfWeek ?? null, recurringDayOfMonth: dom ?? null,
+      recurringDaysOfWeek: task.recurringDaysOfWeek ?? null,
+      recurringEndDate: recEnd ? admin.firestore.Timestamp.fromDate(recEnd) : null,
+      nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), nextCycleCreated: false, dueNotificationSent: false,
+      ...(hasOffset ? {
+        reminderOffsetMinutes: task.reminderOffsetMinutes,
+        reminderAt: admin.firestore.Timestamp.fromDate(new Date(newEnd.getTime() - Math.max(0, Number(task.reminderOffsetMinutes)) * 60_000)),
+        reminderSentAt: null,
+        // The person who asked for the reminder keeps receiving it.
+        reminderSetByUserId: task.reminderSetByUserId ?? null,
+      } : {}),
+      parentTaskId: task.parentTaskId ?? null,
+      createdByUserId: task.createdByUserId ?? null,
+      // The series' original author (the browser's create() stamps
+      // createdByUserId with whoever completed the previous cycle).
+      seriesCreatedByUserId: task.seriesCreatedByUserId || task.createdByUserId || null,
+      teamId: task.teamId ?? null, businessId: task.businessId ?? null, customerId: task.customerId ?? null,
+      createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now(),
+    };
+    plans.push({ parentRef: doc.ref, childRef, task, childData, newNext });
+  }
+
+  // Phase 2a: every child of this run is a live occurrence of its series.
+  for (const plan of plans) allRecurring.push({ id: plan.childRef.id, data: plan.childData });
+
+  // Phase 2b: spawn. Child create + parent claim in ONE transaction — the parent
+  // is re-read inside it, so a completion in the browser (which claims
+  // `nextCycleCreated` first) and this backstop can never both produce a cycle,
+  // and a child can never exist without its parent being marked (or vice versa).
+  const freqLabel: Record<string, string> = { daily: 'ditore', weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
+  const spawn = async (plan: SpawnPlan) => {
+    const { task, childRef, parentRef } = plan;
+    plan.childData.dependsOn = remapDependsOn(task.dependsOn);
+    let outcome: 'created' | 'duplicate' | 'claimed-elsewhere';
+    try {
+      outcome = await db.runTransaction(async (tx) => {
+        const [parentSnap, childSnap] = await tx.getAll(parentRef, childRef);
+        const parent = parentSnap.data();
+        if (!parentSnap.exists || !parent || parent.nextCycleCreated === true || parent.status !== 'Done') return 'claimed-elsewhere' as const;
+        if (childSnap.exists) {
+          tx.update(parentRef, { nextCycleCreated: true, recurringSkippedReason: 'duplicate-occurrence', updatedAt: admin.firestore.Timestamp.now() });
+          return 'duplicate' as const;
+        }
+        tx.create(childRef, plan.childData);
+        tx.update(parentRef, { nextCycleCreated: true, nextRecurringDate: admin.firestore.Timestamp.fromDate(plan.newNext), updatedAt: admin.firestore.Timestamp.now() });
+        return 'created' as const;
+      });
+    } catch (e) {
+      if (!isAlreadyExists(e)) throw e;
+      // The occurrence landed between our read and our write: it exists, so the
+      // parent is done — record it and move on, never a second child.
+      await parentRef.update({ nextCycleCreated: true, recurringSkippedReason: 'duplicate-occurrence', updatedAt: admin.firestore.Timestamp.now() });
+      outcome = 'duplicate';
+    }
+    if (outcome === 'duplicate') { skippedDuplicate++; return; }
+    if (outcome === 'claimed-elsewhere') { claimedElsewhere++; return; }
+    created++;
     const notifRecipient = task.assignedToUserId || task.createdByUserId;
     if (notifRecipient) {
-      const freqLabel: Record<string, string> = { daily: 'ditore', weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
       const taskUrl = task.projectId
-        ? `/app/projects/${task.projectId}?taskId=${newTaskRef.id}`
-        : `/app/tasks?taskId=${newTaskRef.id}`;
-      ops.push(notifyUser({ userId: notifRecipient, type: 'recurring_task_created', title: `🔄 Detyrë e re periodike: ${task.title}`, message: `Detyra periodike "${task.title}" (${freqLabel[task.recurringFrequency] ?? task.recurringFrequency}) u krijua automatikisht.`, actionUrl: taskUrl, actionLabel: 'Hap Detyrën', businessId: task.businessId ?? null, teamId: task.teamId ?? null, projectId: task.projectId ?? null }));
+        ? `/app/projects/${task.projectId}?taskId=${childRef.id}`
+        : `/app/tasks?taskId=${childRef.id}`;
+      await notifyUser({ userId: notifRecipient, type: 'recurring_task_created', title: `🔄 Detyrë e re periodike: ${task.title}`, message: `Detyra periodike "${task.title}" (${freqLabel[task.recurringFrequency] ?? task.recurringFrequency}) u krijua automatikisht.`, actionUrl: taskUrl, actionLabel: 'Hap Detyrën', businessId: task.businessId ?? null, teamId: task.teamId ?? null, projectId: task.projectId ?? null });
     }
-    created++;
-  }
+  };
+  for (const plan of plans) ops.push(spawn(plan));
 
   await settleAll(ops, 'recurring-tasks');
   if (projectTerminalSkipped) console.log(`[recurring-tasks] ${projectTerminalSkipped} tip(s) inside archived/cancelled projects — no cycle spawned`);
   if (skippedNoDates) console.warn(`[recurring-tasks] ${skippedNoDates} Done tip(s) skipped: missing nextRecurringDate/frequency or both date anchors`);
-  return { created, skippedDuplicate, toggledOffSkipped, projectTerminalSkipped, skippedNoDates, suspendedSkipped };
+  return { created, skippedDuplicate, claimedElsewhere, toggledOffSkipped, projectTerminalSkipped, skippedNoDates, suspendedSkipped };
 }
 
 // ── helpers for recurring-invoices ───────────────────────────────────────────
@@ -2332,8 +2461,6 @@ async function runRecurringProjectReset(opts?: { businessId?: string | null }) {
 
     const fromKey: string = project.workCycleLastPeriodKey || seedWorkPeriodKey(cycle, project, now);
     const currentKey = workPeriodKey(cycle, now);
-    // A cycle changed in between (monthly key read as weekly) reads as one period.
-    const periods = Math.max(1, workPeriodsSince(cycle, fromKey, now) ?? 1);
 
     const tasksSnap = await db.collection('tasks').where('projectId', '==', projectDoc.id).get();
     if (tasksSnap.empty) {
@@ -2350,14 +2477,29 @@ async function runRecurringProjectReset(opts?: { businessId?: string | null }) {
       const t = taskDoc.data();
       const action = workCycleTaskAction(t);
       if (action === 'own-series') { ownSeriesTasks++; continue; }
-      // Dates move into the new cycle by the number of periods that passed —
-      // re-opened with last cycle's endDate every task fired "ka kaluar afatin".
-      const newStart = ts(shiftByWorkCycles(t.startDate, cycle, periods));
-      const newEnd = ts(shiftByWorkCycles(t.endDate, cycle, periods));
+      // Each task moves by ITS OWN lag (its deadline's period → the current
+      // one), never by the project's gap: a task already dated in this (or a
+      // later) period is not moved at all — shifting it pushed work planned for
+      // this month into the next. MIRRORS taskPeriodsBehind (_projectCycles).
+      const periods = taskPeriodsBehind(t, cycle, now);
+      const hasDates = !!(t.startDate || t.endDate || t.dueDate);
+      // An open task that is already dated in the current period is simply this
+      // period's work — nothing to carry, nothing to write.
+      if (action === 'carry' && periods === 0 && hasDates) continue;
+      // Month steps keep the ORIGINAL day (anchor stored on the task the first
+      // time it is cycled): 31 Jan → 28 Feb → 31 Mar, never → 28 Mar forever.
+      const startAnchor = cycle === 'monthly' ? resolveCycleAnchorDay(t.startDate, t.cycleAnchorStartDay) : null;
+      const endAnchor = cycle === 'monthly' ? resolveCycleAnchorDay(t.endDate, t.cycleAnchorEndDay) : null;
+      const newStart = periods > 0 ? ts(shiftByWorkCycles(t.startDate, cycle, periods, startAnchor)) : null;
+      const newEnd = periods > 0 ? ts(shiftByWorkCycles(t.endDate, cycle, periods, endAnchor)) : null;
       const common = {
         updatedAt: admin.firestore.Timestamp.now(),
-        // BOTH alert flags reset — the deadline is a new one.
-        dueNotificationSent: false, overdueNotificationSent: false,
+        ...(periods > 0 ? {
+          // BOTH alert flags reset — the deadline is a new one.
+          dueNotificationSent: false, overdueNotificationSent: false,
+          ...(startAnchor ? { cycleAnchorStartDay: startAnchor } : {}),
+          ...(endAnchor ? { cycleAnchorEndDay: endAnchor } : {}),
+        } : {}),
         ...(newStart ? { startDate: newStart } : {}),
         ...(newEnd ? { endDate: newEnd, ...(t.dueDate ? { dueDate: newEnd } : {}) } : {}),
         // A relative reminder follows the deadline; an absolute one belonged to last cycle.
@@ -2367,7 +2509,8 @@ async function runRecurringProjectReset(opts?: { businessId?: string | null }) {
       };
       if (action === 'reopen') {
         reopened++;
-        ops.push(taskDoc.ref.update({ ...common, status: 'Todo', carriedOverFromPeriod: null, carriedOverCount: 0 }));
+        // `completedAt: null` — re-opened, no longer "done" (taskCompletedMs).
+        ops.push(taskDoc.ref.update({ ...common, status: 'Todo', completedAt: null, carriedOverFromPeriod: null, carriedOverCount: 0 }));
       } else {
         // Unfinished: it stays open (status kept) and moves into the new period,
         // marked so the board and the responsible can see it came from last cycle.

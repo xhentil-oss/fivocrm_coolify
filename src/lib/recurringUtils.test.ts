@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { buildNextRecurringTask, completeTask, recurrenceHasEnded, addFrequency, startOfRecurrenceDay, projectRecurrenceBlockReason, RECURRENCE_STOPPING_PROJECT_STATUSES, hasLiveSeriesSibling, remapDependsOnForNextCycle, recurringOccurrencesInMonth, zonedParts } from './recurringUtils';
+import { buildNextRecurringTask, completeTask, recurrenceHasEnded, addFrequency, startOfRecurrenceDay, projectRecurrenceBlockReason, RECURRENCE_STOPPING_PROJECT_STATUSES, hasLiveSeriesSibling, remapDependsOnForNextCycle, recurringOccurrencesInMonth, zonedParts, reopenTaskPatch, seriesAnchorDay } from './recurringUtils';
 import { TERMINAL_PROJECT_STATUSES } from './finance/recurringBilling';
 import type { Task } from '../types';
 
@@ -176,7 +176,7 @@ describe('completeTask — archived / cancelled project stops the series', () =>
     expect(outcome).toEqual({ kind: 'recurring-stopped', reason: 'project-archived' });
     expect(h.created).toHaveLength(0);
     expect(h.claims()).toBe(0);
-    expect(h.updates).toEqual([{ id: 't1', d: { status: 'Done' } }]);
+    expect(h.updates).toEqual([{ id: 't1', d: { status: 'Done', completedAt: new Date('2026-08-09T12:00:00Z') } }]);
     // nextCycleCreated must stay false so a restored project can resume.
     expect(h.updates[0].d).not.toHaveProperty('nextCycleCreated');
   });
@@ -314,6 +314,25 @@ describe('addFrequency — monthly and yearly never overflow', () => {
   it('29 Feb + 1 year is 28 Feb, not 1 Mar', () => {
     expect(day(addFrequency(new Date('2028-02-29T09:00:00+01:00'), 'yearly'))).toBe('2029-02-28');
   });
+
+  it('a yearly 29 Feb series comes BACK to 29 Feb in the next leap year (anchor day)', () => {
+    let d = new Date('2028-02-29T09:00:00+01:00');
+    const seen: string[] = [];
+    for (let i = 0; i < 4; i++) { d = addFrequency(d, 'yearly', null, 29); seen.push(day(d)); }
+    expect(seen).toEqual(['2029-02-28', '2030-02-28', '2031-02-28', '2032-02-29']);
+  });
+
+  it('a stale monthly day-of-month does not move a yearly series', () => {
+    // "çdo muaj, ditën 15" switched to yearly on a 3 March task.
+    expect(day(addFrequency(new Date('2026-03-03T09:00:00+01:00'), 'yearly', null, 15))).toBe('2027-03-03');
+  });
+
+  it('a monthly/yearly series without an explicit day is anchored on its start day', () => {
+    expect(seriesAnchorDay('monthly', null, new Date('2026-01-31T09:00:00+01:00'))).toBe(31);
+    expect(seriesAnchorDay('yearly', undefined, new Date('2028-02-29T09:00:00+01:00'))).toBe(29);
+    expect(seriesAnchorDay('monthly', 15, new Date('2026-01-31T09:00:00+01:00'))).toBe(15);
+    expect(seriesAnchorDay('weekly', null, new Date())).toBeNull();
+  });
 });
 
 describe('series identity — sameSeries / hasLiveSeriesSibling / seriesId', () => {
@@ -396,5 +415,66 @@ describe('recurringOccurrencesInMonth — one projection engine for both calenda
     const days = [...m.keys()].sort((a, b) => a - b);
     expect(days.length).toBeGreaterThanOrEqual(2);
     for (let i = 1; i < days.length; i++) expect(days[i] - days[i - 1]).toBe(14);
+  });
+});
+
+describe('completedAt + re-open + carried series fields', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-08-09T12:00:00Z')); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const recorder = () => {
+    const updates: Array<{ id: string; d: any }> = [];
+    const created: any[] = [];
+    return {
+      updates, created,
+      createTask: async (d: any) => { created.push(d); return {}; },
+      updateTask: async (id: string, d: any) => { updates.push({ id, d }); return {}; },
+      claimNextCycle: async () => true,
+      releaseNextCycle: async () => {},
+    };
+  };
+
+  it('every Done write stamps completedAt (one-off and recurring)', async () => {
+    const one = recorder();
+    await completeTask(baseTask({ isRecurring: false, recurringFrequency: undefined }), one as any);
+    expect(one.updates[0].d.completedAt).toEqual(new Date('2026-08-09T12:00:00Z'));
+    const rec = recorder();
+    await completeTask(baseTask(), rec as any);
+    expect(rec.updates[rec.updates.length - 1].d).toMatchObject({ status: 'Done', nextCycleCreated: true });
+    expect(rec.updates[rec.updates.length - 1].d.completedAt).toBeInstanceOf(Date);
+  });
+
+  it('reopenTaskPatch clears completedAt and re-arms only a series with no live child', () => {
+    const tip = baseTask({ status: 'Done', nextCycleCreated: true, seriesId: 's1' });
+    const child = baseTask({ id: 't2', status: 'Todo', seriesId: 's1' });
+    expect(reopenTaskPatch(tip, 'In Progress', [tip, child])).toEqual({ status: 'In Progress', completedAt: null });
+    expect(reopenTaskPatch(tip, 'In Progress', [tip])).toEqual({ status: 'In Progress', completedAt: null, nextCycleCreated: false });
+    // No list = cannot prove the child is gone = do not re-arm.
+    expect(reopenTaskPatch(tip, 'Todo', undefined)).toEqual({ status: 'Todo', completedAt: null });
+    // Not Done: just the status.
+    expect(reopenTaskPatch(baseTask({ status: 'Todo' }), 'In Progress', [])).toEqual({ status: 'In Progress' });
+  });
+
+  it('the next cycle carries the series author and the reminder owner', () => {
+    const next = buildNextRecurringTask(baseTask({ createdByUserId: 'completer', seriesCreatedByUserId: 'author', reminderOffsetMinutes: 60, reminderAt: new Date(), reminderSetByUserId: 'boss' } as any)) as any;
+    expect(next.seriesCreatedByUserId).toBe('author');
+    expect(next.reminderSetByUserId).toBe('boss');
+    const root = buildNextRecurringTask(baseTask({ createdByUserId: 'u1' })) as any;
+    expect(root.seriesCreatedByUserId).toBe('u1');
+    expect(root.reminderSetByUserId).toBeUndefined();
+  });
+});
+
+describe('recurringOccurrencesInMonth — projects like the engine (start + span)', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-08-09T12:00:00Z')); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('a weekly-Monday task due Tuesday paints every Tuesday, matching the spawned cycles', () => {
+    const tip = baseTask({ startDate: new Date('2026-08-03T09:00:00+02:00'), endDate: new Date('2026-08-04T17:00:00+02:00') });
+    const m = recurringOccurrencesInMonth([tip], 2026, 7);
+    expect([...m.keys()].sort((a, b) => a - b)).toEqual([4, 11, 18, 25]);
+    // And the engine's own next cycle lands on one of those days.
+    const next = buildNextRecurringTask(tip);
+    expect(zonedParts(new Date(next.endDate as any)).day).toBe(11);
   });
 });

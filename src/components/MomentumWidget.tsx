@@ -74,6 +74,11 @@ const MomentumWidget: React.FC<{
   }, [metrics, user, timeEntries, dailyReports, now]);
 
   const myFocus = useMemo(() => focusDocs?.find((f) => f.date === today), [focusDocs, today]);
+  // A frog linked to a task books its pomodoro on that task's project/client.
+  const focusTask = useMemo(
+    () => (myFocus?.taskId ? tasks.find((t) => t.id === myFocus.taskId) : undefined),
+    [myFocus?.taskId, tasks],
+  );
   const isFriday = new Date(now).getDay() === 5;
 
   if (!user || !metrics || !gami) return null;
@@ -92,7 +97,8 @@ const MomentumWidget: React.FC<{
   };
   const toggleFocus = async () => {
     if (!myFocus) return;
-    try { await focusMutation.update(myFocus.id, { done: !myFocus.done }); } catch { /* ignore */ }
+    // Same write as MomentumView: stamp/clear completedAt (explicit null clears).
+    try { await focusMutation.update(myFocus.id, { done: !myFocus.done, completedAt: !myFocus.done ? new Date() : null } as any); } catch { /* ignore */ }
   };
 
   return (
@@ -189,6 +195,8 @@ const MomentumWidget: React.FC<{
         onClose={() => setFocusOpen(false)}
         taskTitle={myFocus?.title || 'Deep Work'}
         taskId={myFocus?.taskId}
+        projectId={focusTask?.projectId || undefined}
+        customerId={focusTask?.customerId || (focusTask as any)?.relatedCustomerId || undefined}
       />
     </Card>
   );

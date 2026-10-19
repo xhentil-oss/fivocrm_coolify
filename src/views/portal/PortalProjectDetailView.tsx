@@ -91,11 +91,36 @@ const PortalProjectDetailView: React.FC = () => {
     });
   }, [rawTasks]);
 
-  // Task comments — scoped to this client's customerId (server-side RLS), then
-  // filtered client-side to this project's tasks.
+  // Task comments. A client-visible comment carries the TASK's customerId (the
+  // project's customer), so:
+  //  · the paying customer reads `customerId == mine` (isPortalClientFor);
+  //  · a project MEMBER reads `taskId in [this project's tasks]` +
+  //    `customerId == the project's customer` — the rules prove that shape via
+  //    isPortalProjectMemberOfTask (rules test 82f). `in` takes ≤30 values, so
+  //    the expanded task always rides first and the rest fill up by list order.
+  // Either way the result is filtered client-side to this project's tasks.
+  const projectCustomerId = ((project as any)?.customerId as string | undefined) || '';
+  const memberCommentTaskIds = React.useMemo(() => {
+    if (!isProjectMember || isProjectCustomer) return [] as string[];
+    const ids = tasks.map(t => t.id);
+    // ≤30 tasks: one stable query (no re-subscribe on every expand).
+    if (ids.length <= 30) return ids;
+    const ordered = expandedTaskId && ids.includes(expandedTaskId)
+      ? [expandedTaskId, ...ids.filter(id => id !== expandedTaskId)]
+      : ids;
+    return ordered.slice(0, 30);
+  }, [isProjectMember, isProjectCustomer, tasks, expandedTaskId]);
+  const readsAsMember = isProjectMember && !isProjectCustomer;
   const { data: rawTaskComments } = useCollection<TaskComment>('taskComments', {
-    skip: !customerId,
-    where: customerId ? [{ field: 'customerId', operator: '==', value: customerId }] : undefined,
+    skip: readsAsMember
+      ? (!projectCustomerId || memberCommentTaskIds.length === 0)
+      : !customerId,
+    where: readsAsMember
+      ? [
+          { field: 'taskId', operator: 'in', value: memberCommentTaskIds },
+          { field: 'customerId', operator: '==', value: projectCustomerId },
+        ]
+      : customerId ? [{ field: 'customerId', operator: '==', value: customerId }] : undefined,
     skipTeamFilter: true,
   });
   const projectTaskIds = React.useMemo(() => new Set(tasks.map(t => t.id)), [tasks]);
@@ -256,6 +281,12 @@ const PortalProjectDetailView: React.FC = () => {
     setSendingTaskComment(taskId);
     try {
       const resolvedTeamId = (project as any)?.teamId || null;
+      // The comment is stamped with the TASK's keys, not the poster's: a project
+      // member belongs to another customer, and the rules bind a client comment
+      // to its task (customerId + businessId must equal the task's — test 82e).
+      const commentTask = tasks.find(t => t.id === taskId) as any;
+      const taskCustomerId: string = commentTask?.customerId || projectCustomerId || customerId || '';
+      const taskBusinessId: string = commentTask?.businessId || (project as any)?.businessId || '';
       const createdRef = await addDoc(collection(db, 'taskComments'), {
         taskId,
         content: text,
@@ -263,9 +294,9 @@ const PortalProjectDetailView: React.FC = () => {
         senderType: 'client',
         createdByUserId: user.uid,
         ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
-        // Isolation keys: customerId (portal client) + businessId (staff).
-        ...(customerId ? { customerId } : {}),
-        ...((project as any)?.businessId ? { businessId: (project as any).businessId } : {}),
+        // Isolation keys: customerId (portal visibility) + businessId (staff).
+        ...(taskCustomerId ? { customerId: taskCustomerId } : {}),
+        ...(taskBusinessId ? { businessId: taskBusinessId } : {}),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
       });
@@ -478,12 +509,22 @@ const PortalProjectDetailView: React.FC = () => {
                                 {task.priority}
                               </Badge>
                             )}
-                            {task.dueDate && (
-                              <span className="text-xs text-muted-foreground flex items-center gap-1">
-                                <CalendarDays className="h-3 w-3" />
-                                {task.dueDate instanceof Date ? task.dueDate.toLocaleDateString('sq-AL') : ''}
-                              </span>
-                            )}
+                            {(() => {
+                              // `endDate` is THE deadline (calendar, cron, staff
+                              // UI); `dueDate` is legacy — read only as a fallback.
+                              const raw: any = task.endDate ?? task.dueDate;
+                              const d: Date | null = !raw ? null
+                                : raw instanceof Date ? raw
+                                : typeof raw?.toDate === 'function' ? raw.toDate()
+                                : new Date(raw);
+                              if (!d || isNaN(d.getTime())) return null;
+                              return (
+                                <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                  <CalendarDays className="h-3 w-3" />
+                                  {d.toLocaleDateString('sq-AL')}
+                                </span>
+                              );
+                            })()}
                           </div>
                         </div>
                         {/* Comment count + expand chevron */}

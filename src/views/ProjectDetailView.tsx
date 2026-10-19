@@ -35,7 +35,8 @@ import { portalProjectCommentDeepLink, taskDeepLink } from '../lib/deepLinks';
 import { taskCompletedNotifications } from '../lib/taskNotifications';
 import { compareTasksBySectionThenDue, compareTasksByPriorityThenDue } from '../lib/taskSort';
 import { resolvePortalUserId } from '../lib/notifyClient';
-import { completeTask, recurringOccurrencesInMonth } from '../lib/recurringUtils';
+import { completeTask, recurringOccurrencesInMonth, hasLiveSeriesSibling, recurrenceHasEnded } from '../lib/recurringUtils';
+import { dayDiffFromToday, isOverdueDate } from '../lib/taskDue';
 import { reminderAtFromOffset } from '../lib/taskReminders';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { formatCurrency, formatCompactRange, toAll, canSeeFinancials, cn } from '../lib/utils';
@@ -619,13 +620,11 @@ const ProjectDetailView: React.FC = () => {
     [inquiry],
   );
 
+  // Overdue = the deadline's Europe/Tirane DAY has passed (src/lib/taskDue.ts) —
+  // a task due today at 12:00 is not "vonuar" at 13:00.
   const overdueTaskCount = React.useMemo(() => {
     const now = Date.now();
-    return allTopLevelTasks.filter(t => {
-      if (t.status === 'Done' || !t.endDate) return false;
-      const end = new Date(t.endDate as any).getTime();
-      return !isNaN(end) && end < now;
-    }).length;
+    return allTopLevelTasks.filter(t => t.status !== 'Done' && isOverdueDate(t.endDate, now)).length;
   }, [allTopLevelTasks]);
 
   /**
@@ -954,9 +953,10 @@ const ProjectDetailView: React.FC = () => {
     if (!date || isNaN(new Date(date).getTime())) {
       return { text: 'Pa afat', className: 'text-muted-foreground' };
     }
-    const now = new Date();
     const taskDate = new Date(date);
-    const diffDays = Math.ceil((taskDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    // Calendar days in Europe/Tirane, not ceil(ms / 24h): a task due tomorrow
+    // morning is "Nesër" even at 23:00, and one due an hour ago is "Sot".
+    const diffDays = dayDiffFromToday(taskDate) ?? 0;
     
     if (diffDays < 0) return { text: `${Math.abs(diffDays)} ditë më parë`, className: 'text-error' };
     if (diffDays === 0) return { text: 'Sot', className: 'text-warning font-medium' };
@@ -1015,7 +1015,12 @@ const ProjectDetailView: React.FC = () => {
       t.id === taskId ? 'Done' : t.status
     );
     const allDone = updatedStatuses.every(s => s === 'Done');
-    if (allDone) {
+    // A recurring task whose series goes on has just spawned (or is about to
+    // spawn) its next cycle — an OPEN task this snapshot does not contain yet.
+    // Closing the project here would mark it Completed with live work in it.
+    const completed = rawProjectTasks.find(t => t.id === taskId);
+    const seriesContinues = !!completed?.isRecurring && !!completed.recurringFrequency && !recurrenceHasEnded(completed);
+    if (allDone && !seriesContinues) {
       const now = new Date();
       // A project with a WORK cycle stays Active — the cycle reopens it next
       // period — and just records lastCompletedAt. (It used to ask isRecurring,
@@ -1082,6 +1087,50 @@ const ProjectDetailView: React.FC = () => {
     }
   }, [project, projectMutation, toast, user]);
 
+  // ── One completion / re-open path for the board AND the list checkbox ──
+  // Both go through the shared completeTask() (blocker guard, next cycle,
+  // notifications) with the RAW project task list — the role-filtered
+  // `allTasks` hid other people's blockers, which switched the guard off.
+  const canChangeTasks = !!permissions.canEdit && !isGuestOnProject;
+
+  const completeProjectTask = async (task: Task) => {
+    const outcome = await completeTask(task, {
+      createTask: (data) => taskMutation.create(data as any),
+      updateTask: (id, data) => handleTaskUpdate(id, data),
+      allTasks: rawProjectTasks || [],
+      // An archived/cancelled project stops the series (no next cycle).
+      projects: project ? [project] : undefined,
+      claimNextCycle: claimTaskNextCycle,
+      releaseNextCycle: releaseTaskNextCycle,
+    });
+    if (outcome.kind === 'blocked') {
+      toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
+    } else if (outcome.kind === 'error') {
+      console.error('[Recurring] krijimi i ciklit tjetër dështoi:', outcome.error);
+    }
+    // Any non-blocked outcome closed the task — tell creator/assignee/collaborators.
+    if (outcome.kind !== 'blocked' && user?.uid) {
+      taskCompletedNotifications(task, user.uid, user.displayName || undefined).forEach(n =>
+        notificationMutation.create(n as any).catch(err => console.error('[Notifications] task_completed dërgim dështoi:', err)));
+    }
+    return outcome;
+  };
+
+  // Re-opening a Done task (same rule as TasksView / TaskDetailPanel): clear
+  // `completedAt` with an explicit null, and give a recurring tip its spawn flag
+  // back ONLY when its series has no live occurrence left — re-arming while the
+  // child is alive would double the series on the next completion.
+  const reopenProjectTask = async (task: Task, status: Task['status']) => {
+    const patch: Partial<Task> = task.status === 'Done'
+      ? {
+          status,
+          completedAt: null,
+          ...(task.isRecurring && !hasLiveSeriesSibling(task, rawProjectTasks || []) ? { nextCycleCreated: false } : {}),
+        }
+      : { status };
+    await handleTaskUpdate(task.id, patch);
+  };
+
   // --- @dnd-kit drag-and-drop for kanban ---
   // Mouse drags on a small move; touch drags only after a 200ms hold so scrolling
   // the board on a phone isn't hijacked into a drag.
@@ -1102,13 +1151,14 @@ const ProjectDetailView: React.FC = () => {
     // ran completeTask: the claim wrote `nextCycleCreated: true` (guests ARE
     // business members, rules accept it), the next cycle spawned, the status
     // write no-opped — a corrupted, still-open series plus false notifications.
-    if (isGuestOnProject) return;
+    if (!canChangeTasks) return;
     const { active, over } = event;
     if (!over) return;
     const taskId = String(active.id);
     const overId = String(over.id);
-    // Use allTasks (unfiltered) so drag works even when filters are active
-    const allTasksFlat = allTasks || [];
+    // RAW project tasks (not the role-filtered `allTasks`): the lookup works
+    // even when filters are active, and completeTask sees every blocker.
+    const allTasksFlat = rawProjectTasks || [];
     const targetStatus = columns.find(c => c.status === overId)?.status
       ?? columns.find(c => allTasksFlat.filter(t => t.status === c.status).some(t => t.id === overId))?.status;
     if (!targetStatus) return;
@@ -1119,27 +1169,10 @@ const ProjectDetailView: React.FC = () => {
     // dependency guard and "after completion" recurrence behave exactly as in
     // the list and detail panel.
     if (targetStatus === 'Done') {
-      const outcome = await completeTask(task, {
-        createTask: (data) => taskMutation.create(data as any),
-        updateTask: (id, data) => handleTaskUpdate(id, data),
-        allTasks: allTasksFlat,
-        // An archived/cancelled project stops the series (no next cycle).
-        projects: project ? [project] : undefined,
-        claimNextCycle: claimTaskNextCycle,
-        releaseNextCycle: releaseTaskNextCycle,
-      });
-      if (outcome.kind === 'blocked') {
-        toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
-      } else if (outcome.kind === 'error') {
-        console.error('[Recurring] krijimi i ciklit tjetër dështoi (drag):', outcome.error);
-      }
-      // Any non-blocked outcome closed the task — tell creator/assignee/collaborators.
-      if (outcome.kind !== 'blocked' && user?.uid) {
-        taskCompletedNotifications(task, user.uid, user.displayName || undefined).forEach(n =>
-          notificationMutation.create(n as any).catch(err => console.error('[Notifications] task_completed dërgim dështoi:', err)));
-      }
+      await completeProjectTask(task);
     } else {
-      await handleTaskUpdate(taskId, { status: targetStatus });
+      // Out of Done → the re-open path (completedAt cleared, series re-armed).
+      await reopenProjectTask(task, targetStatus as Task['status']);
     }
   };
 
@@ -1628,10 +1661,13 @@ const ProjectDetailView: React.FC = () => {
                             <div className="flex min-w-0 items-center gap-3">
                               <Checkbox
                                 checked={done}
-                                disabled={isGuestOnProject}
+                                disabled={!canChangeTasks}
                                 onCheckedChange={async (checked) => {
-                                  if (isGuestOnProject) return;
-                                  await handleTaskUpdate(task.id, { status: checked ? 'Done' : 'Todo' });
+                                  if (!canChangeTasks) return;
+                                  // Same completion/re-open path as the board —
+                                  // never a raw status write.
+                                  if (checked) await completeProjectTask(task);
+                                  else await reopenProjectTask(task, 'Todo');
                                 }}
                                 onClick={(e) => e.stopPropagation()}
                                 className={cn('shrink-0', done && 'border-brand-pos bg-brand-pos')}

@@ -20,6 +20,8 @@
 
 import { getTimestampMs } from '../utils';
 import { entryDurationMinutes } from '../timeTracking';
+import { taskCompletedMs } from '../taskSort';
+import { zonedParts, zonedDate } from '../recurringUtils';
 import type { Task, TimeEntry, DailyReport, Goal, StandupEntry } from '../../types';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -330,24 +332,28 @@ function computeMemberMetrics(member: MomentumMember, ctx: MemberCtx): MemberMet
   // ── Task-derived measures ──
   const myTasks = ctx.tasks.filter((t) => t.assignedToUserId === userId && !t.parentTaskId);
 
+  // "When was it done" = `completedAt` (taskCompletedMs; legacy rows fall back
+  // to updatedAt). `updatedAt` alone moved on every edit and cron touch, so a
+  // week-old task re-counted as throughput the day someone renamed it.
+  const doneMs = (t: Task) => taskCompletedMs(t as any) ?? 0;
   const completedInWindow = myTasks.filter(
-    (t) => t.status === 'Done' && inRange(getTimestampMs(t.updatedAt), rangeStart, rangeEnd),
+    (t) => t.status === 'Done' && inRange(doneMs(t), rangeStart, rangeEnd),
   );
   const completedPrev = myTasks.filter(
-    (t) => t.status === 'Done' && inRange(getTimestampMs(t.updatedAt), prevStart, prevEnd),
+    (t) => t.status === 'Done' && inRange(doneMs(t), prevStart, prevEnd),
   ).length;
 
   // On-time delivery (lag): of completed-with-a-due-date, fraction done on/before due.
   const dueCompleted = completedInWindow.filter((t) => taskDue(t) > 0);
   const onTimeRate = dueCompleted.length
-    ? dueCompleted.filter((t) => getTimestampMs(t.updatedAt) <= endOfDay(taskDue(t))).length / dueCompleted.length
+    ? dueCompleted.filter((t) => doneMs(t) <= endOfDay(taskDue(t))).length / dueCompleted.length
     : null;
 
   // Cycle time (lag): start/created → done, in days.
   const cycleDurations = completedInWindow
     .map((t) => {
       const from = getTimestampMs((t as any).startDate) || getTimestampMs(t.createdAt);
-      const to = getTimestampMs(t.updatedAt);
+      const to = doneMs(t);
       if (!from || !to || to < from) return null;
       return (to - from) / 86_400_000;
     })
@@ -445,10 +451,11 @@ function mkLead(key: string, label: string, value: number, target: number, unit:
   return { key, label, value: round1(value), target, unit, pct: Math.round(pct), onTarget: value >= target };
 }
 
+/** Last instant of the business-zone (Europe/Tirane) day containing `ms` —
+ *  never the machine's day (`setHours`), or on-time depends on where it runs. */
 function endOfDay(ms: number): number {
-  const d = new Date(ms);
-  d.setHours(23, 59, 59, 999);
-  return d.getTime();
+  const p = zonedParts(new Date(ms));
+  return zonedDate(p.year, p.month, p.day, 23, 59, 59, 999).getTime();
 }
 
 // ────────────────────────────────────────────────────────────────────────────

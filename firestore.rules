@@ -526,9 +526,100 @@ service cloud.firestore {
       // already closed for invoices.
       // A Viewer is read-only by role; until now the UI was the only gate and
       // the detail panel did not even apply it (test 39d).
-      allow create: if canCreateBusinessDoc() && !isViewerRole();
-      allow update: if canManageBusinessDoc() && keepsBusinessId() && !isViewerRole();
+      // Assignment and the client-visibility key are checked too (tests 82a–82d).
+      // Created AS YOURSELF (useMutation stamps createdByUserId = uid; a next
+      // recurring occurrence is created by its completer — the original creator
+      // must ride in a separate field, never here).
+      allow create: if canCreateBusinessDoc() && !isViewerRole()
+        && (isSuperAdmin() || request.resource.data.get('createdByUserId', '') == request.auth.uid)
+        && taskAssigneeAllowed(request.resource.data.businessId, request.resource.data.get('teamId', ''), null)
+        && taskCustomerAllowed(null);
+      // teamId and createdByUserId are pinned (a department / authorship never
+      // moves by edit — the cron, Admin SDK, bypasses rules for its own repairs);
+      // a legacy row with no teamId may be given one of its own business.
+      allow update: if canManageBusinessDoc() && keepsBusinessId() && !isViewerRole()
+        && (isSuperAdmin()
+            || (request.resource.data.get('createdByUserId', null) == resource.data.get('createdByUserId', null)
+                && (request.resource.data.get('teamId', null) == resource.data.get('teamId', null)
+                    || (resource.data.get('teamId', '') == ''
+                        && businessOfTeam(request.resource.data.get('teamId', '')) == resource.data.businessId))))
+        && taskAssigneeAllowed(resource.data.businessId, resource.data.get('teamId', ''),
+                               resource.data.get('assignedToUserId', null))
+        && taskCustomerAllowed(resource.data.get('customerId', null));
       allow delete: if canManageBusinessDoc() && !isViewerRole();
+    }
+
+    // "Cakto detyra te të tjerët" (CLAUDE.md → Roles: canAssignTasks). Handing a
+    // task to SOMEONE ELSE needs either an assigning role (Admin/Manager/
+    // SalesAgent, owner — the `roles` claim) or the per-member grant
+    // `teamMembers.canAssignTasks` on the caller's membership row of the active
+    // department (`tid` claim) or of the task's own department. Assigning to
+    // yourself, clearing the assignee, or leaving it unchanged is always fine.
+    // A NEXT OCCURRENCE of a recurring series is created by whoever completed
+    // the previous one and inherits its assignee — allowed when `seriesId`
+    // names a real recurring task of the same business (the browser half of
+    // the recurring-tasks engine, src/lib/recurringUtils.ts).
+    // Known approximation: a person whose grant sits on a row of a THIRD team
+    // (neither the active one nor the task's) is refused here although
+    // grantsCanAssignTasks() allows it in the UI — rules cannot scan rows.
+    function membershipGrantsAssign(teamId) {
+      return teamId is string && teamId != ''
+        && exists(membershipRef(teamId, request.auth.uid))
+        && get(membershipRef(teamId, request.auth.uid)).data.get('status', 'Active') == 'Active'
+        && (get(membershipRef(teamId, request.auth.uid)).data.get('canAssignTasks', false) == true
+            || get(membershipRef(teamId, request.auth.uid)).data.get('role', '') in ['Admin', 'Manager', 'SalesAgent']);
+    }
+    function continuesRecurringSeries(businessId) {
+      return request.resource.data.get('isRecurring', false) == true
+        && request.resource.data.get('seriesId', '') is string
+        && request.resource.data.get('seriesId', '') != ''
+        && exists(/databases/$(database)/documents/tasks/$(request.resource.data.seriesId))
+        && get(/databases/$(database)/documents/tasks/$(request.resource.data.seriesId)).data.get('businessId', '') == businessId
+        && get(/databases/$(database)/documents/tasks/$(request.resource.data.seriesId)).data.get('isRecurring', false) == true;
+    }
+    function taskAssigneeAllowed(businessId, teamId, previousAssignee) {
+      return request.resource.data.get('assignedToUserId', null) == null
+        || request.resource.data.get('assignedToUserId', null) == ''
+        || request.resource.data.get('assignedToUserId', null) == request.auth.uid
+        || request.resource.data.get('assignedToUserId', null) == previousAssignee
+        || isSuperAdmin()
+        || claimRoles().hasAny(['owner', 'admin', 'manager', 'salesagent'])
+        || isBusinessOwner(businessId)
+        || membershipGrantsAssign(claimTid())
+        || membershipGrantsAssign(teamId)
+        || (previousAssignee == null && continuesRecurringSeries(businessId));
+    }
+
+    // customerId on a task IS the portal-visibility switch (the client reads
+    // `customerId == mine`). It may be: unchanged, cleared, the customer of the
+    // task's own project (useFirestore derives it from the project on create;
+    // TaskDetailPanel / ProjectsView re-derive it on a project move or a change
+    // of the project's customer), the customer of the parent task (a subtask) or
+    // of the series root (a next occurrence) in the same business — or any
+    // customer of the same business when an Admin/Manager sets it by hand.
+    // Anything else would publish an internal task to another client's portal.
+    function taskCustomerAllowed(previousCustomerId) {
+      return request.resource.data.get('customerId', null) == null
+        || request.resource.data.get('customerId', null) == ''
+        || request.resource.data.get('customerId', null) == previousCustomerId
+        || isSuperAdmin()
+        || customerOfProjectIs(request.resource.data.get('projectId', ''), request.resource.data.customerId)
+        || customerOfTaskIs(request.resource.data.get('parentTaskId', ''), request.resource.data.customerId)
+        || customerOfTaskIs(request.resource.data.get('seriesId', ''), request.resource.data.customerId)
+        || (isBusinessAdmin(request.resource.data.businessId)
+            && customerBusiness(request.resource.data.customerId) == request.resource.data.businessId);
+    }
+    function customerOfProjectIs(projectId, customerId) {
+      return projectId is string && projectId != ''
+        && exists(/databases/$(database)/documents/projects/$(projectId))
+        && get(/databases/$(database)/documents/projects/$(projectId)).data.get('businessId', '') == request.resource.data.businessId
+        && get(/databases/$(database)/documents/projects/$(projectId)).data.get('customerId', '') == customerId;
+    }
+    function customerOfTaskIs(taskId, customerId) {
+      return taskId is string && taskId != ''
+        && exists(/databases/$(database)/documents/tasks/$(taskId))
+        && get(/databases/$(database)/documents/tasks/$(taskId)).data.get('businessId', '') == request.resource.data.businessId
+        && get(/databases/$(database)/documents/tasks/$(taskId)).data.get('customerId', '') == customerId;
     }
 
     // ── Phase 4.3b: crown-jewel CRM records — server-side tenant RLS.
@@ -1854,20 +1945,38 @@ service cloud.firestore {
     match /taskComments/{docId} {
       // Staff via businessId; portal client via customerId (stamped on create +
       // derived from the parent task by backfill-customerid).
+      // A portal MEMBER of the task's project (projects.memberUserIds — not the
+      // paying customer) reads its CLIENT-VISIBLE comments (customerId set). The
+      // portal queries `taskId in [...]` + `customerId == <the project's>`, which
+      // pins both values this clause needs (test 82f).
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
+        || (resource.data.get('customerId', '') != ''
+            && isPortalProjectMemberOfTask(resource.data.taskId))
         || isSuperAdmin();
-      // A comment is written AS YOURSELF, either by staff inside their tenant
-      // (useMutation stamps businessId + createdByUserId) or by the portal client
-      // on a task of their own customer (senderType 'client', customerId = theirs —
-      // PortalProjectDetailView). Was `teamId is string || senderType == 'client'`:
-      // any signed-in user could post into any tenant's task, as anyone.
+      // A comment is written AS YOURSELF and is BOUND TO ITS TASK (tests 62, 82e):
+      //  · staff — inside their tenant, on a task of that same business; it is
+      //    internal (no customerId) or client-visible with exactly the task's
+      //    customerId (never another client's);
+      //  · the portal client of the task's customer, or a portal member of the
+      //    task's project — senderType 'client', businessId and customerId copied
+      //    from the task. Before, the comment only had to NAME the poster's own
+      //    customer: any task id of any tenant was accepted.
       allow create: if isAuth()
         && request.resource.data.get('createdByUserId', '') == request.auth.uid
         && (
-          canCreateBusinessDoc()
+          isSuperAdmin()
+          || (canCreateBusinessDoc()
+              && taskOfCommentIn(request.resource.data.businessId)
+              && (request.resource.data.get('customerId', null) == null
+                  || request.resource.data.get('customerId', null) == ''
+                  || request.resource.data.get('customerId', null) == commentTask().get('customerId', '')))
           || (request.resource.data.get('senderType', '') == 'client'
-              && isPortalClientFor(request.resource.data.get('customerId', '')))
+              && taskOfCommentIn(request.resource.data.get('businessId', ''))
+              && commentTask().get('customerId', '') != ''
+              && request.resource.data.get('customerId', '') == commentTask().get('customerId', '')
+              && (isPortalClientFor(commentTask().get('customerId', ''))
+                  || isPortalProjectMember(commentTask().get('projectId', ''))))
         );
       // Editing stays AUTHOR-only (and never re-tenants the row). A reaction is not
       // an edit: it is a collaborative action, so anyone who can already READ the
@@ -1876,30 +1985,83 @@ service cloud.firestore {
       // Without this branch every reaction on someone ELSE's comment was
       // denied by the rules and failed silently in the UI.
       allow update: if isAuth() && (
+        // The author edits the CONTENT only: the task, the client-visibility key
+        // and the tenant are pinned (an edit used to be able to re-target a
+        // comment onto another task, or publish it to another client).
         (resource.data.createdByUserId == request.auth.uid && keepsBusinessId()
-         && request.resource.data.get('createdByUserId', '') == resource.data.get('createdByUserId', ''))
+         && request.resource.data.get('createdByUserId', '') == resource.data.get('createdByUserId', '')
+         && request.resource.data.get('taskId', null) == resource.data.get('taskId', null)
+         && request.resource.data.get('customerId', null) == resource.data.get('customerId', null))
         || (
           request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['reactions', 'updatedAt'])
           && (
             isBusinessMember(resource.data.businessId)
             || isPortalClientFor(resource.data.customerId)
+            || (resource.data.get('customerId', '') != ''
+                && isPortalProjectMemberOfTask(resource.data.get('taskId', '')))
             || isSuperAdmin()
           )
         )
+        // Re-point on a task move (TaskDetailPanel.changeProject): non-Viewer
+        // staff of the business may change ONLY customerId, and only to the
+        // task's CURRENT customerId or to nothing — a comment follows its task's
+        // client, it is never published to an arbitrary one (test 82i).
+        || (
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['customerId', 'updatedAt'])
+          && isBusinessMember(resource.data.businessId)
+          && tenantActive(resource.data.businessId)
+          && !isViewerRole()
+          && (request.resource.data.get('customerId', null) == null
+              || request.resource.data.get('customerId', null) == ''
+              || (exists(/databases/$(database)/documents/tasks/$(resource.data.taskId))
+                  && get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.get('businessId', '') == resource.data.businessId
+                  && get(/databases/$(database)/documents/tasks/$(resource.data.taskId)).data.get('customerId', '') == request.resource.data.customerId))
+        )
       );
-      // Deleting is author OR tenant staff — the task-delete cascade removes the
-      // comments of a deleted task, and those are rarely all authored by whoever
-      // deletes the task.
-      allow delete: if (isAuth() && resource.data.createdByUserId == request.auth.uid)
-        || canManageBusinessDoc();
+      // Deleting: the author, an Admin/Manager of the tenant, or — for the
+      // task-delete cascade (src/lib/deleteCascade.ts), whose comments are rarely
+      // all authored by whoever deletes the task — the task's creator or
+      // assignee, the same people TasksView lets delete the task. Never a Viewer,
+      // and no longer "any colleague" (test 82g).
+      allow delete: if isSuperAdmin()
+        || (isAuth() && resource.data.createdByUserId == request.auth.uid)
+        || (canManageBusinessDoc() && !isViewerRole()
+            && (isBusinessAdmin(resource.data.businessId)
+                || ownsTaskOfComment(resource.data.get('taskId', ''), resource.data.businessId)));
     }
 
+    // The task a comment is being written on (request side).
+    function commentTask() {
+      return get(/databases/$(database)/documents/tasks/$(request.resource.data.taskId)).data;
+    }
+    function taskOfCommentIn(businessId) {
+      return request.resource.data.get('taskId', '') is string
+        && request.resource.data.get('taskId', '') != ''
+        && businessId is string && businessId != ''
+        && exists(/databases/$(database)/documents/tasks/$(request.resource.data.taskId))
+        && commentTask().get('businessId', '') == businessId;
+    }
+    function isPortalProjectMemberOfTask(taskId) {
+      return taskId is string && taskId != ''
+        && exists(/databases/$(database)/documents/tasks/$(taskId))
+        && isPortalProjectMember(get(/databases/$(database)/documents/tasks/$(taskId)).data.get('projectId', ''));
+    }
+    function ownsTaskOfComment(taskId, businessId) {
+      return taskId is string && taskId != ''
+        && exists(/databases/$(database)/documents/tasks/$(taskId))
+        && get(/databases/$(database)/documents/tasks/$(taskId)).data.get('businessId', '') == businessId
+        && (get(/databases/$(database)/documents/tasks/$(taskId)).data.get('createdByUserId', '') == request.auth.uid
+            || get(/databases/$(database)/documents/tasks/$(taskId)).data.get('assignedToUserId', '') == request.auth.uid);
+    }
+
+    // Collaborator records follow the task: written by non-Viewer staff only.
     match /taskCollaborators/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateBusinessDoc();
-      allow update: if canManageBusinessDoc() && keepsBusinessId();
-      allow delete: if canManageBusinessDoc();
+      allow create: if canCreateBusinessDoc() && !isViewerRole();
+      allow update: if canManageBusinessDoc() && keepsBusinessId() && !isViewerRole();
+      allow delete: if canManageBusinessDoc() && !isViewerRole();
     }
 
     match /clientRequests/{docId} {

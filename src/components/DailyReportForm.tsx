@@ -1,7 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useMutation, getGlobalBusinessId } from '../hooks/useFirestore';
+import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { Label } from './ui/label';
@@ -26,7 +28,7 @@ import {
   unplannedOutcome,
 } from '../lib/productivity/dailyReportPlan';
 import { checkDailyReportQuality } from '../lib/productivity/dailyReportQuality';
-import { completeTask } from '../lib/recurringUtils';
+import { completeTask, reopenTaskPatch, seriesIdOf } from '../lib/recurringUtils';
 import { dueState } from '../lib/crm/followUp';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { timeEntriesFromOutcomes } from '../lib/finance/timeEntries';
@@ -35,6 +37,40 @@ import type {
   Customer, DailyReport, DailyTaskOutcome, Project, Task, Lead,
   StandupEntry, TaskOutcomeState, TeamMember, Notification,
 } from '../types';
+
+/**
+ * The tasks the completion and re-open guards need beyond the person's OWN list.
+ * `myTasks` holds only the tasks assigned to them, so a blocker owned by a
+ * colleague was "unknown" to the dependency guard (unknown never blocks) and a
+ * recurring tip's live child, if assigned elsewhere, was invisible to the
+ * re-arm check. Reads are kept small: each missing blocker by id, and each
+ * re-opened/completed series by `seriesId` (businessId-scoped — the rules are
+ * not filters). A failed read degrades to "unknown", exactly like before.
+ */
+async function loadGuardContext(base: Task[], candidates: Task[]): Promise<Task[]> {
+  const byId = new Map(base.map(t => [t.id, t] as const));
+  const missing = new Set<string>();
+  for (const t of candidates) for (const id of t.dependsOn || []) if (id && !byId.has(id)) missing.add(id);
+  const bid = getGlobalBusinessId();
+  const seriesIds = new Set(candidates.filter(t => t.isRecurring).map(t => seriesIdOf(t)));
+  const [blockers, siblings] = await Promise.all([
+    Promise.all([...missing].map(id =>
+      getDoc(doc(db, 'tasks', id))
+        .then(snap => (snap.exists() ? ({ id: snap.id, ...snap.data() } as Task) : null))
+        .catch(() => null),
+    )),
+    bid
+      ? Promise.all([...seriesIds].map(sid =>
+          getDocs(query(collection(db, 'tasks'), where('businessId', '==', bid), where('seriesId', '==', sid)))
+            .then(q => q.docs.map(d => ({ id: d.id, ...d.data() } as Task)))
+            .catch(() => [] as Task[]),
+        ))
+      : Promise.resolve([] as Task[][]),
+  ]);
+  for (const t of blockers) if (t) byId.set(t.id, t);
+  for (const list of siblings) for (const t of list) if (!byId.has(t.id)) byId.set(t.id, t);
+  return [...byId.values()];
+}
 
 /** The three answers a planned task can get, in the order they are offered. */
 const OUTCOME_STATES: Array<{ key: TaskOutcomeState; label: string; cls: string }> = [
@@ -328,6 +364,15 @@ const DailyReportForm: React.FC<DailyReportFormProps> = ({
       // tell two different stories about the same day.
       const statusUpdates = taskStatusUpdates(rawOutcomes);
       const taskById = new Map((myTasks || []).map(t => [t.id, t]));
+      // Completions and re-opens need tasks outside this person's own list (a
+      // colleague's blocker, the series' live child) — load just those.
+      const guardCandidates = statusUpdates
+        .map(u => ({ u, t: taskById.get(u.taskId) }))
+        .filter((x): x is { u: typeof x.u; t: Task } => !!x.t && (x.u.status === 'Done') !== (x.t.status === 'Done'))
+        .map(x => x.t);
+      const guardTasks = guardCandidates.length > 0
+        ? await loadGuardContext(myTasks || [], guardCandidates)
+        : (myTasks || []);
       const blockedTaskIds = new Set<string>();
       const statusResults = await Promise.allSettled(
         statusUpdates.map(u => {
@@ -340,7 +385,7 @@ const DailyReportForm: React.FC<DailyReportFormProps> = ({
             return completeTask(t, {
               createTask: (data) => taskMutation.create(data as any),
               updateTask: (id, data) => taskMutation.update(id, data),
-              allTasks: myTasks || [],
+              allTasks: guardTasks,
               // An archived/cancelled project stops the series (no next cycle).
               projects: projects || [],
               claimNextCycle: claimTaskNextCycle,
@@ -348,6 +393,12 @@ const DailyReportForm: React.FC<DailyReportFormProps> = ({
             }).then(outcome => {
               if (outcome.kind === 'blocked') blockedTaskIds.add(u.taskId);
             });
+          }
+          // A task done earlier today and now answered "në progres" is a RE-OPEN:
+          // completedAt cleared, and a recurring tip re-armed only when its
+          // series has no live occurrence (reopenTaskPatch).
+          if (t && t.status === 'Done' && u.status !== 'Done') {
+            return taskMutation.update(u.taskId, reopenTaskPatch(t, u.status, guardTasks) as any);
           }
           return taskMutation.update(u.taskId, { status: u.status } as any);
         }),

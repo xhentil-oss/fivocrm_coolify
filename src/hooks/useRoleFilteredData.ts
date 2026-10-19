@@ -79,9 +79,12 @@ export function useFilteredProjects<T extends Partial<Project> & { id: string }>
 
     const myProjectIds = new Set<string>();
 
-    // Projects they created
+    // Projects they created, or are RESPONSIBLE for (the project lead — before
+    // this, a Member named responsible on a project with no task of theirs yet
+    // could not see the project they were accountable for)
     projects.forEach(p => {
       if (matchesUser(p.createdByUserId, userIds)) myProjectIds.add(p.id);
+      if (matchesUser(p.responsibleUserId, userIds)) myProjectIds.add(p.id);
     });
 
     // Projects where they are explicitly listed as a member

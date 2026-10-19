@@ -253,6 +253,13 @@ const MomentumView: React.FC = () => {
   const myMetrics = useMemo(() => team.members.find((m) => m.userId === user?.uid), [team, user]);
   const myGami = user ? gamiByUser.get(user.uid) : undefined;
   const myFocus = useMemo(() => focusDocs?.find((f) => f.date === today), [focusDocs, today]);
+  // A frog linked to a real task books its pomodoro on that task's project /
+  // client, so the focus hours land in the profitability engine instead of as
+  // unattributed internal time.
+  const focusTask = useMemo(
+    () => (myFocus?.taskId ? (rawTasks || []).find((t) => t.id === myFocus.taskId) : undefined),
+    [myFocus?.taskId, rawTasks],
+  );
 
   // ── Bretkosa e Ditës (Eat That Frog) ──
   const saveFocus = async () => {
@@ -281,7 +288,9 @@ const MomentumView: React.FC = () => {
   const toggleFocus = async () => {
     if (!myFocus) return;
     try {
-      await focusMutation.update(myFocus.id, { done: !myFocus.done, completedAt: !myFocus.done ? new Date() : undefined } as any);
+      // Un-eating the frog CLEARS completedAt with an explicit null —
+      // `undefined` is stripped by removeUndefined(), so the old stamp stayed.
+      await focusMutation.update(myFocus.id, { done: !myFocus.done, completedAt: !myFocus.done ? new Date() : null } as any);
       if (!myFocus.done) toast({ title: '🎉 E hëngre bretkosën!', description: 'Pjesa më e vështirë e ditës mbaroi.' });
     } catch { /* ignore */ }
   };
@@ -565,6 +574,8 @@ const MomentumView: React.FC = () => {
         onClose={() => setFocusOpen(false)}
         taskTitle={myFocus?.title || 'Deep Work'}
         taskId={myFocus?.taskId}
+        projectId={focusTask?.projectId || undefined}
+        customerId={focusTask?.customerId || (focusTask as any)?.relatedCustomerId || undefined}
       />
     </div>
   );

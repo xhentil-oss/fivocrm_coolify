@@ -545,9 +545,43 @@ export function workCycleTaskAction(task: WorkCycleTask): WorkCycleTaskAction {
   return task.status === 'Done' ? 'reopen' : 'carry';
 }
 
-/** A task date moved by `periods` work cycles (months clamped, never setMonth). */
-export function shiftByWorkCycles(value: unknown, cycle: WorkCycle, periods: number): Date | null {
+/**
+ * A task date moved by `periods` work cycles (months clamped, never setMonth).
+ * `anchorDay` keeps a month-end task on its day: without it 31 Jan -> 28 Feb ->
+ * 28 Mar -> ... and the task drifted to the 28th for the rest of the contract.
+ */
+export function shiftByWorkCycles(value: unknown, cycle: WorkCycle, periods: number, anchorDay?: number | null): Date | null {
   const d = cycleDate(value);
   if (!d || periods <= 0) return d;
-  return cycle === 'weekly' ? addCycleDays(d, 7 * periods) : addCycleMonths(d, periods);
+  return cycle === 'weekly' ? addCycleDays(d, 7 * periods) : addCycleMonths(d, periods, anchorDay ?? undefined);
+}
+
+/**
+ * The day-of-month a cycled task date is anchored on. A stored anchor counts
+ * only while the date still IS that anchor clamped to its month (28 Feb <- 31):
+ * once a person moves the date by hand, the new day becomes the anchor. Null
+ * when the date is unusable.
+ */
+export function resolveCycleAnchorDay(value: unknown, storedAnchor?: number | null): number | null {
+  const d = cycleDate(value);
+  if (!d) return null;
+  const p = zp(d);
+  if (typeof storedAnchor === 'number' && storedAnchor >= 1 && storedAnchor <= 31
+    && Math.min(storedAnchor, dim(p.year, p.month)) === p.day) return storedAnchor;
+  return p.day;
+}
+
+/**
+ * How many work periods THIS task must move to land in the period containing
+ * `now`: the periods between its OWN period (deadline, else start) and the
+ * current one. 0 when it is already dated in the current or a later period, or
+ * has no usable date — such a task is not moved. Shifting every task by the
+ * project's gap pushed a task already planned for this month into next month.
+ */
+export function taskPeriodsBehind(task: WorkCycleTask, cycle: WorkCycle, now: Date): number {
+  const ref = cycleDate(task.endDate) || cycleDate(task.dueDate) || cycleDate(task.startDate);
+  if (!ref) return 0;
+  if (ref >= workPeriodStart(cycle, now)) return 0;
+  const n = workPeriodsSince(cycle, workPeriodKey(cycle, ref), now);
+  return n && n > 0 ? n : 0;
 }

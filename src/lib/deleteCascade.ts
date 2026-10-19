@@ -3,6 +3,7 @@ import {
   collection,
   deleteDoc,
   doc as docRefOf,
+  getDoc,
   getDocs,
   query,
   updateDoc,
@@ -62,16 +63,31 @@ function scoped(col: string, businessId: string, field: string, value: string) {
   );
 }
 
+/** Shown when logged hours cannot be unlinked by the caller (the rules let a
+ *  non-Admin/Manager write only their OWN time entries, and nobody touches a
+ *  row inside a closed month). The task is then NOT deleted: a deleted task
+ *  with rows still pointing at it is exactly the dangling state this module
+ *  exists to prevent. */
+export const TIME_ENTRIES_UNLINK_DENIED =
+  "Detyra ka orë të regjistruara që s'mund t'i shkëpusësh — kërko një Admin/Manager.";
+
+/** Deferred writes — built first, run in phases (hours, other satellites,
+ *  subtasks, the task) so a refused phase stops before anything is lost. */
+type Op = () => Promise<unknown>;
+
 /** Satellites of ONE task id: delete comments/collaborators, unlink hours,
  *  delete its never-sent draft invoice (an issued one is unlinked instead).
  *  `processedInvoices` dedupes invoices linked by BOTH taskId and projectId,
- *  so the project cascade doesn't count (or write) them twice. */
+ *  so the project cascade doesn't count (or write) them twice. Hours go into
+ *  `timeOps` — they run FIRST, because they are the writes the rules most
+ *  often refuse (someone else's row / a closed month). */
 async function cascadeOneTask(
   taskId: string,
   businessId: string,
   summary: TaskCascadeSummary,
-  ops: Promise<unknown>[],
+  ops: Op[],
   processedInvoices: Set<string>,
+  timeOps: Op[],
 ) {
   const [commentsSnap, collaboratorsSnap, timeSnap, invoicesSnap, dependantsSnap] = await Promise.all([
     getDocs(scoped('taskComments', businessId, 'taskId', taskId)),
@@ -83,12 +99,12 @@ async function cascadeOneTask(
   // Tasks that were BLOCKED by this one: drop the dead id, or their 🔒 chip
   // keeps pointing at nothing ("S'mund të përfundohet para varësisë" for a
   // task that no longer exists).
-  ops.push(...dependantsSnap.docs.map(d => updateDoc(d.ref, { dependsOn: arrayRemove(taskId), updatedAt: new Date() })));
+  ops.push(...dependantsSnap.docs.map(d => () => updateDoc(d.ref, { dependsOn: arrayRemove(taskId), updatedAt: new Date() })));
   summary.comments += commentsSnap.size;
   summary.collaborators += collaboratorsSnap.size;
   summary.timeEntriesUnlinked += timeSnap.size;
-  ops.push(...commentsSnap.docs.map(d => deleteDoc(d.ref)));
-  ops.push(...collaboratorsSnap.docs.map(d => deleteDoc(d.ref)));
+  ops.push(...commentsSnap.docs.map(d => () => deleteDoc(d.ref)));
+  ops.push(...collaboratorsSnap.docs.map(d => () => deleteDoc(d.ref)));
   // Hours are payroll history: unlink the dead task, keep the row (and its
   // projectId — the project cascade clears that separately when relevant).
   // A RUNNING entry (endTime null/missing) is stopped first: the task panel was
@@ -101,9 +117,9 @@ async function cascadeOneTask(
       const start = entry.startTime?.toDate ? entry.startTime.toDate() : new Date(entry.startTime);
       const end = new Date();
       const duration = isNaN(start.getTime()) ? 0 : Math.max(0, Math.floor((end.getTime() - start.getTime()) / 60000));
-      ops.push(updateDoc(d.ref, { taskId: '', endTime: end, duration, updatedAt: end }));
+      timeOps.push(() => updateDoc(d.ref, { taskId: '', endTime: end, duration, updatedAt: end }));
     } else {
-      ops.push(updateDoc(d.ref, { taskId: '', updatedAt: new Date() }));
+      timeOps.push(() => updateDoc(d.ref, { taskId: '', updatedAt: new Date() }));
     }
   }
   for (const d of invoicesSnap.docs) {
@@ -114,13 +130,32 @@ async function cascadeOneTask(
       summary.draftInvoicesDeleted += 1;
       // Its line items go with it, or they'd dangle on a dead invoiceId.
       const itemsSnap = await getDocs(scoped('invoiceItems', businessId, 'invoiceId', d.id));
-      ops.push(...itemsSnap.docs.map(i => deleteDoc(i.ref)));
-      ops.push(deleteDoc(d.ref));
+      ops.push(...itemsSnap.docs.map(i => () => deleteDoc(i.ref)));
+      ops.push(() => deleteDoc(d.ref));
     } else {
       summary.invoicesUnlinked += 1;
-      ops.push(updateDoc(d.ref, { taskId: '', updatedAt: new Date() }));
+      ops.push(() => updateDoc(d.ref, { taskId: '', updatedAt: new Date() }));
     }
   }
+}
+
+/** Run one phase; returns how many writes were refused. */
+async function runPhase(ops: Op[]): Promise<number> {
+  const results = await Promise.allSettled(ops.map(op => op()));
+  return results.filter(r => r.status === 'rejected').length;
+}
+
+/** The tenant of the task ITSELF — the active business is only a fallback. A
+ *  task opened from another context (super-admin, a stale business switch) must
+ *  have its satellites looked up in ITS business, or the scoped queries find
+ *  nothing and the cascade silently degrades into a bare delete. */
+async function taskBusinessId(taskId: string, explicit?: string | null): Promise<string | null> {
+  try {
+    const snap = await getDoc(docRef('tasks', taskId));
+    const bid = snap.exists() ? (snap.data() as { businessId?: unknown }).businessId : undefined;
+    if (typeof bid === 'string' && bid) return bid;
+  } catch { /* unreadable — fall back */ }
+  return explicit || getGlobalBusinessId() || null;
 }
 
 /**
@@ -132,7 +167,7 @@ export async function deleteTaskCascade(
   taskId: string,
   opts?: { businessId?: string | null },
 ): Promise<TaskCascadeSummary> {
-  const businessId = opts?.businessId ?? getGlobalBusinessId();
+  const businessId = await taskBusinessId(taskId, opts?.businessId);
   const summary = emptySummary();
   if (!businessId) {
     // No tenant context — fall back to the bare delete rather than doing nothing.
@@ -145,19 +180,35 @@ export async function deleteTaskCascade(
   const subtasksSnap = await getDocs(scoped('tasks', businessId, 'parentTaskId', taskId));
   const allIds = [taskId, ...subtasksSnap.docs.map(d => d.id)];
 
-  const ops: Promise<unknown>[] = [];
+  const ops: Op[] = [];
+  const timeOps: Op[] = [];
   const processedInvoices = new Set<string>();
   for (const id of allIds) {
-    await cascadeOneTask(id, businessId, summary, ops, processedInvoices);
+    await cascadeOneTask(id, businessId, summary, ops, processedInvoices, timeOps);
   }
-  // Satellites first, tasks last — a truncated run leaves re-runnable leftovers,
-  // never unreachable subtasks.
-  const satelliteResults = await Promise.allSettled(ops);
-  summary.failed += satelliteResults.filter(r => r.status === 'rejected').length;
+  // Satellites first, tasks last — and every phase must COMPLETE before the
+  // next one starts. A refused write throws with the task (and whatever is
+  // left) still in place, so the cascade can simply be re-run; rows already
+  // unlinked/deleted stay so, which is idempotent.
+  //
+  // Phase 1 — hours (the write the rules most often refuse: a colleague's row,
+  // or a row inside a closed month).
+  if (await runPhase(timeOps)) throw new Error(TIME_ENTRIES_UNLINK_DENIED);
 
+  // Phase 2 — comments, collaborators, dependants, draft invoices.
+  const satelliteFailed = await runPhase(ops);
+  if (satelliteFailed) {
+    throw new Error(`${satelliteFailed} veprime lidhëse dështuan — detyra nuk u fshi; provo sërish ose kërko një Admin/Manager.`);
+  }
+
+  // Phase 3 — subtasks; one that survives keeps its parent (the parent's panel
+  // is the only place a subtask is reachable from).
   const subtaskResults = await Promise.allSettled(subtasksSnap.docs.map(d => deleteDoc(d.ref)));
   summary.tasks += subtaskResults.filter(r => r.status === 'fulfilled').length;
-  summary.failed += subtaskResults.filter(r => r.status === 'rejected').length;
+  const failedSubtasks = subtaskResults.filter(r => r.status === 'rejected').length;
+  if (failedSubtasks) {
+    throw new Error(`${failedSubtasks} nën-detyra nuk u fshinë dot — detyra nuk u fshi; provo sërish.`);
+  }
 
   // The main task delete must THROW on failure — a caller that toasts "u fshi"
   // off a settled rejection would be reporting success for a task still there.
@@ -199,17 +250,18 @@ export async function deleteProjectCascade(
     getDocs(scoped('projectComments', businessId, 'projectId', project.id)),
   ]);
 
-  const ops: Promise<unknown>[] = [];
+  const ops: Op[] = [];
+  const timeOps: Op[] = [];
   const processedInvoices = new Set<string>();
 
   // Task satellites (comments, collaborator records, per-task draft invoices).
   for (const t of tasksSnap.docs) {
-    await cascadeOneTask(t.id, businessId, summary, ops, processedInvoices);
+    await cascadeOneTask(t.id, businessId, summary, ops, processedInvoices, timeOps);
   }
 
   // Project comments are meaningless without the project.
   summary.projectComments = commentsSnap.size;
-  ops.push(...commentsSnap.docs.map(d => deleteDoc(d.ref)));
+  ops.push(...commentsSnap.docs.map(d => () => deleteDoc(d.ref)));
 
   // A draft auto-generated invoice was never sent and has no accounting value;
   // everything else is an accounting document — unlink it and say why.
@@ -221,11 +273,11 @@ export async function deleteProjectCascade(
     if (inv.status === 'Draft' && inv.autoGenerated) {
       summary.draftInvoicesDeleted += 1;
       const itemsSnap = await getDocs(scoped('invoiceItems', businessId, 'invoiceId', d.id));
-      ops.push(...itemsSnap.docs.map(i => deleteDoc(i.ref)));
-      ops.push(deleteDoc(d.ref));
+      ops.push(...itemsSnap.docs.map(i => () => deleteDoc(i.ref)));
+      ops.push(() => deleteDoc(d.ref));
     } else {
       summary.invoicesUnlinked += 1;
-      ops.push(updateDoc(d.ref, {
+      ops.push(() => updateDoc(d.ref, {
         projectId: '',
         taskId: '',
         notes: `${inv.notes ? `${inv.notes}\n` : ''}[Projekti "${project.name}" u fshi më ${new Date().toLocaleDateString('sq-AL')} — fatura u shkëputur.]`,
@@ -235,14 +287,23 @@ export async function deleteProjectCascade(
 
   // Costs & hours survive, unlinked (payroll and accounting history).
   summary.expensesUnlinked = expensesSnap.size;
-  ops.push(...expensesSnap.docs.map(d => updateDoc(d.ref, { projectId: '', updatedAt: new Date() })));
+  ops.push(...expensesSnap.docs.map(d => () => updateDoc(d.ref, { projectId: '', updatedAt: new Date() })));
   summary.timeEntriesUnlinked += timeSnap.size;
-  ops.push(...timeSnap.docs.map(d => updateDoc(d.ref, { projectId: '', taskId: '', updatedAt: new Date() })));
+  timeOps.push(...timeSnap.docs.map(d => () => updateDoc(d.ref, { projectId: '', taskId: '', updatedAt: new Date() })));
+
+  // Hours first: a row the caller may not unlink stops the cascade before any
+  // task is deleted (same law as deleteTaskCascade).
+  if (await runPhase(timeOps)) throw new Error(TIME_ENTRIES_UNLINK_DENIED);
 
   // allSettled, not all: one denied write must not abort the rest and leave a
   // half-detached project behind.
-  const satelliteResults = await Promise.allSettled(ops);
-  summary.failed += satelliteResults.filter(r => r.status === 'rejected').length;
+  const satelliteFailed = await runPhase(ops);
+  summary.failed += satelliteFailed;
+  // A refused satellite keeps the tasks and the project: deleting them would
+  // leave comments/invoices pointing at nothing with no surface to re-run from.
+  if (satelliteFailed) {
+    throw new Error(`${satelliteFailed} veprime lidhëse dështuan — projekti nuk u fshi; provo sërish ose kërko një Admin/Manager.`);
+  }
 
   const taskResults = await Promise.allSettled(tasksSnap.docs.map(d => deleteDoc(d.ref)));
   summary.tasks = taskResults.filter(r => r.status === 'fulfilled').length;

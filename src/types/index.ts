@@ -978,6 +978,20 @@ export interface Task {
   reminderAt?: Date | null;
   reminderOffsetMinutes?: number | null;
   reminderSentAt?: Date | null;
+  /** Reminder owner: who asked to be reminded (cron notifies them; null/absent = assignee). */
+  reminderSetByUserId?: string | null;
+  /**
+   * The instant the task was marked Done (null when re-opened). "Completed
+   * today" reads THIS via `taskCompletedMs()` — `updatedAt` moves on every edit
+   * and on cron touches, so it made week-old tasks count as done today.
+   */
+  completedAt?: Date | null;
+  /** Original author of a recurring series, carried onto every cycle (the
+   *  create rule makes `createdByUserId` the completer for browser-spawned cycles). */
+  seriesCreatedByUserId?: string | null;
+  /** Day-of-month anchors kept by `recurring-project-reset` so month steps never drift. */
+  cycleAnchorStartDay?: number | null;
+  cycleAnchorEndDay?: number | null;
   attachments?: string;
   collaboratorIds?: string[];
   createdAt: Date;

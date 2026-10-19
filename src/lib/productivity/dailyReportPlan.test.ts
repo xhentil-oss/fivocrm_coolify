@@ -66,6 +66,15 @@ describe('tasksCompletedToday', () => {
     ];
     expect(tasksCompletedToday(list, NOW).map(t => t.id)).toEqual(['a']);
   });
+
+  it('reads completedAt, not updatedAt — an edit today does not make an old task "done today"', () => {
+    const list = [
+      task({ id: 'old', status: 'Done', completedAt: day(-6), updatedAt: day(0, 10) }),
+      task({ id: 'new', status: 'Done', completedAt: day(0, 9), updatedAt: day(0, 9) }),
+      task({ id: 'reopened', status: 'Todo', completedAt: null, updatedAt: day(0, 10) }),
+    ];
+    expect(tasksCompletedToday(list, NOW).map(t => t.id)).toEqual(['new']);
+  });
 });
 
 describe('buildPlannedOutcomes', () => {

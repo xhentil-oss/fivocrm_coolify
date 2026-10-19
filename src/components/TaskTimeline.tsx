@@ -1,6 +1,8 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import type { Task } from '../types';
 import { taskDateMs, compareTaskIds } from '../lib/taskSort';
+import { startOfRecurrenceDay, addZonedDays, zonedParts, RECURRENCE_TIMEZONE } from '../lib/recurringUtils';
+import { zonedDayRange } from '../lib/taskDue';
 
 // Lightweight Timeline / Gantt view (Jira/Monday/Asana Timeline-inspired).
 // Renders each task as a horizontal bar from startDate→endDate across a day grid.
@@ -22,8 +24,9 @@ function useLabelWidth(): number {
   return w;
 }
 
-const startOfDay = (d: Date) => { const n = new Date(d); n.setHours(0, 0, 0, 0); return n; };
-const daysBetween = (a: Date, b: Date) => Math.round((startOfDay(b).getTime() - startOfDay(a).getTime()) / DAY);
+// Days are Europe/Tirane calendar days (the zone every deadline is a promise
+// in), never machine-local midnight; `Math.round` absorbs the 23/25-hour DST day.
+const daysBetween = (a: Date, b: Date) => Math.round((startOfRecurrenceDay(b) - startOfRecurrenceDay(a)) / DAY);
 
 function barColor(t: Task): string {
   if (t.status === 'Done') return 'bg-emerald-500';
@@ -58,17 +61,17 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
 
   const range = useMemo(() => {
     if (dated.length === 0) {
-      const today = startOfDay(new Date());
-      return { start: today, days: 14 };
+      return { start: zonedDayRange(new Date(), 1)[0], days: 14 };
     }
     let min = dated[0].start, max = dated[0].end;
     dated.forEach(d => { if (d.start < min) min = d.start; if (d.end > max) max = d.end; });
     // Anchor around TODAY, not the oldest task: one stale year-old task used to
     // pin the window start so far back that the 370-day cap ran out before
     // today — the today marker vanished and current bars rendered past the grid.
-    const floor = startOfDay(new Date());
-    floor.setDate(floor.getDate() - 60);
-    const start = startOfDay(min < floor ? floor : min);
+    const floor = addZonedDays(new Date(), -60);
+    // zonedDayRange(…)[0] = Tirane midnight of that day — the instant every
+    // column is stepped from.
+    const start = zonedDayRange(min < floor ? floor : min, 1)[0];
     // Cap the window so a far-future task can't render thousands of day columns.
     const days = Math.min(370, Math.max(7, daysBetween(start, max) + 2));
     return { start, days };
@@ -80,7 +83,10 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
     return <div className="text-center py-12 text-muted-foreground text-sm">Asnjë detyrë me datë për të shfaqur në timeline.</div>;
   }
 
-  const cols = Array.from({ length: range.days }, (_, i) => new Date(range.start.getTime() + i * DAY));
+  // Calendar steps, not `start + i·24h`: across a DST switch the fixed-ms step
+  // drifted every later column an hour off midnight (and its label a day off).
+  const cols = zonedDayRange(range.start, range.days);
+  const todayKey = startOfRecurrenceDay(new Date());
   const gridW = range.days * DAY_W;
   const contentW = labelW + gridW;
 
@@ -88,7 +94,7 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
   // clear month reference above the day numbers.
   const monthGroups: { label: string; days: number }[] = [];
   cols.forEach(d => {
-    const label = d.toLocaleDateString('sq-AL', { month: 'long', year: '2-digit' });
+    const label = d.toLocaleDateString('sq-AL', { month: 'long', year: '2-digit', timeZone: RECURRENCE_TIMEZONE });
     const last = monthGroups[monthGroups.length - 1];
     if (last && last.label === label) last.days += 1;
     else monthGroups.push({ label, days: 1 });
@@ -124,17 +130,18 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
               Detyra
             </div>
             {cols.map((d, i) => {
-              const isToday = startOfDay(d).getTime() === startOfDay(new Date()).getTime();
-              const weekend = d.getDay() === 0 || d.getDay() === 6;
-              const isWeekStart = d.getDay() === 1; // Monday
+              const parts = zonedParts(d);
+              const isToday = startOfRecurrenceDay(d) === todayKey;
+              const weekend = parts.weekday === 0 || parts.weekday === 6;
+              const isWeekStart = parts.weekday === 1; // Monday
               return (
                 <div
                   key={i}
                   style={{ width: DAY_W }}
                   className={`flex-shrink-0 text-center ${isWeekStart ? 'border-l border-border' : 'border-l border-border/30'} ${weekend ? 'bg-muted/30' : ''}`}
                 >
-                  <div className="text-[9px] uppercase text-muted-foreground/70">{d.toLocaleDateString('sq-AL', { weekday: 'narrow' })}</div>
-                  <div className={`text-[11px] ${isToday ? 'font-bold text-primary' : 'text-muted-foreground'}`}>{d.getDate()}</div>
+                  <div className="text-[9px] uppercase text-muted-foreground/70">{d.toLocaleDateString('sq-AL', { weekday: 'narrow', timeZone: RECURRENCE_TIMEZONE })}</div>
+                  <div className={`text-[11px] ${isToday ? 'font-bold text-primary' : 'text-muted-foreground'}`}>{parts.day}</div>
                 </div>
               );
             })}

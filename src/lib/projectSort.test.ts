@@ -19,4 +19,19 @@ describe('projects by deadline', () => {
     const d = projectNextDeadlines(projects as any, [t('a', '2026-12-01'), t('c', '2026-09-01')]);
     expect(sortProjectsByDeadline(projects, d).map(x => x.id)).toEqual(['c', 'a', 'b']);
   });
+  it('ignores subtasks and the open tasks of closed projects', () => {
+    const projects = [p('a'), p('b', { status: 'Archived' }), p('c', { status: 'Cancelled', endDate: '2026-01-01' }), p('d')];
+    const tasks = [
+      { projectId: 'a', status: 'Todo', endDate: '2026-12-01' },
+      { projectId: 'a', status: 'Todo', endDate: '2026-09-01', parentTaskId: 'x' },
+      { projectId: 'b', status: 'Todo', endDate: '2026-08-01' },
+      { projectId: 'c', status: 'Todo', endDate: '2026-08-01' },
+      { projectId: 'd', status: 'Todo', endDate: '2026-11-01' },
+    ] as any[];
+    const d = projectNextDeadlines(projects as any, tasks);
+    expect(d.get('a')).toBe(Date.parse('2026-12-01'));
+    expect(d.has('b')).toBe(false);
+    expect(d.has('c')).toBe(false);
+    expect(sortProjectsByDeadline(projects, d).map(x => x.id)).toEqual(['d', 'a', 'b', 'c']);
+  });
 });

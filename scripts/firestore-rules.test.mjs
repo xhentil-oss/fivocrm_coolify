@@ -3439,3 +3439,224 @@ test('81k. a Member sets the work cycle but not its period token, nor a yearly a
     workCycle: 'monthly', workCycleLastPeriodKey: '2099-01',
   }));
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 82. Tasks audit 19 Oct 2026 (group E): assignment right, pinned keys, the
+//     client-visibility key, task comments bound to their task, portal members.
+// ══════════════════════════════════════════════════════════════════════════════
+const seedTasksAudit = async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'teamMembers', `${MY_TEAM}_mia`), {
+      userId: 'mia', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active', canAssignTasks: false,
+    });
+    await setDoc(doc(db, 'teamMembers', `${MY_TEAM}_gus`), {
+      userId: 'gus', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active', canAssignTasks: true,
+    });
+    await setDoc(doc(db, 'teams', 'teamMine2'), { businessId: MY_BIZ, createdByUserId: 'aliceOwner', name: 'Mine 2' });
+    await setDoc(doc(db, 'customers', 'custB'), { businessId: MY_BIZ, email: 'b@client.com', name: 'B' });
+    await setDoc(doc(db, 'customers', 'custV'), { businessId: VICTIM_BIZ, email: 'v@client.com', name: 'V' });
+    await setDoc(doc(db, 'projects', 'projCust'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, name: 'Client project', status: 'Active', customerId: 'cust1',
+    });
+    await setDoc(doc(db, 'tasks', 'taskAudit'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'Audit', status: 'Todo',
+      assignedToUserId: 'alice', createdByUserId: 'alice',
+    });
+    await setDoc(doc(db, 'tasks', 'taskAuditClient'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'Client work', status: 'Todo', projectId: 'projCust',
+      customerId: 'cust1', assignedToUserId: 'mia', createdByUserId: 'alice',
+    });
+    await setDoc(doc(db, 'tasks', 'taskLegacyNoTeam'), {
+      businessId: MY_BIZ, title: 'Legacy', status: 'Todo', createdByUserId: 'alice',
+    });
+    await setDoc(doc(db, 'tasks', 'taskSeriesRoot'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'Weekly', status: 'Done', isRecurring: true,
+      assignedToUserId: 'alice', createdByUserId: 'alice',
+    });
+    await setDoc(doc(db, 'tasks', 'taskVictimRecurring'), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, title: 'V weekly', status: 'Done', isRecurring: true,
+    });
+    await setDoc(doc(db, 'tasks', 'taskOtherClient'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'B work', status: 'Todo', customerId: 'custB',
+    });
+  });
+};
+
+test('82a. a Member without "Cakto detyra te të tjerët" assigns only to themselves; the grant, a Manager or a series continuation may assign others', async () => {
+  await seedTasksAudit();
+  const mia = staffOf('mia', MY_BIZ, MY_TEAM, ['member']);
+  const gus = staffOf('gus', MY_BIZ, MY_TEAM, ['member']);
+  const mgr = staffOf('mgr82', MY_BIZ, MY_TEAM, ['manager']);
+  const base = { businessId: MY_BIZ, teamId: MY_TEAM, title: 't', status: 'Todo' };
+  await assertFails(setDoc(doc(mia, 'tasks', 't82a1'), { ...base, assignedToUserId: 'alice', createdByUserId: 'mia' }));
+  await assertSucceeds(setDoc(doc(mia, 'tasks', 't82a2'), { ...base, assignedToUserId: 'mia', createdByUserId: 'mia' }));
+  await assertSucceeds(setDoc(doc(mia, 'tasks', 't82a3'), { ...base, createdByUserId: 'mia' }));
+  await assertSucceeds(setDoc(doc(gus, 'tasks', 't82a4'), { ...base, assignedToUserId: 'alice', createdByUserId: 'gus' }));
+  await assertSucceeds(setDoc(doc(mgr, 'tasks', 't82a5'), { ...base, assignedToUserId: 'alice', createdByUserId: 'mgr82' }));
+  // Update: re-assigning someone else's task is the same right; other edits are not.
+  await assertFails(updateDoc(doc(mia, 'tasks', 'taskAudit'), { assignedToUserId: 'zoe' }));
+  await assertSucceeds(updateDoc(doc(mia, 'tasks', 'taskAudit'), { status: 'In Progress' }));
+  await assertSucceeds(updateDoc(doc(mia, 'tasks', 'taskAudit'), { assignedToUserId: 'mia' }));
+  await assertSucceeds(updateDoc(doc(gus, 'tasks', 'taskAudit'), { assignedToUserId: 'alice' }));
+  // The next occurrence of a real recurring series of this business inherits its assignee.
+  const next = { ...base, isRecurring: true, assignedToUserId: 'alice', createdByUserId: 'mia' };
+  // A task is created as yourself — a forged creator is refused.
+  await assertFails(setDoc(doc(mia, 'tasks', 't82a10'), { ...base, assignedToUserId: 'mia', createdByUserId: 'alice' }));
+  // Group A/D fields stay writable by a Member.
+  await assertSucceeds(updateDoc(doc(mia, 'tasks', 'taskAudit'), { completedAt: new Date(), reminderSetByUserId: 'mia' }));
+  await assertSucceeds(updateDoc(doc(mia, 'tasks', 'taskAudit'), { completedAt: null, reminderSetByUserId: null }));
+  await assertSucceeds(setDoc(doc(mia, 'tasks', 't82a6'), { ...next, seriesId: 'taskSeriesRoot' }));
+  await assertFails(setDoc(doc(mia, 'tasks', 't82a7'), { ...next, seriesId: 'taskVictimRecurring' }));
+  await assertFails(setDoc(doc(mia, 'tasks', 't82a8'), { ...next, seriesId: 'taskAudit' }));
+  await assertFails(setDoc(doc(mia, 'tasks', 't82a9'), { ...next, isRecurring: false, seriesId: 'taskSeriesRoot' }));
+});
+
+test('82b. createdByUserId and teamId are pinned on a task; a legacy task may only gain a team of its own business', async () => {
+  await seedTasksAudit();
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(updateDoc(doc(alice, 'tasks', 'taskAudit'), { createdByUserId: 'mallory' }));
+  await assertFails(updateDoc(doc(alice, 'tasks', 'taskAudit'), { teamId: VICTIM_TEAM }));
+  await assertFails(updateDoc(doc(alice, 'tasks', 'taskAudit'), { teamId: 'teamMine2' }));
+  await assertSucceeds(updateDoc(doc(alice, 'tasks', 'taskAudit'), { title: 'renamed', teamId: MY_TEAM }));
+  await assertFails(updateDoc(doc(alice, 'tasks', 'taskLegacyNoTeam'), { teamId: VICTIM_TEAM }));
+  await assertSucceeds(updateDoc(doc(alice, 'tasks', 'taskLegacyNoTeam'), { teamId: MY_TEAM }));
+});
+
+test("82c. a task's customerId is the project's / parent's customer, or set by an Admin/Manager inside the business", async () => {
+  await seedTasksAudit();
+  const mia = staffOf('mia', MY_BIZ, MY_TEAM, ['member']);
+  const mgr = staffOf('mgr82', MY_BIZ, MY_TEAM, ['manager']);
+  const base = { businessId: MY_BIZ, teamId: MY_TEAM, title: 'c', status: 'Todo', assignedToUserId: 'mia', createdByUserId: 'mia' };
+  // Derived from the project (useFirestore create) — fine.
+  await assertSucceeds(setDoc(doc(mia, 'tasks', 't82c1'), { ...base, projectId: 'projCust', customerId: 'cust1' }));
+  // Another client's id on that project, or a client with no project — refused for a Member.
+  await assertFails(setDoc(doc(mia, 'tasks', 't82c2'), { ...base, projectId: 'projCust', customerId: 'custB' }));
+  await assertFails(setDoc(doc(mia, 'tasks', 't82c3'), { ...base, customerId: 'cust1' }));
+  // A subtask inherits its parent's customer.
+  await assertSucceeds(setDoc(doc(mia, 'tasks', 't82c4'), { ...base, parentTaskId: 'taskAuditClient', customerId: 'cust1' }));
+  await assertFails(setDoc(doc(mia, 'tasks', 't82c5'), { ...base, parentTaskId: 'taskAuditClient', customerId: 'custB' }));
+  // A Manager may set any customer OF THIS business, never another tenant's.
+  await assertSucceeds(setDoc(doc(mgr, 'tasks', 't82c6'), { ...base, createdByUserId: 'mgr82', customerId: 'custB' }));
+  await assertFails(setDoc(doc(mgr, 'tasks', 't82c7'), { ...base, createdByUserId: 'mgr82', customerId: 'custV' }));
+  // Update: unchanged / cleared / re-derived from a project move are fine; re-pointing is not.
+  await assertSucceeds(updateDoc(doc(mia, 'tasks', 'taskAuditClient'), { status: 'In Progress', customerId: 'cust1' }));
+  await assertFails(updateDoc(doc(mia, 'tasks', 'taskAuditClient'), { customerId: 'custB' }));
+  await assertFails(updateDoc(doc(mia, 'tasks', 'taskAudit'), { customerId: 'cust1' }));
+  await assertSucceeds(updateDoc(doc(mia, 'tasks', 'taskAudit'), { projectId: 'projCust', customerId: 'cust1' }));
+  await assertSucceeds(updateDoc(doc(mia, 'tasks', 'taskAudit'), { projectId: null, customerId: '' }));
+});
+
+test("82e. a task comment is bound to its task: same business, the task's own customer, or a portal member of its project", async () => {
+  await seedTasksAudit();
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  const c = (extra) => ({ content: 'x', teamId: MY_TEAM, businessId: MY_BIZ, createdByUserId: 'alice', ...extra });
+  // Staff: a victim task, a task that does not exist, another client's id → refused.
+  await assertFails(setDoc(doc(alice, 'taskComments', 'tc82e1'), c({ taskId: 'taskVictim' })));
+  await assertFails(setDoc(doc(alice, 'taskComments', 'tc82e2'), c({ taskId: 'noSuchTask' })));
+  await assertFails(setDoc(doc(alice, 'taskComments', 'tc82e3'), c({ taskId: 'taskCarol', customerId: 'custB', senderType: 'team' })));
+  await assertSucceeds(setDoc(doc(alice, 'taskComments', 'tc82e4'), c({ taskId: 'taskCarol', customerId: 'cust1', senderType: 'team' })));
+  await assertSucceeds(setDoc(doc(alice, 'taskComments', 'tc82e5'), c({ taskId: 'taskCarol' })));
+  // Portal client: only on a task of their own customer, stamped with its keys.
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  const pc = (extra) => ({ content: 'p', userId: 'carol', senderType: 'client', createdByUserId: 'carol', teamId: MY_TEAM, businessId: MY_BIZ, ...extra });
+  await assertFails(setDoc(doc(carol, 'taskComments', 'tc82e6'), pc({ taskId: 'taskOtherClient', customerId: 'cust1' })));
+  await assertFails(setDoc(doc(carol, 'taskComments', 'tc82e7'), pc({ taskId: 'taskOtherClient', customerId: 'custB' })));
+  await assertFails(setDoc(doc(carol, 'taskComments', 'tc82e8'), pc({ taskId: 'taskCarol', customerId: 'cust1', businessId: VICTIM_BIZ })));
+  await assertSucceeds(setDoc(doc(carol, 'taskComments', 'tc82e9'), pc({ taskId: 'taskCarol', customerId: 'cust1' })));
+  // Portal project member (dave, another customer) posts with the TASK's customerId.
+  const dave = portalOf('dave', 'custOther', 'dave@partner.com');
+  const dc = (extra) => ({ content: 'd', userId: 'dave', senderType: 'client', createdByUserId: 'dave', teamId: MY_TEAM, businessId: MY_BIZ, taskId: 'taskShared', ...extra });
+  await assertSucceeds(setDoc(doc(dave, 'taskComments', 'tc82e10'), dc({ customerId: 'cust1' })));
+  await assertFails(setDoc(doc(dave, 'taskComments', 'tc82e11'), dc({ customerId: 'custOther' })));
+  const erin = portalOf('erin', 'custOther', 'erin@partner.com');
+  await assertFails(setDoc(doc(erin, 'taskComments', 'tc82e12'), { ...dc({ customerId: 'cust1' }), userId: 'erin', createdByUserId: 'erin' }));
+});
+
+test("82f. a portal project member reads the client-visible comments of the project's tasks — never internal ones", async () => {
+  await seedTasksAudit();
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'taskComments', 'tc82fVisible'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, taskId: 'taskShared', customerId: 'cust1', senderType: 'team',
+      content: 'Gati', createdByUserId: 'alice',
+    });
+    await setDoc(doc(db, 'taskComments', 'tc82fInternal'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, taskId: 'taskShared', content: 'internal', createdByUserId: 'alice',
+    });
+  });
+  const dave = portalOf('dave', 'custOther', 'dave@partner.com');
+  await assertSucceeds(getDoc(doc(dave, 'taskComments', 'tc82fVisible')));
+  await assertFails(getDoc(doc(dave, 'taskComments', 'tc82fInternal')));
+  // PortalProjectDetailView's member query shape.
+  await assertSucceeds(getDocs(query(collection(dave, 'taskComments'),
+    where('taskId', 'in', ['taskShared']), where('customerId', '==', 'cust1'))));
+  await assertFails(getDocs(query(collection(dave, 'taskComments'), where('taskId', 'in', ['taskShared']))));
+  await assertSucceeds(updateDoc(doc(dave, 'taskComments', 'tc82fVisible'), { reactions: { '👍': ['dave'] }, updatedAt: new Date() }));
+  const erin = portalOf('erin', 'custOther', 'erin@partner.com');
+  await assertFails(getDoc(doc(erin, 'taskComments', 'tc82fVisible')));
+  await assertFails(getDocs(query(collection(erin, 'taskComments'),
+    where('taskId', 'in', ['taskShared']), where('customerId', '==', 'cust1'))));
+});
+
+test("82g. a task comment is deleted by its author, an Admin/Manager or the task's owner — not any colleague, never re-targeted by an edit", async () => {
+  await seedTasksAudit();
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    for (const id of ['tc82g1', 'tc82g2', 'tc82g3', 'tc82g4']) {
+      await setDoc(doc(db, 'taskComments', id), {
+        businessId: MY_BIZ, teamId: MY_TEAM, taskId: 'taskAuditClient', content: 'by zoe', createdByUserId: 'zoe',
+      });
+    }
+  });
+  const gus = staffOf('gus', MY_BIZ, MY_TEAM, ['member']);
+  const vera = staffOf('vera', MY_BIZ, MY_TEAM, ['viewer']);
+  const mia = staffOf('mia', MY_BIZ, MY_TEAM, ['member']); // assignee of taskAuditClient
+  const mgr = staffOf('mgr82', MY_BIZ, MY_TEAM, ['manager']);
+  const zoe = staffOf('zoe', MY_BIZ, MY_TEAM, ['member']);
+  await assertFails(deleteDoc(doc(gus, 'taskComments', 'tc82g1')));
+  await assertFails(deleteDoc(doc(vera, 'taskComments', 'tc82g1')));
+  await assertSucceeds(deleteDoc(doc(mia, 'taskComments', 'tc82g1')));
+  await assertSucceeds(deleteDoc(doc(mgr, 'taskComments', 'tc82g2')));
+  // The author edits content, but cannot move the comment or publish it to a client.
+  await assertSucceeds(updateDoc(doc(zoe, 'taskComments', 'tc82g3'), { content: 'edited', edited: true }));
+  await assertFails(updateDoc(doc(zoe, 'taskComments', 'tc82g3'), { taskId: 'taskAudit' }));
+  // (setting it to the task's OWN client is the 82i re-point branch — allowed —
+  // so the publish attempt here names another client)
+  await assertFails(updateDoc(doc(zoe, 'taskComments', 'tc82g3'), { content: 'and publish', customerId: 'cust1' }));
+  await assertFails(updateDoc(doc(zoe, 'taskComments', 'tc82g3'), { customerId: 'custB' }));
+  await assertSucceeds(deleteDoc(doc(zoe, 'taskComments', 'tc82g4')));
+});
+
+test("82i. on a task move, staff re-point a comment's customerId to the task's current client or to none — nothing else", async () => {
+  await seedTasksAudit();
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'taskComments', 'tc82i'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, taskId: 'taskOtherClient', customerId: 'cust1', senderType: 'team',
+      content: 'by zoe', createdByUserId: 'zoe',
+    });
+  });
+  const gus = staffOf('gus', MY_BIZ, MY_TEAM, ['member']);
+  const vera = staffOf('vera', MY_BIZ, MY_TEAM, ['viewer']);
+  const R = (db) => doc(db, 'taskComments', 'tc82i');
+  // taskOtherClient now belongs to custB: the comment may follow it…
+  await assertFails(updateDoc(R(vera), { customerId: 'custB', updatedAt: new Date() }));
+  await assertFails(updateDoc(R(gus), { customerId: 'custV', updatedAt: new Date() }));
+  await assertFails(updateDoc(R(gus), { customerId: 'custB', content: 'rewritten' }));
+  await assertSucceeds(updateDoc(R(gus), { customerId: 'custB', updatedAt: new Date() }));
+  // …or become internal.
+  await assertSucceeds(updateDoc(R(gus), { customerId: null, updatedAt: new Date() }));
+  const mallory = outsider();
+  await assertFails(updateDoc(R(mallory), { customerId: 'custB' }));
+});
+
+test('82h. a Viewer writes no taskCollaborators rows', async () => {
+  const vera = staffOf('vera', MY_BIZ, MY_TEAM, ['viewer']);
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  const row = { businessId: MY_BIZ, teamId: MY_TEAM, taskId: 'taskAudit', userId: 'zoe' };
+  await assertFails(setDoc(doc(vera, 'taskCollaborators', 'tk82h1'), row));
+  await assertSucceeds(setDoc(doc(alice, 'taskCollaborators', 'tk82h2'), row));
+  await assertFails(updateDoc(doc(vera, 'taskCollaborators', 'tk82h2'), { role: 'x' }));
+  await assertFails(deleteDoc(doc(vera, 'taskCollaborators', 'tk82h2')));
+  await assertSucceeds(deleteDoc(doc(alice, 'taskCollaborators', 'tk82h2')));
+});

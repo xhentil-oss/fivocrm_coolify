@@ -16,6 +16,8 @@
  */
 
 import type { DailyTaskOutcome, Task, TaskOutcomeState } from '../../types';
+import { taskCompletedMs } from '../taskSort';
+import { startOfRecurrenceDay } from '../recurringUtils';
 
 /** Local YYYY-MM-DD. Deliberately local, not UTC: "today" is the user's today. */
 export function isoDay(d: Date): string {
@@ -59,14 +61,18 @@ export function isTaskForToday(task: Task, now: Date): boolean {
   return created >= todayStart;
 }
 
-/** Tasks this person closed today — `status: 'Done'` with `updatedAt` inside today. */
+/**
+ * Tasks this person closed today — `status: 'Done'` with `completedAt` inside
+ * today's business-zone (Europe/Tirane) day. Read through `taskCompletedMs()`:
+ * `updatedAt` moves on every edit and every cron touch, so a task closed last
+ * week used to count as "done today" the day someone renamed it. A legacy row
+ * with no `completedAt` falls back to `updatedAt` (the only signal it has).
+ */
 export function tasksCompletedToday(tasks: Task[], now: Date): Task[] {
-  const todayStart = new Date(now);
-  todayStart.setHours(0, 0, 0, 0);
+  const today = startOfRecurrenceDay(now);
   return tasks.filter(t => {
-    if (t.status !== 'Done') return false;
-    const updated = t.updatedAt instanceof Date ? t.updatedAt : new Date(t.updatedAt);
-    return updated >= todayStart;
+    const done = taskCompletedMs(t);
+    return done !== null && startOfRecurrenceDay(new Date(done)) === today;
   });
 }
 

@@ -37,6 +37,7 @@ import {
 } from '../lib/projectArchive';
 import { deleteProjectCascade, projectCascadeToastParts } from '../lib/deleteCascade';
 import { projectTaskProgress } from '../lib/projectProgress';
+import { isOverdueDate } from '../lib/taskDue';
 import { projectNextDeadlines, sortProjectsByDeadline } from '../lib/projectSort';
 import {
   Search,
@@ -1405,7 +1406,9 @@ const ProjectsView: React.FC = () => {
                     {(() => {
                       const due = projectDeadlines.get(project.id);
                       if (due === undefined || archived) return null;
-                      const overdue = due < Date.now();
+                      // By Europe/Tirane DAY: a project endDate stored at 12:00 is
+                      // not "Vonuar" on its own day (src/lib/taskDue.ts).
+                      const overdue = isOverdueDate(due);
                       return (
                         <span className={`text-xs mr-2 ${overdue ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
                           {overdue ? 'Vonuar · ' : 'Afati · '}{new Date(due).toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}

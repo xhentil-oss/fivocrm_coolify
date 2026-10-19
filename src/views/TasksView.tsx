@@ -66,6 +66,7 @@ import { sortByManualOrder, pruneManualOrder, doneLast, compareTasksByDue, compa
 import { Bell as ReminderBellIcon } from 'lucide-react';
 import { deleteTaskCascade } from '../lib/deleteCascade';
 import { applyValuedTaskSideEffects } from '../lib/finance/taskValue';
+import { canSeeFinancials } from '../lib/utils';
 import { taskDeepLink } from '../lib/deepLinks';
 import { taskCompletedNotifications, taskAssignedNotifications } from '../lib/taskNotifications';
 import SmartSuggestions from '../components/SmartSuggestions';
@@ -141,15 +142,29 @@ const TasksView: React.FC = () => {
   const businessId = useGlobalBusinessId();
   const teamSettingsData = useTeamSettingsData();
   const listOrderLoaded = React.useRef(false);
-  // Load task list order from Firestore once (Firestore takes priority over localStorage)
+  // The team-shared order lives in teamSettings, which the rules let only an
+  // Admin/Manager (or owner / super-admin) write. Everyone else drags into a
+  // PERSONAL order kept on this device (permission FLAGS, never role strings).
+  const canWriteSharedOrder = !!(permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin);
+  const personalOrderKey = user?.uid ? `tasks_list_order:${user.uid}` : null;
+  const personalOrderNoticeShown = React.useRef(false);
+  // Load the order once: a writer gets the shared Firestore order (it takes
+  // priority over localStorage); a non-writer gets their own saved order first —
+  // otherwise every reload clobbered their drags with the shared one.
   useEffect(() => {
     if (listOrderLoaded.current) return;
-    if (teamSettingsData === null) return;
+    if (teamSettingsData === null || permissions.isLoading) return;
     listOrderLoaded.current = true;
+    if (!canWriteSharedOrder && personalOrderKey) {
+      try {
+        const own = JSON.parse(localStorage.getItem(personalOrderKey) || 'null');
+        if (Array.isArray(own) && own.length > 0) { setListOrder(own); return; }
+      } catch { /* unreadable → fall back to the shared order */ }
+    }
     if (teamSettingsData.taskListOrder && teamSettingsData.taskListOrder.length > 0) {
       setListOrder(teamSettingsData.taskListOrder);
     }
-  }, [teamSettingsData]);
+  }, [teamSettingsData, permissions.isLoading, canWriteSharedOrder, personalOrderKey]);
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Fetch data — skipTeamFilter to avoid dependency on globalTeamId timing.
@@ -346,6 +361,18 @@ const TasksView: React.FC = () => {
     // Clean up the URL params after selecting
     setSearchParams({}, { replace: true });
   }, [searchParams, allTasks, rawTasks, setSearchParams]);
+
+  // `?new=1` (Command palette "Krijo Detyrë të Re") opens the create form, then
+  // drops ONLY that param. Waits for the permission bootstrap: the form exists
+  // only for `canEdit`, and a read-only role just lands on the list.
+  useEffect(() => {
+    if (searchParams.get('new') !== '1') return;
+    if (permissions.isLoading) return;
+    if (permissions.canEdit) setIsCreateDialogOpen(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete('new');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams, permissions.isLoading, permissions.canEdit]);
 
   // Keep selectedTask in sync with live Firestore data. From the RAW list: a
   // task opened by deep link outside the role filter (rawTasks fallback) never
@@ -652,21 +679,40 @@ const TasksView: React.FC = () => {
   // Reorder against the FULL workspace task list (not just the filtered/paginated
   // subset), so a manual move while a filter or search is active doesn't drop the
   // order of every hidden task to the end.
-  const applyReorder = (taskId: string, overId: string) => {
-    // Start from the order the user SEES (unknown ids first — see taskSort),
-    // not "saved order + unknown appended": with a fresh task at the top, a row
+  const applyReorder = async (taskId: string, overId: string) => {
+    // Start from the MANUAL order (unknown ids first — see taskSort), not
+    // "saved order + unknown appended": with a fresh task at the top, a row
     // dropped onto it landed at the bottom of the saved order, i.e. last page.
-    const full = sortByOrder(allTasks).map(t => t.id);
+    // Deliberately WITHOUT doneLast: "Done sinks" is a display rule. Baking it
+    // into the saved (team-shared) order moved every completed task to the end
+    // for good, so re-opening one never brought it back to its slot.
+    const full = sortByManualOrder(allTasks, orderMap).map(t => t.id);
     for (const id of listOrder) if (!full.includes(id)) full.push(id);
     const oldIndex = full.indexOf(taskId);
     const newIndex = full.indexOf(overId);
     if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return;
-    // Drop ids of deleted tasks — the saved order only ever grew, and it is
-    // team-shared state written to teamSettings on every drag.
-    const reordered = pruneManualOrder(arrayMove(full, oldIndex, newIndex), allTasks);
+    // Drop ids of deleted tasks — the saved order only ever grew. Pruned against
+    // the WORKSPACE list: the role-filtered one would erase the slots of every
+    // task this user cannot see from an order the whole team shares.
+    const reordered = pruneManualOrder(arrayMove(full, oldIndex, newIndex), rawTasks || allTasks);
     setListOrder(reordered);
-    localStorage.setItem('tasks_list_order', JSON.stringify(reordered));
-    if (teamId) saveTeamSettings(teamId, { taskListOrder: reordered });
+    if (!canWriteSharedOrder || !teamId) {
+      // teamSettings is Admin/Manager-only in the rules: everyone else keeps a
+      // personal order on this device (the write used to be rejected silently).
+      try { if (personalOrderKey) localStorage.setItem(personalOrderKey, JSON.stringify(reordered)); } catch { /* storage unavailable */ }
+      if (!personalOrderNoticeShown.current) {
+        personalOrderNoticeShown.current = true;
+        toast({ title: 'Renditja u ruajt vetëm për ty', description: 'Renditja e përbashkët e ekipit ndryshohet nga administratori ose menaxheri.' });
+      }
+      return;
+    }
+    try { localStorage.setItem('tasks_list_order', JSON.stringify(reordered)); } catch { /* storage unavailable */ }
+    try {
+      await saveTeamSettings(teamId, { taskListOrder: reordered });
+    } catch (err: any) {
+      console.error('[Tasks] ruajtja e renditjes dështoi:', err);
+      toast({ title: 'Renditja nuk u ruajt për ekipin', description: err?.message, variant: 'destructive' });
+    }
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -680,7 +726,7 @@ const TasksView: React.FC = () => {
     const overId = String(over.id);
 
     if (viewMode === 'list') {
-      if (taskId !== overId) applyReorder(taskId, overId);
+      if (taskId !== overId) void applyReorder(taskId, overId);
       return;
     }
 
@@ -692,7 +738,7 @@ const TasksView: React.FC = () => {
 
     // Persist manual order within the column when dropped over a specific card,
     // so cards keep their position instead of jumping to the end.
-    if (overTask && taskId !== overId) applyReorder(taskId, overId);
+    if (overTask && taskId !== overId) void applyReorder(taskId, overId);
 
     const task = tasks.find(t => t.id === taskId);
     if (task && task.status !== targetStatus) {
@@ -757,10 +803,12 @@ const TasksView: React.FC = () => {
   // Re-opening a Done task: a recurring tip gets its spawn flag back ONLY when
   // the series has no live occurrence left (child deleted by mistake → revive).
   // Re-arming while the child is alive would double the series on re-complete.
+  // `completedAt: null` (explicit — removeUndefined would strip undefined): an
+  // open task must not keep counting as "completed today" via taskCompletedMs().
   const reopenPatch = (task: Task, status: Task['status']): Partial<Task> =>
     task.status === 'Done' && task.isRecurring && !hasLiveSeriesSibling(task, rawTasks)
-      ? { status, nextCycleCreated: false }
-      : { status };
+      ? { status, nextCycleCreated: false, completedAt: null }
+      : { status, completedAt: null };
 
   const columns = [
     { id: 'Todo', title: 'Për të bërë', status: 'Todo' },
@@ -950,17 +998,50 @@ const TasksView: React.FC = () => {
       : { title: `${ids.length} detyra u përditësuan` });
     clearSelection();
   };
-  const bulkDelete = async () => {
-    const ids = [...selectedIds];
-    if (!ids.length) return;
-    // Cascade per task: subtasks, comments, collaborator records, draft invoice;
-    // logged hours are unlinked, never deleted (src/lib/deleteCascade.ts).
-    const results = await Promise.allSettled(ids.map(id => deleteTaskCascade(id)));
-    const failed = results.filter(r => r.status === 'rejected').length;
-    toast(failed
-      ? { title: `${ids.length - failed}/${ids.length} u fshinë`, description: `${failed} dështuan`, variant: 'destructive' }
-      : { title: `${ids.length} detyra u fshinë` });
-    clearSelection();
+  // ONE delete rule for the row menu and the bulk bar: edit rights, plus manager
+  // rank or owning the task (creator/assignee). The bulk bar used to delete
+  // every selected row with no check at all — and no confirmation.
+  const canDeleteTask = (task: Task) => permissions.canEdit && (
+    permissions.isAdmin || permissions.isManager
+    || task.createdByUserId === user?.uid || task.assignedToUserId === user?.uid
+  );
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const bulkDeletePlan = useMemo(() => {
+    if (!bulkDeleteOpen) return { allowed: [] as string[], skipped: 0 };
+    const byId = new Map((rawTasks || []).map(t => [t.id, t]));
+    const allowed: string[] = [];
+    let skipped = 0;
+    for (const id of selectedIds) {
+      const t = byId.get(id);
+      if (t && canDeleteTask(t)) allowed.push(id); else skipped++;
+    }
+    return { allowed, skipped };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bulkDeleteOpen, selectedIds, rawTasks, permissions, user]);
+  const bulkDelete = () => {
+    if (!selectedIds.size) return;
+    setBulkDeleteOpen(true);
+  };
+  const confirmBulkDelete = async () => {
+    const { allowed: ids, skipped } = bulkDeletePlan;
+    if (!ids.length) { setBulkDeleteOpen(false); return; }
+    setBulkDeleting(true);
+    try {
+      // Cascade per task: subtasks, comments, collaborator records, draft invoice;
+      // logged hours are unlinked, never deleted (src/lib/deleteCascade.ts).
+      const results = await Promise.allSettled(ids.map(id => deleteTaskCascade(id)));
+      const failed = results.filter(r => r.status === 'rejected').length;
+      if (selectedTask && ids.includes(selectedTask.id)) setSelectedTask(null);
+      const skippedNote = skipped ? `${skipped} u anashkaluan (pa të drejtë fshirjeje)` : undefined;
+      toast(failed
+        ? { title: `${ids.length - failed}/${ids.length} u fshinë`, description: [`${failed} dështuan`, skippedNote].filter(Boolean).join(' · '), variant: 'destructive' }
+        : { title: `${ids.length} detyra u fshinë`, description: skippedNote });
+      clearSelection();
+    } finally {
+      setBulkDeleting(false);
+      setBulkDeleteOpen(false);
+    }
   };
 
   const renderTaskRow = (task: Task) => {
@@ -973,10 +1054,7 @@ const TasksView: React.FC = () => {
     // isn't meant to have. Delete additionally requires manager rank or owning
     // the task (creator/assignee).
     const canEditRow = permissions.canEdit;
-    const canDeleteRow = canEditRow && (
-      permissions.isAdmin || permissions.isManager
-      || task.createdByUserId === user?.uid || task.assignedToUserId === user?.uid
-    );
+    const canDeleteRow = canDeleteTask(task);
     const projectName = getProjectName(task.projectId);
     const subtaskInfo = subtaskCounts[task.id];
     const isBeingWorkedOn = tasksBeingWorkedOn.has(task.id);
@@ -1223,8 +1301,17 @@ const TasksView: React.FC = () => {
                 // (a copy's value was never invoiced/applied), collaborator ids
                 // (their taskCollaborators rows belong to the original),
                 // notification flags, and the reminder — a copied "1 orë para"
-                // made the cron fire two identical reminders.
-                const { id, isRecurring, recurringFrequency, recurringInterval, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, recurringEndDate, nextRecurringDate, nextCycleCreated, seriesId, recurringSkippedReason, dueNotificationSent, overdueNotificationSent, reminderAt, reminderOffsetMinutes, reminderSentAt, parentTaskId, dependsOn, attachments, value, valueAppliedToBudget, collaboratorIds, ...rest } = task as any;
+                // made the cron fire two identical reminders (and its owner,
+                // reminderSetByUserId, goes with it). The work-cycle carry-over
+                // stamps and the completion instant describe the ORIGINAL's
+                // history — a fresh copy was never carried and is not done.
+                const { id, isRecurring, recurringFrequency, recurringInterval, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, recurringEndDate, nextRecurringDate, nextCycleCreated, seriesId, recurringSkippedReason, dueNotificationSent, overdueNotificationSent, reminderAt, reminderOffsetMinutes, reminderSentAt, reminderSetByUserId, carriedOverFromPeriod, carriedOverCount, completedAt, parentTaskId, dependsOn, attachments, value, valueAppliedToBudget, collaboratorIds, createdByUserId, seriesCreatedByUserId, cycleAnchorStartDay, cycleAnchorEndDay, ...rest } = task as any;
+                // The copy is MINE (rules: created as yourself), and without the
+                // assign right it can only be assigned to me — the rules refuse
+                // handing a colleague work through a copy.
+                if (!permissions.canAssignTasks && rest.assignedToUserId && rest.assignedToUserId !== user?.uid) {
+                  rest.assignedToUserId = user?.uid ?? null;
+                }
                 await taskMutation.create({ ...rest, title: rest.title + ' (kopje)', status: 'Todo' });
                 toast({ title: 'Detyrë u kopjua' });
               }}>
@@ -1782,6 +1869,31 @@ const TasksView: React.FC = () => {
         </DialogContent>
       </Dialog>
 
+      {/* Bulk delete confirmation — only the rows the user may delete are deleted */}
+      <Dialog open={bulkDeleteOpen} onOpenChange={(open) => { if (!open && !bulkDeleting) setBulkDeleteOpen(false); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Fshi {bulkDeletePlan.allowed.length} detyra</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {bulkDeletePlan.allowed.length > 0
+              ? `A jeni i sigurt që doni të fshini ${bulkDeletePlan.allowed.length} detyra (bashkë me nën-detyrat dhe komentet e tyre)? Ky veprim nuk mund të zhbëhet.`
+              : 'Nuk keni të drejtë të fshini asnjë nga detyrat e zgjedhura.'}
+          </p>
+          {bulkDeletePlan.skipped > 0 && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              {bulkDeletePlan.skipped} nga të zgjedhurat do të anashkalohen — mund t'i fshijë vetëm krijuesi, i caktuari ose një menaxher.
+            </p>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" disabled={bulkDeleting} onClick={() => setBulkDeleteOpen(false)}>Anulo</Button>
+            {bulkDeletePlan.allowed.length > 0 && (
+              <Button variant="destructive" disabled={bulkDeleting} onClick={confirmBulkDelete}>
+                {bulkDeleting ? 'Duke fshirë…' : 'Fshi, jam i sigurt'}
+              </Button>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Same-day warning: the assignee already has work on the chosen date */}
       <TaskDateConflictDialog
         open={!!dateConflict}
@@ -1821,8 +1933,11 @@ const CalendarView: React.FC<{
     1
   ).getDay() + 6) % 7;
 
-  const sod = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
-  const todayStr = new Date().toDateString();
+  // Day keys in Europe/Tirane — the SAME keys recurringOccurrencesInMonth uses
+  // for the recurring ghosts (machine-local midnight put a real task and its
+  // projected sibling on different cells for a browser outside the zone).
+  const sod = (x: Date) => startOfRecurrenceDay(x);
+  const todayKey = startOfRecurrenceDay(new Date());
 
   // Tasks with no date at all can't be placed on a day — surface them in a bar so
   // they're never hidden. Clicking "+N" on a busy day opens the full day list.
@@ -1844,7 +1959,9 @@ const CalendarView: React.FC<{
   }
 
   for (let day = 1; day <= daysInMonth; day++) {
-    const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+    // Noon, like the engine's cell keys: noon-local cannot flip across a day
+    // boundary for any real browser offset.
+    const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day, 12);
     const cell = sod(date);
     // A recurring task is a single-day occurrence on its due date (the "afat") —
     // the frequency, not a multi-day span, drives repetition. A non-recurring task
@@ -1869,7 +1986,7 @@ const CalendarView: React.FC<{
     // Earliest time-of-day first, then priority — the two visible per cell used
     // to be whichever were created last (or last dragged), not the day's agenda.
     }).sort(compareTasksByTimeOfDayThenPriority);
-    const isToday = date.toDateString() === todayStr;
+    const isToday = cell === todayKey;
     // Projected recurring occurrences for this day (not real docs yet).
     const dayProjections = projectionsByDay.get(day) || [];
     const realShown = dayTasks.slice(0, 2);

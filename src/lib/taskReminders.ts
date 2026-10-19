@@ -57,30 +57,47 @@ export function reminderAtFromOffset(endDate: Date, minutesBefore: number): Date
 
 /**
  * Patch to SET a reminder from the UI. Every write goes through here so the
- * three fields never disagree:
+ * fields never disagree:
  *  · `{ offsetMinutes }` — relative preset; needs a deadline to resolve against.
  *  · `{ at }`            — custom absolute date/time.
  *  · `null`              — clear the reminder.
+ * `setByUserId` is the person who asked to be reminded ("Më kujto" is THEIR
+ * reminder — the cron notifies them, not the assignee). Omitted = null = the
+ * legacy behaviour (the assignee is reminded). Cleared with the reminder.
  * Explicit `null`s, never `undefined`: removeUndefined() strips undefined, so
  * only null actually clears a field on the document.
  */
 export function setReminderPatch(
   task: Pick<Task, 'endDate'>,
   choice: { offsetMinutes: number } | { at: Date } | null,
+  setByUserId?: string | null,
 ): Partial<Task> {
-  if (choice === null) {
-    return { reminderAt: null, reminderOffsetMinutes: null, reminderSentAt: null };
-  }
+  const cleared: Partial<Task> = { reminderAt: null, reminderOffsetMinutes: null, reminderSentAt: null, reminderSetByUserId: null };
+  if (choice === null) return cleared;
+  const by = setByUserId || null;
   if ('offsetMinutes' in choice) {
     const end = parseTaskDate(task.endDate);
-    if (!end) return { reminderAt: null, reminderOffsetMinutes: null, reminderSentAt: null };
+    if (!end) return cleared;
     return {
       reminderAt: reminderAtFromOffset(end, choice.offsetMinutes),
       reminderOffsetMinutes: choice.offsetMinutes,
       reminderSentAt: null,
+      reminderSetByUserId: by,
     };
   }
-  return { reminderAt: choice.at, reminderOffsetMinutes: null, reminderSentAt: null };
+  return { reminderAt: choice.at, reminderOffsetMinutes: null, reminderSentAt: null, reminderSetByUserId: by };
+}
+
+/**
+ * Who receives a reminder: the person who set it, else the assignee, else the
+ * creator. MIRRORED in api/cron/run.ts (`runTaskReminders`) — keep in sync.
+ */
+export function taskReminderRecipient(
+  task: Pick<Task, 'reminderSetByUserId' | 'assignedToUserId' | 'createdByUserId'>,
+): { userId: string; selfRequested: boolean } | null {
+  if (task.reminderSetByUserId) return { userId: task.reminderSetByUserId, selfRequested: true };
+  const fallback = task.assignedToUserId || task.createdByUserId;
+  return fallback ? { userId: fallback, selfRequested: false } : null;
 }
 
 /**
