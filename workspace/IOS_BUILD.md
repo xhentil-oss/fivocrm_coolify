@@ -168,6 +168,21 @@ as a new (portal) identity. Staff should share their real email or use Google/em
 The web has no Apple button (needs a Services ID + return URL).
 
 ### 4.3 Everything else the reviewer will need
+- **Review demo account** — `scripts/seed-appstore-demo.mjs` creates/RESETS the isolated
+  tenant `demo_appreview` ("Studio Demo", owner `appreview@fivocrm.com`, plan business,
+  status active so the lifecycle cron never suspends it, `isDemo: true`) with services,
+  customers, a lead pipeline, projects, tasks, invoices, expenses and a team chat. The
+  password lives only outside git (`Documents/FivoCRM-iOS/demo-account.txt`). Re-run it
+  before every submission so dates are fresh. Customers are `@example.com` with
+  reminders disabled; nothing recurs; no WhatsApp account.
+- **Screenshots** were taken from that tenant with Playwright at 440×956 @3x =
+  1320×2868 (iPhone 6.9"), locale en-US, the activation card dismissed.
+- **App Privacy answers** (must match `PrivacyInfo.xcprivacy`): Tracking = No. Collected,
+  linked to the user, purpose App Functionality only: Contact Info → Name, Email
+  Address, Phone Number; User Content → Emails or Text Messages, Photos or Videos,
+  Audio Data, Other User Content; Identifiers → User ID. Diagnostics → Crash Data
+  (NOT linked). Not collected: location, contacts, health, financial info (card data
+  goes to Stripe on the web only), browsing/search history, purchases, usage data.
 - **Account deletion (5.1.1(v))** — `DeleteAccountCard` on the staff profile (own
   profile only) and the portal profile: confirm dialog → pre-filled email request to
   social@fivo.al with email + uid, plus "Çfarë fshihet" → fivocrm.com/delete-account.
