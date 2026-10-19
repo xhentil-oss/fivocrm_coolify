@@ -34,6 +34,7 @@ import { useToast } from '../hooks/use-toast';
 import { copyWithToast } from '../lib/clipboard';
 import { ToastAction } from '../components/ui/toast';
 import { useFileUpload } from '../hooks/useFileUpload';
+import { batchLabel } from '../lib/uploadQueue';
 import { getTimestampMs } from '../lib/utils';
 import { safeExternalUrl } from '../lib/safeUrl';
 import { useUnreadChat } from '../hooks/useUnreadChat';
@@ -2189,10 +2190,12 @@ const ChatView: React.FC = () => {
   }, [chatMode, activeChannel, activeDirectUserId, channelUnreadMap, clientUnreadMap, directUnreadMap]);
 
   // Message Handlers
-  const { upload: uploadAttachment, uploading: attachmentUploading } = useFileUpload();
+  const { upload: uploadAttachment, uploadEach: uploadAttachments, uploading: attachmentUploading, batch: attachmentBatch } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   // SVG removed — script injection vector. Use raster formats only.
-  const ALLOWED_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+  // HEIC/HEIF = iPhone photos copied to a computer; useFileUpload re-encodes them
+  // to JPEG where the browser can (otherwise they are sent as a file).
+  const ALLOWED_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/heic', 'image/heif'];
   // Must stay a subset of the VPS ALLOWED_UPLOAD filter (vps/server.ts).
   const ALLOWED_DOC_TYPES = [
     'application/pdf',
@@ -2207,16 +2210,36 @@ const ChatView: React.FC = () => {
   ];
   const ALLOWED_ATTACHMENT_TYPES = [...ALLOWED_IMG_TYPES, ...ALLOWED_DOC_TYPES];
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
+  // Windows reports an empty mime for .heic (and sometimes for office files).
+  const EXT_MIME: Record<string, string> = {
+    heic: 'image/heic', heif: 'image/heif', pdf: 'application/pdf', txt: 'text/plain', csv: 'text/csv',
+    doc: 'application/msword', xls: 'application/vnd.ms-excel', ppt: 'application/vnd.ms-powerpoint',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  };
+  const attachmentMime = (f: File) => f.type || EXT_MIME[(/\.([a-z0-9]+)$/i.exec(f.name)?.[1] || '').toLowerCase()] || '';
+  const isAllowedAttachment = (f: File) => ALLOWED_ATTACHMENT_TYPES.includes(attachmentMime(f));
+  const listNames = (names: string[]) => names.slice(0, 3).join(', ') + (names.length > 3 ? ` … +${names.length - 3}` : '');
 
-  const handleAttachmentUpload = async (file: File) => {
-    if (!ALLOWED_ATTACHMENT_TYPES.includes(file.type)) {
-      toast({ title: 'Format i pasaktë', description: 'Lejohen imazhe (PNG, JPG, GIF, WEBP), PDF, Word, Excel, PowerPoint, TXT ose CSV.', variant: 'destructive' });
-      return;
+  /**
+   * One or many files (picker multi-select, drag & drop, paste) -> one message per
+   * file, in the order picked. Uploads run 3 at a time; each message goes out as
+   * soon as its own upload AND every earlier one are done, so order is kept and a
+   * failed file never blocks the rest.
+   */
+  const handleAttachmentFiles = async (picked: File[]) => {
+    if (picked.length === 0) return;
+    const badType = picked.filter(f => !isAllowedAttachment(f));
+    const tooBig = picked.filter(f => isAllowedAttachment(f) && f.size > MAX_ATTACHMENT_BYTES);
+    const files = picked.filter(f => isAllowedAttachment(f) && f.size <= MAX_ATTACHMENT_BYTES);
+    if (badType.length) {
+      toast({ title: 'Format i pasaktë', description: `${listNames(badType.map(f => f.name))} — lejohen imazhe (PNG, JPG, GIF, WEBP, HEIC), PDF, Word, Excel, PowerPoint, TXT ose CSV.`, variant: 'destructive' });
     }
-    if (file.size > MAX_ATTACHMENT_BYTES) {
-      toast({ title: 'Skedari shumë i madh', description: 'Maksimumi 10 MB.', variant: 'destructive' });
-      return;
+    if (tooBig.length) {
+      toast({ title: 'Skedari shumë i madh', description: `${listNames(tooBig.map(f => f.name))} — maksimumi 10 MB.`, variant: 'destructive' });
     }
+    if (files.length === 0) return;
     // Guard: must have a valid send target before consuming the upload.
     if (chatMode === 'channel' && !activeChannel) {
       toast({ title: 'Zgjidh një kanal', description: 'Hap një kanal për të dërguar skedarin.', variant: 'destructive' });
@@ -2232,25 +2255,38 @@ const ChatView: React.FC = () => {
     }
     // Snapshot the target now — the user may switch conversations during upload.
     const target = { targetMode: chatMode as 'channel' | 'direct', targetChannel: activeChannel, targetDirectUserId: activeDirectUserId };
-    try {
-      const res = await uploadAttachment(file, 'chat-attachments');
-      await handleSendMessage(null, { attachmentUrl: res.url, ...target });
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('[chat] image upload failed', err);
-      const code = (err as any)?.code as string | undefined;
-      const detail = code === 'storage/unauthorized'
-        ? 'Nuk keni leje për këtë bucket. Verifikoni rregullat e Storage.'
-        : code === 'storage/canceled'
-          ? 'Ngarkimi u anulua.'
-          : (err as Error)?.message || 'Provo përsëri.';
-      toast({ title: 'Ngarkimi dështoi', description: detail, variant: 'destructive' });
+    const uploads = uploadAttachments(files, 'chat-attachments');
+    const failed: string[] = [];
+    let sentFirst = false;
+    for (let i = 0; i < files.length; i++) {
+      try {
+        const res = await uploads[i];
+        // The first message carries the composer's text + reply context (as a
+        // single attachment always did); the rest are bare attachments, or every
+        // photo of a 20-photo batch would repeat the draft and the quoted reply.
+        const ok = await handleSendMessage(null, {
+          attachmentUrl: res.url, ...target,
+          ...(sentFirst ? { content: '', noReply: true } : {}),
+        });
+        if (ok) sentFirst = true; else failed.push(files[i].name);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[chat] attachment upload failed', err);
+        failed.push(`${files[i].name}: ${(err as Error)?.message || 'gabim'}`);
+      }
+    }
+    if (failed.length) {
+      toast({
+        title: files.length > 1 ? `${files.length - failed.length} u dërguan, ${failed.length} dështuan` : 'Ngarkimi dështoi',
+        description: failed.slice(0, 3).join(' · ') + (failed.length > 3 ? ` … +${failed.length - 3}` : ''),
+        variant: 'destructive',
+      });
     }
   };
 
   // Returns true only when the message document was actually created (or handed to
   // Nazmije) — the scheduled-message poll decides claim/retry from it.
-  const handleSendMessage = async (e?: React.FormEvent | null, override?: { content?: string; attachmentUrl?: string; targetMode?: 'channel' | 'direct'; targetChannel?: string; targetDirectUserId?: string | null; fromScheduler?: boolean }): Promise<boolean> => {
+  const handleSendMessage = async (e?: React.FormEvent | null, override?: { content?: string; attachmentUrl?: string; targetMode?: 'channel' | 'direct'; targetChannel?: string; targetDirectUserId?: string | null; fromScheduler?: boolean; noReply?: boolean }): Promise<boolean> => {
     if (e && typeof (e as any).preventDefault === 'function') (e as any).preventDefault();
     // Target conversation — snapshotted by attachment/voice senders before their
     // upload await, so a mid-upload conversation switch doesn't misroute the message.
@@ -2301,7 +2337,7 @@ const ChatView: React.FC = () => {
         attachmentUrl: effectiveAttachment || undefined,
         ...(mentions.length > 0 ? { mentions } as any : {}),
         ...(isClientChannel && targetMode === 'channel' ? { senderType: 'staff' as const } : {}),
-        ...(replyingTo && !fromScheduler ? {
+        ...(replyingTo && !fromScheduler && !override?.noReply ? {
           replyToId: replyingTo.id,
           replyToContent: (replyingTo.content || '').length > 100 ? (replyingTo.content || '').slice(0, 100) + '…' : (replyingTo.content || ''),
           replyToSender: getUserDisplayName(replyingTo.senderId),
@@ -4714,10 +4750,9 @@ const ChatView: React.FC = () => {
                   onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
                   onDrop={async (e) => {
                     const files = Array.from(e.dataTransfer?.files || []);
-                    const accepted = files.filter(f => ALLOWED_ATTACHMENT_TYPES.includes(f.type));
-                    if (accepted.length === 0) return;
+                    if (files.length === 0) return;
                     e.preventDefault();
-                    for (const f of accepted) await handleAttachmentUpload(f);
+                    await handleAttachmentFiles(files);
                   }}
                 >
                   {/* @mention autocomplete */}
@@ -4815,7 +4850,7 @@ const ChatView: React.FC = () => {
                             (chatMode !== 'channel' && chatMode !== 'direct')
                           }
                         >
-                          {attachmentUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />} <span>Dërgo imazh ose PDF</span>
+                          {attachmentUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />} <span>{batchLabel(attachmentBatch) ?? 'Dërgo imazhe ose skedarë'}</span>
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           className="lg:hidden"
@@ -4867,10 +4902,15 @@ const ChatView: React.FC = () => {
                         (chatMode === 'direct' && !activeDirectUserId) ||
                         (chatMode !== 'channel' && chatMode !== 'direct')
                       }
-                      aria-label={attachmentUploading ? 'Po ngarkohet' : 'Dërgo imazh ose PDF'}
-                      title={attachmentUploading ? 'Po ngarkohet…' : 'Dërgo imazh ose PDF'}>
+                      aria-label={batchLabel(attachmentBatch) ?? (attachmentUploading ? 'Po ngarkohet' : 'Dërgo imazhe ose skedarë')}
+                      title={batchLabel(attachmentBatch) ?? (attachmentUploading ? 'Po ngarkohet…' : 'Dërgo imazhe ose skedarë (mund të zgjidhni disa)')}>
                       {attachmentUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
                     </Button>
+                    {attachmentBatch && attachmentBatch.total > 1 && (
+                      <span className="text-[11px] tabular-nums text-muted-foreground whitespace-nowrap" aria-live="polite">
+                        {Math.min(attachmentBatch.done + 1, attachmentBatch.total)}/{attachmentBatch.total}
+                      </span>
+                    )}
                     <Button type="button" variant="ghost" size="icon"
                       className={`hidden lg:inline-flex h-7 w-7 rounded-lg transition-colors ${isRecording ? 'text-rose-500 animate-pulse motion-reduce:animate-none' : 'text-muted-foreground/60 hover:text-foreground'}`}
                       onClick={() => { if (isRecording) stopRecording(true); else startRecording(); }}
@@ -4882,12 +4922,13 @@ const ChatView: React.FC = () => {
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
+                      accept="image/png,image/jpeg,image/gif,image/webp,image/heic,image/heif,.heic,.heif,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
+                      multiple
                       className="hidden"
                       onChange={async (e) => {
-                        const f = e.target.files?.[0];
+                        const picked = Array.from(e.target.files || []);
                         e.target.value = '';
-                        if (f) await handleAttachmentUpload(f);
+                        await handleAttachmentFiles(picked);
                       }}
                     />
                     <Button type="button" variant="ghost" size="icon" className="hidden lg:inline-flex h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
@@ -4940,7 +4981,7 @@ const ChatView: React.FC = () => {
                           const f = it.getAsFile();
                           if (!f) continue;
                           e.preventDefault();
-                          await handleAttachmentUpload(f);
+                          await handleAttachmentFiles([f]);
                           return;
                         }
                       }

@@ -63,6 +63,7 @@ import CommentBody from './comments/CommentBody';
 import { commentMentionUids, commentToPlainText } from '../lib/commentMarkdown';
 import { toast } from '../hooks/use-toast';
 import { useFileUpload } from '../hooks/useFileUpload';
+import { batchLabel } from '../lib/uploadQueue';
 import { useCommentFocus, COMMENT_FLASH_CLASS } from '../hooks/useCommentFocus';
 import { taskDeepLink } from '../lib/deepLinks';
 import { taskCompletedNotifications } from '../lib/taskNotifications';
@@ -197,7 +198,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   // Deep link from a comment notification → scroll to that comment and flash it.
   const { registerComment, isFlashing } = useCommentFocus(focusCommentId);
   const { isConnected: isGoogleConnected } = useGoogleApi();
-  const { upload: uploadCommentImage, uploading: commentImageUploading } = useFileUpload();
+  const { upload: uploadCommentImage } = useFileUpload();
+  // Separate instance for materials so its "3/20" counter is not shared with comment images.
+  const { uploadMany: uploadManyAttachments, uploading: attachmentsUploading, batch: attachmentsBatch } = useFileUpload();
   // Images in comments: uploaded to the file server, stored as their URL line.
   // No SVG — it is a document that can carry script (see RichTextEditor).
   const handleCommentImageUpload = async (file: File): Promise<string | null> => {
@@ -968,7 +971,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     || f.type === 'text/plain'
     || f.type === 'text/csv'
     // Some browsers report an empty mime for odd registrations — trust the extension.
-    || (!f.type && /\.(docx?|xlsx?|pptx?|pdf|txt|csv)$/i.test(f.name));
+    || (!f.type && /\.(docx?|xlsx?|pptx?|pdf|txt|csv|heic|heif)$/i.test(f.name));
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -985,25 +988,32 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     }
     if (valid.length === 0) { e.target.value = ''; return; }
 
-    const newAttachments = [...attachments];
-
     try {
-      for (const file of valid) {
-        // Upload to the file server so the URL survives reloads (a blob: URL is
-        // session-scoped and dies on navigation/app restart).
-        const result = await uploadCommentImage(file, 'task-attachments');
-        newAttachments.push({
-          name: file.name,
-          size: file.size,
-          type: file.type,
+      // Up to 3 in parallel; a failed file never discards the ones that made it —
+      // the old loop threw on the first failure and attached NOTHING, leaving the
+      // already-uploaded files orphaned on the server.
+      const { ok, failed } = await uploadManyAttachments(valid, 'task-attachments');
+      if (ok.length) {
+        const added = ok.map(({ file, result }) => ({
+          name: result.name || file.name,
+          size: result.size ?? file.size,
+          type: result.type || file.type,
           url: result.url,
           uploadedBy: user?.uid,
           uploadedAt: new Date().toISOString(),
+        }));
+        await onUpdate(task.id, { attachments: JSON.stringify([...attachments, ...added]) });
+      }
+      if (failed.length) {
+        toast({
+          title: ok.length ? `${ok.length} u ngarkuan, ${failed.length} dështuan` : 'Ngarkimi i skedarit dështoi',
+          description: failed.slice(0, 3).map(f => `${f.file.name}: ${f.error.message}`).join(' · ')
+            + (failed.length > 3 ? ` … +${failed.length - 3}` : ''),
+          variant: 'destructive',
         });
       }
-      await onUpdate(task.id, { attachments: JSON.stringify(newAttachments) });
     } catch (err: any) {
-      toast({ title: 'Ngarkimi i skedarit dështoi', description: err?.message, variant: 'destructive' });
+      toast({ title: 'Materialet nuk u ruajtën', description: err?.message, variant: 'destructive' });
     } finally {
       e.target.value = '';
     }
@@ -2325,9 +2335,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                       <Cloud className="w-4 h-4" />
                     </Button>
                   )}
-                  <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => fileInputRef.current?.click()} disabled={commentImageUploading} title="Bashkëngjit material (imazh, PDF, Word, Excel…)" aria-label="Bashkëngjit material (imazh, PDF, Word, Excel…)">
-                    {commentImageUploading ? <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" /> : <Upload className="w-4 h-4" />}
-                    <span className="hidden sm:inline text-xs">Shto material</span>
+                  <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => fileInputRef.current?.click()} disabled={attachmentsUploading} title="Bashkëngjit material (imazh, PDF, Word, Excel…) — mund të zgjidhni disa njëherësh" aria-label="Bashkëngjit material (imazh, PDF, Word, Excel…)">
+                    {attachmentsUploading ? <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" /> : <Upload className="w-4 h-4" />}
+                    <span className="hidden sm:inline text-xs" aria-live="polite">{batchLabel(attachmentsBatch) ?? (attachmentsUploading ? 'Po ngarkohet…' : 'Shto material')}</span>
                   </Button>
                 </div>
               )}

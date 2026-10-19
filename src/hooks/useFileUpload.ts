@@ -1,7 +1,11 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { getGlobalTeamId } from './useFirestore';
 import { trustedFileHost } from '../lib/safeUrl';
+import { runLimited, heicToJpegIfPossible } from '../lib/uploadQueue';
+
+/** Parallel uploads per batch — enough to hide latency, gentle on the VPS. */
+export const UPLOAD_CONCURRENCY = 3;
 
 // Deployment-wide file host (shared across all of the owner's teams). Used as the
 // final fallback so image/file uploads work in EVERY channel/DM for EVERY member,
@@ -11,7 +15,7 @@ import { trustedFileHost } from '../lib/safeUrl';
 // HTTPS — an http:// host would be blocked as mixed content).
 const DEFAULT_VPS_FILE_URL = 'https://vps.fivocrm.com';
 
-interface UploadResult {
+export interface UploadResult {
   url: string;
   path: string;
   name: string;
@@ -28,9 +32,16 @@ export function useFileUpload() {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<Error | null>(null);
+  // Several uploads may be in flight at once (multi-select). `uploading` is true
+  // while ANY of them runs — a per-call true/false would flip off mid-batch.
+  const inFlight = useRef(0);
+  const [batch, setBatch] = useState<{ done: number; total: number } | null>(null);
 
-  const upload = useCallback(async (file: File, folder = 'uploads'): Promise<UploadResult> => {
+  const upload = useCallback(async (picked: File, folder = 'uploads'): Promise<UploadResult> => {
     if (!user) throw new Error('Not authenticated');
+    // HEIC (iPhone photos copied to a computer) renders only in Safari — re-encode
+    // to JPEG where the browser can decode it; otherwise upload the original.
+    const file = await heicToJpegIfPossible(picked);
     // VPS URL resolution, in priority order:
     //  1. active team's synced URL (localStorage, from teamSettings) — honoured ONLY
     //     when it is one of OUR hosts (`trustedFileHost`: https + *.fivocrm.com). The
@@ -50,9 +61,11 @@ export function useFileUpload() {
     const vpsUrl = teamVps || (isSecure(envVps) && envVps) || DEFAULT_VPS_FILE_URL;
     const teamId = getGlobalTeamId() || 'shared';
 
+    inFlight.current += 1;
     setUploading(true);
     setProgress(0);
     setError(null);
+    const finish = () => { inFlight.current = Math.max(0, inFlight.current - 1); if (inFlight.current === 0) setUploading(false); };
 
     try {
       const token = await user.getIdToken();
@@ -82,7 +95,7 @@ export function useFileUpload() {
         xhr.send(form);
       });
 
-      setUploading(false);
+      finish();
       setProgress(100);
       // If we reached the VPS over HTTPS but it returned an http:// file URL
       // (PUBLIC_URL unset / no trust-proxy), upgrade it — the page is HTTPS, so an
@@ -93,10 +106,40 @@ export function useFileUpload() {
       return result;
     } catch (err) {
       setError(err as Error);
-      setUploading(false);
+      finish();
       throw err;
     }
   }, [user]);
 
-  return { upload, uploading, progress, error };
+  /**
+   * Multi-select upload: one promise per file, in the order picked, at most
+   * UPLOAD_CONCURRENCY at once. A failed file rejects ITS promise only — callers
+   * keep the rest. `batch` drives the "Po ngarkohet 3/20" label.
+   */
+  const uploadEach = useCallback((files: File[], folder = 'uploads'): Promise<UploadResult>[] => {
+    if (files.length === 0) return [];
+    let done = 0;
+    setBatch({ done: 0, total: files.length });
+    const promises = runLimited(files, UPLOAD_CONCURRENCY, (f) => upload(f, folder).finally(() => {
+      done += 1;
+      setBatch(done >= files.length ? null : { done, total: files.length });
+    }));
+    // Never leave an unhandled rejection behind — the caller reads each promise.
+    promises.forEach((p) => p.catch(() => {}));
+    return promises;
+  }, [upload]);
+
+  /** Same as uploadEach, settled: `{ ok, failed }` both in the order picked. */
+  const uploadMany = useCallback(async (files: File[], folder = 'uploads') => {
+    const settled = await Promise.allSettled(uploadEach(files, folder));
+    const ok: Array<{ file: File; result: UploadResult }> = [];
+    const failed: Array<{ file: File; error: Error }> = [];
+    settled.forEach((r, i) => {
+      if (r.status === 'fulfilled') ok.push({ file: files[i], result: r.value });
+      else failed.push({ file: files[i], error: r.reason instanceof Error ? r.reason : new Error(String(r.reason)) });
+    });
+    return { ok, failed };
+  }, [uploadEach]);
+
+  return { upload, uploadEach, uploadMany, uploading, progress, error, batch };
 }

@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import RichTextEditor from '../RichTextEditor';
 import VariantMatrixEditor from './VariantMatrixEditor';
 import { useFileUpload } from '../../hooks/useFileUpload';
+import { batchLabel, isHeic } from '../../lib/uploadQueue';
 import { useToast } from '../../hooks/use-toast';
 import { marginPercent, discountPercent, grossUnitPrice } from '../../lib/shop/pricing';
 import { slugify, suggestSku, validateProduct } from '../../lib/shop/product';
@@ -103,7 +104,7 @@ const ProductFormDialog: React.FC<Props> = ({
   open, onOpenChange, initial, categories, brands, onSave, onCreateCategory,
 }) => {
   const { toast } = useToast();
-  const { upload, uploading } = useFileUpload();
+  const { uploadMany, uploading, batch } = useFileUpload();
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState('general');
@@ -148,9 +149,9 @@ const ProductFormDialog: React.FC<Props> = ({
 
   const handleUpload = async (files: FileList | null) => {
     if (!files?.length) return;
-    const accepted: ProductMedia[] = [];
+    const valid: File[] = [];
     for (const file of Array.from(files)) {
-      if (!file.type.startsWith('image/')) {
+      if (!file.type.startsWith('image/') && !isHeic(file)) {
         toast({ title: 'Vetëm imazhe', description: `${file.name} nuk është imazh.`, variant: 'destructive' });
         continue;
       }
@@ -158,13 +159,20 @@ const ProductFormDialog: React.FC<Props> = ({
         toast({ title: 'Imazh shumë i madh', description: `${file.name} kalon 5MB.`, variant: 'destructive' });
         continue;
       }
-      try {
-        const res = await upload(file, 'products');
-        accepted.push({ url: res.url, alt: draft.name || file.name, position: (draft.images?.length || 0) + accepted.length });
-      } catch {
-        toast({ title: 'Ngarkimi dështoi', description: file.name, variant: 'destructive' });
-      }
+      valid.push(file);
     }
+    // Up to 3 in parallel, kept in the order picked; failures never drop the rest.
+    const { ok, failed } = await uploadMany(valid, 'products');
+    if (failed.length) {
+      toast({
+        title: ok.length ? `${ok.length} u ngarkuan, ${failed.length} dështuan` : 'Ngarkimi dështoi',
+        description: failed.slice(0, 3).map(f => f.file.name).join(', ') + (failed.length > 3 ? ` … +${failed.length - 3}` : ''),
+        variant: 'destructive',
+      });
+    }
+    const accepted: ProductMedia[] = ok.map(({ file, result }, i) => ({
+      url: result.url, alt: draft.name || file.name, position: (draft.images?.length || 0) + i,
+    }));
     if (accepted.length) {
       const images = [...(draft.images || []), ...accepted];
       // First image uploaded becomes the primary one automatically.
@@ -559,7 +567,7 @@ const ProductFormDialog: React.FC<Props> = ({
           <TabsContent value="media" className="space-y-3 mt-0">
             <label className="flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6 cursor-pointer hover:bg-muted/40 transition-colors">
               {uploading ? <Loader2 className="w-6 h-6 animate-spin text-primary" /> : <Upload className="w-6 h-6 text-muted-foreground" />}
-              <span className="text-sm text-foreground">Kliko për të ngarkuar foto</span>
+              <span className="text-sm text-foreground" aria-live="polite">{batchLabel(batch) ?? 'Kliko për të ngarkuar foto (mund të zgjidhni disa)'}</span>
               <span className="text-xs text-muted-foreground">JPG/PNG/WebP · max 5MB për foto</span>
               <input type="file" accept="image/*" multiple className="hidden" onChange={e => { handleUpload(e.target.files); e.target.value = ''; }} />
             </label>

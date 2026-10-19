@@ -6,6 +6,7 @@ import { useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
 import { safeExternalUrl } from '../lib/safeUrl';
+import { batchLabel } from '../lib/uploadQueue';
 import type { Lead, LeadActivity, FileAttachment } from '../types';
 
 // What the CRM lets you attach. Must stay a subset of the VPS ALLOWED_UPLOAD
@@ -96,28 +97,26 @@ export const AttachmentPickerButton: React.FC<{
   label?: string;
 }> = ({ onUploaded, folder = 'crm', disabled, className, label }) => {
   const inputRef = useRef<HTMLInputElement>(null);
-  const { upload, uploading } = useFileUpload();
+  const { uploadMany, uploading, batch } = useFileUpload();
   const { toast } = useToast();
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    const done: FileAttachment[] = [];
-    for (const file of Array.from(files)) {
-      if (file.size > MAX_UPLOAD_BYTES) {
-        toast({ title: 'Skedar shumë i madh', description: `${file.name} kalon 15 MB.`, variant: 'destructive' });
-        continue;
-      }
-      try {
-        const res = await upload(file, folder);
-        done.push({ url: res.url, name: res.name || file.name, size: res.size ?? file.size, type: res.type || file.type || '' });
-      } catch (err) {
-        toast({
-          title: 'Ngarkimi dështoi',
-          description: `${file.name}: ${err instanceof Error ? err.message : 'gabim i panjohur'}`,
-          variant: 'destructive',
-        });
-      }
+    const picked = Array.from(files);
+    const tooBig = picked.filter(f => f.size > MAX_UPLOAD_BYTES);
+    if (tooBig.length) {
+      toast({ title: 'Skedar shumë i madh', description: `${tooBig.map(f => f.name).slice(0, 3).join(', ')}${tooBig.length > 3 ? ` … +${tooBig.length - 3}` : ''} kalon 15 MB.`, variant: 'destructive' });
     }
+    // Up to 3 in parallel; the ones that made it are saved even when some fail.
+    const { ok, failed } = await uploadMany(picked.filter(f => f.size <= MAX_UPLOAD_BYTES), folder);
+    if (failed.length) {
+      toast({
+        title: ok.length ? `${ok.length} u ngarkuan, ${failed.length} dështuan` : 'Ngarkimi dështoi',
+        description: failed.slice(0, 3).map(f => `${f.file.name}: ${f.error.message}`).join(' · ') + (failed.length > 3 ? ` … +${failed.length - 3}` : ''),
+        variant: 'destructive',
+      });
+    }
+    const done: FileAttachment[] = ok.map(({ file, result: res }) => ({ url: res.url, name: res.name || file.name, size: res.size ?? file.size, type: res.type || file.type || '' }));
     if (done.length) onUploaded(done);
   };
 
@@ -138,10 +137,12 @@ export const AttachmentPickerButton: React.FC<{
         className={className}
         disabled={disabled || uploading}
         onClick={() => inputRef.current?.click()}
-        title="Bashkëngjit dokument (PDF, Word, Excel, imazh…)"
+        title="Bashkëngjit dokumente ose foto (mund të zgjidhni disa njëherësh)"
       >
         {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Paperclip className="w-3.5 h-3.5" />}
-        {label ? <span className="ml-1.5">{label}</span> : null}
+        {batchLabel(batch)
+          ? <span className="ml-1.5 tabular-nums" aria-live="polite">{batchLabel(batch)}</span>
+          : label ? <span className="ml-1.5">{label}</span> : null}
       </Button>
     </>
   );

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { useFileUpload } from '../hooks/useFileUpload';
+import { batchLabel } from '../lib/uploadQueue';
 import { getInquiryCompleteness } from '../lib/inquiryBrief';
 
 // --------------- Types ---------------
@@ -524,7 +525,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
   const [aiField, setAiField] = useState<null | 'businessDescription' | 'projectNeedDescription'>(null);
 
   // ---------- File uploads: logo + fotot/materialet ----------
-  const { upload } = useFileUpload();
+  const { upload, uploadMany, batch: materialsBatch } = useFileUpload();
   const [logoUploading, setLogoUploading] = useState(false);
   const [materialsUploading, setMaterialsUploading] = useState(false);
 
@@ -549,12 +550,17 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
     if (!files || files.length === 0) return;
     setMaterialsUploading(true);
     try {
-      const uploaded: { url: string; name: string }[] = [];
-      for (const file of Array.from(files)) {
-        const res = await upload(file, 'inquiry-materials');
-        uploaded.push({ url: res.url, name: res.name || file.name });
+      // Up to 3 in parallel; a failed file no longer throws away the ones that made it.
+      const { ok, failed } = await uploadMany(Array.from(files), 'inquiry-materials');
+      const uploaded = ok.map(({ file, result }) => ({ url: result.url, name: result.name || file.name }));
+      if (uploaded.length) setForm(prev => ({ ...prev, materialFiles: [...prev.materialFiles, ...uploaded] }));
+      if (failed.length) {
+        toast({
+          title: ok.length ? `${ok.length} u ngarkuan, ${failed.length} jo` : 'Ngarkimi nuk u krye',
+          description: failed.slice(0, 3).map(f => `${f.file.name}: ${f.error.message}`).join(' · ') || 'Provojeni edhe një herë, ju lutem.',
+          variant: 'destructive',
+        });
       }
-      setForm(prev => ({ ...prev, materialFiles: [...prev.materialFiles, ...uploaded] }));
     } catch (err: any) {
       toast({ title: 'Ngarkimi nuk u krye', description: err?.message || 'Provojeni edhe një herë, ju lutem.', variant: 'destructive' });
     } finally {
@@ -2547,7 +2553,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
           <label className="flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border hover:border-primary/40 hover:bg-muted/40 cursor-pointer py-5 transition-colors">
             <input type="file" multiple accept="image/*,application/pdf" className="hidden" disabled={materialsUploading} onChange={e => { handleMaterialsUpload(e.target.files); e.target.value = ''; }} />
             {materialsUploading ? (
-              <><Loader2 className="w-4 h-4 animate-spin text-primary" /><span className="text-sm text-muted-foreground">Duke ngarkuar...</span></>
+              <><Loader2 className="w-4 h-4 animate-spin text-primary" /><span className="text-sm text-muted-foreground" aria-live="polite">{batchLabel(materialsBatch) ?? 'Duke ngarkuar...'}</span></>
             ) : (
               <><Upload className="w-4 h-4 text-primary" /><span className="text-sm font-medium text-primary">Ngarko foto / materiale</span></>
             )}
