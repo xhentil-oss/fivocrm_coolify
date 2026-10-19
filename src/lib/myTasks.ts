@@ -49,7 +49,9 @@ export function isAssignedToMe(task: Pick<Task, 'assignedToUserId'>, ids: Ids): 
 /** I am a collaborator on someone else's task (not its assignee). */
 export function isCollaborationOnly(task: Pick<Task, 'assignedToUserId' | 'collaboratorIds'>, ids: Ids): boolean {
   if (isAssignedToMe(task, ids)) return false;
-  return (task.collaboratorIds || []).some(id => has(ids, id));
+  // Legacy rows store collaboratorIds as a non-array (string / map) — never trust the shape.
+  const collab: unknown = task.collaboratorIds;
+  return Array.isArray(collab) && collab.some(id => typeof id === 'string' && has(ids, id));
 }
 
 /**

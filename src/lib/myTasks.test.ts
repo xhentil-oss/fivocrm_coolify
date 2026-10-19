@@ -156,3 +156,11 @@ describe('date helpers', () => {
     expect(dueLabel({}, NOW)).toBe('');
   });
 });
+
+describe('legacy collaboratorIds shapes', () => {
+  it('a non-array collaboratorIds never throws and never matches', () => {
+    for (const bad of ['u1', { u1: true }, 42, null]) {
+      expect(isCollaborationOnly({ assignedToUserId: 'u2', collaboratorIds: bad as any }, IDS)).toBe(false);
+    }
+  });
+});

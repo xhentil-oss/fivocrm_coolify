@@ -40,7 +40,8 @@ export function taskCompletionRecipients(task: Task, actorUid: string): string[]
   const seriesCreator = (task as Task & { seriesCreatedByUserId?: string | null }).seriesCreatedByUserId;
   if (seriesCreator) targets.add(seriesCreator);
   if (task.assignedToUserId) targets.add(task.assignedToUserId);
-  for (const id of task.collaboratorIds || []) if (id) targets.add(id);
+  const collab: unknown = task.collaboratorIds;
+  if (Array.isArray(collab)) for (const id of collab) if (typeof id === 'string' && id) targets.add(id);
   targets.delete(actorUid);
   return [...targets];
 }
