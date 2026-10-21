@@ -127,6 +127,7 @@ const EngineeringLandingPage = lazyRetry(() => import('./views/landing/Engineeri
 const RentACarSoftwareLandingPage = lazyRetry(() => import('./views/landing/RentACarSoftwareLandingPage'));
 const PentaGroupLandingPage = lazyRetry(() => import('./views/landing/PentaGroupLandingPage'));
 const QenderEstetikeLandingPage = lazyRetry(() => import('./views/landing/QenderEstetikeLandingPage'));
+const BodyCodeLandingPage = lazyRetry(() => import('./views/landing/BodyCodeLandingPage'));
 const PriceCalculatorView = lazyRetry(() => import('./views/PriceCalculatorView'));
 const LandingPagesView = lazyRetry(() => import('./views/LandingPagesView'));
 const PrivacyPolicyView = lazyRetry(() => import('./views/PrivacyPolicyView'));
@@ -316,6 +317,7 @@ function AppContent() {
       <Route path="/rent-a-car" element={<Suspense fallback={<LazyFallback />}><RentACarSoftwareLandingPage /></Suspense>} />
       <Route path="/penta-group" element={<Suspense fallback={<LazyFallback />}><PentaGroupLandingPage /></Suspense>} />
       <Route path="/qender-estetike" element={<Suspense fallback={<LazyFallback />}><QenderEstetikeLandingPage /></Suspense>} />
+      <Route path="/body-code" element={<Suspense fallback={<LazyFallback />}><BodyCodeLandingPage /></Suspense>} />
       {/* Public invoice payment — the token in the link is the authorization */}
       <Route path="/pay/:invoiceId" element={<Suspense fallback={<LazyFallback />}><PublicPayView /></Suspense>} />
       <Route path="/privacy" element={<Suspense fallback={<LazyFallback />}><PrivacyPolicyView /></Suspense>} />

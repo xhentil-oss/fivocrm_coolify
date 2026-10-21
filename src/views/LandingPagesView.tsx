@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Shield, Sun, Camera, Car, Croissant, Store, Layers, HardHat } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Shield, Sun, Camera, Car, Croissant, Store, Layers, HardHat, Zap } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 import { copyText } from '../lib/clipboard';
@@ -268,6 +268,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Sparkles,
     color: 'text-rose-600',
     gradient: 'from-rose-500 to-fuchsia-700',
+    status: 'active',
+  },
+  {
+    id: 'body-code',
+    title: 'Body Code — Stërvitje EMS',
+    description: 'Ofertë e personalizuar për Body Code (7 studio EMS: Tiranë ×5, Durrës, Shkodër): reklama Meta për çdo studio, 16 postime/muaj (10 Reels, 4 karusele, 2 foto), SEO, GEO dhe raport mujor. Premium 150.000 Lekë/muaj; Business 190.000 Lekë/muaj + mbrojtje imazhi, heqje vlerësimesh negative nga Google Maps, artikuj në portale shqiptare dhe të huaja.',
+    path: '/body-code',
+    category: 'Ofertë Klienti',
+    icon: Zap,
+    color: 'text-lime-600',
+    gradient: 'from-lime-500 to-emerald-700',
     status: 'active',
   },
 ];
