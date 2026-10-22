@@ -113,6 +113,8 @@ export const NOTIFICATION_TYPES = {
   invoice_paid:             { category: 'invoices', priority: 'success',  groupLabel: 'pagesa faturash', portal: true },
   invoice_overdue:          { category: 'invoices', priority: 'critical', groupLabel: 'fatura të skaduara', portal: true },
   invoice_reminder_sent:    { category: 'invoices', priority: 'warning',  groupLabel: 'kujtesa faturash', portal: true },
+  // Staff only: the automatic overdue reminders ran out (email + N WhatsApp) — call the client.
+  invoice_overdue_escalation: { category: 'invoices', priority: 'critical', groupLabel: 'fatura për të kontaktuar' },
   // Legacy variants written by older cron runs — kept so historical rows still
   // render, categorise and mute correctly. New runs emit invoice_reminder_sent.
   invoice_reminder1_sent:   { category: 'invoices', priority: 'warning',  groupLabel: 'kujtesa faturash' },

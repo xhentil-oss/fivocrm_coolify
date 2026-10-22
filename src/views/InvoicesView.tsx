@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
+import { resolveInvoiceWaConfig } from '../lib/finance/invoiceWaReminders';
 import { getNextInvoiceNumber, recordInvoicePartialPayment, deleteInvoicePaymentRows } from '../lib/firebase';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -1925,6 +1926,7 @@ const InvoicesView: React.FC = () => {
                   Data e lëshimit:&nbsp;<span className="font-medium text-foreground">{drawerInvoice.invoiceDate ? new Date(drawerInvoice.invoiceDate).toLocaleDateString() : new Date(drawerInvoice.createdAt).toLocaleDateString()}</span>
                 </span>
               </div>
+              <InvoiceReminderHistory invoice={drawerInvoice} />
             </div>
             {/* Footer */}
             <div className="p-4 border-t border-border space-y-2">
@@ -4328,3 +4330,41 @@ const InvoiceDetails: React.FC<{
 };
 
 export default InvoicesView;
+
+/**
+ * What the `overdue-reminders` cron has already sent the client for this
+ * invoice (email first, then WhatsApp up to `waOverdueMaxSends`). Read-only —
+ * the stamps are the cron's idempotency marks, shown so staff do not chase a
+ * client who was just reminded.
+ */
+function InvoiceReminderHistory({ invoice }: { invoice: Invoice }) {
+  const settings = useTeamSettingsData();
+  const maxSends = resolveInvoiceWaConfig(settings as Record<string, any> | null).overdueMaxSends;
+  const fmt = (raw: unknown): string => {
+    const d = (raw as any)?.toDate ? (raw as any).toDate() : raw ? new Date(raw as any) : null;
+    return d && !isNaN(d.getTime()) ? d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' }) : '';
+  };
+  const rows: { label: string; value: string }[] = [];
+  const preDue = fmt(invoice.preDueWaSentAt);
+  if (preDue) rows.push({ label: 'WhatsApp para afatit', value: preDue });
+  const onDue = fmt(invoice.dueWaSentAt);
+  if (onDue) rows.push({ label: 'WhatsApp ditën e afatit', value: onDue });
+  const email = fmt(invoice.overdueEmailSentAt);
+  if (email) rows.push({ label: 'Email vonese', value: email });
+  const wa = fmt(invoice.overdueWaSentAt);
+  if (wa) rows.push({ label: 'WhatsApp vonese', value: `${wa}${invoice.overdueWaCount ? ` (${invoice.overdueWaCount}/${maxSends})` : ''}` });
+  if (!rows.length) return null;
+  return (
+    <div className="rounded-md border border-border p-3 text-xs space-y-1">
+      <p className="font-medium text-foreground">Kujtesat e dërguara klientit</p>
+      {rows.map((r) => (
+        <div key={r.label} className="flex justify-between gap-2 text-muted-foreground">
+          <span>{r.label}</span><span className="font-medium text-foreground">{r.value}</span>
+        </div>
+      ))}
+      {invoice.overdueWaMaxNotifiedAt && (
+        <p className="text-warning">Kujtesat automatike përfunduan — kontaktoni klientin.</p>
+      )}
+    </div>
+  );
+}

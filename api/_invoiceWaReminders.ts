@@ -10,7 +10,15 @@
 //   pre-due  → `preDueWaSentAt`   ("skadon për N ditë", once)
 //   due      → `dueWaSentAt`      ("skadon sot", once)
 //   overdue  → `overdueWaSentAt`  (after `overdueDays` late, repeated every
-//                                  `renotifyDays`)
+//                                  `renotifyDays`, at most `overdueMaxSends`
+//                                  times — counted in `overdueWaCount`)
+//
+// EMAIL FIRST: the overdue stage waits for the overdue EMAIL (`overdueEmailSentAt`,
+// written by the same cron, day ~1 late) whenever an email CAN go out
+// (`emailChannelAvailable`, decided by the cron with the exact conditions its
+// email part sends under). No address / WHMCS mails it itself / email off →
+// WhatsApp goes anyway. Facts come from the doc snapshot BEFORE the tick, so the
+// WhatsApp leg always lands on a later tick than the email, never alongside it.
 //
 // Every non-send is a NAMED reason (never a silent `continue`), counted into
 // `teamSettings.waInvoiceLastRun.blocked` so the panel can show "38 shqyrtuar →
@@ -44,6 +52,8 @@ export interface InvoiceWaConfig {
   onDue: boolean;
   overdueDays: number;
   renotifyDays: number;
+  /** Overdue-stage sends per invoice, then staff take over. */
+  overdueMaxSends: number;
   /** Local send window [hourStart, hourEnd) in Europe/Tirane. */
   hourStart: number;
   hourEnd: number;
@@ -61,8 +71,9 @@ export const INVOICE_WA_DEFAULTS: Readonly<InvoiceWaConfig> = Object.freeze({
   channelPhoneNumberId: '',
   preDueDays: 0,
   onDue: false,
-  overdueDays: 60,
-  renotifyDays: 14,
+  overdueDays: 4,
+  renotifyDays: 7,
+  overdueMaxSends: 3,
   hourStart: 9,
   hourEnd: 19,
   emailSkipWhmcs: false,
@@ -72,6 +83,7 @@ export const INVOICE_WA_LIMITS = Object.freeze({
   preDueDays: { min: 0, max: 30 },
   overdueDays: { min: 1, max: 365 },
   renotifyDays: { min: 1, max: 90 },
+  overdueMaxSends: { min: 1, max: 10 },
   hour: { min: 0, max: 23 },
 });
 
@@ -111,6 +123,7 @@ export function resolveInvoiceWaConfig(settings: Record<string, any> | null | un
     onDue: s.waInvoiceOnDue === true,
     overdueDays: intInRange(s.waOverdueDays, INVOICE_WA_LIMITS.overdueDays.min, INVOICE_WA_LIMITS.overdueDays.max) ?? d.overdueDays,
     renotifyDays: intInRange(s.waInvoiceRenotifyDays, INVOICE_WA_LIMITS.renotifyDays.min, INVOICE_WA_LIMITS.renotifyDays.max) ?? d.renotifyDays,
+    overdueMaxSends: intInRange(s.waOverdueMaxSends, INVOICE_WA_LIMITS.overdueMaxSends.min, INVOICE_WA_LIMITS.overdueMaxSends.max) ?? d.overdueMaxSends,
     hourStart,
     hourEnd,
     emailSkipWhmcs: s.overdueEmailSkipWhmcs === true,
@@ -153,6 +166,12 @@ export interface InvoiceWaInvoiceFacts {
   preDueWaSentAtMs?: number | null;
   dueWaSentAtMs?: number | null;
   overdueWaSentAtMs?: number | null;
+  /** Overdue-stage WhatsApp sends so far. */
+  overdueWaCount?: number | null;
+  /** When the overdue EMAIL went out (null = not yet). */
+  overdueEmailSentAtMs?: number | null;
+  /** An overdue email can reach this client (address, not opted out, not WHMCS-skipped). */
+  emailChannelAvailable?: boolean;
 }
 
 export interface InvoiceWaCustomerFacts {
@@ -177,6 +196,8 @@ export type InvoiceWaBlockReason =
   | 'zero-balance'
   | 'no-due-date'
   | 'not-due'
+  | 'awaiting-email'
+  | 'max-sends-reached'
   | 'already-sent'
   | 'no-customer'
   | 'customer-opt-out'
@@ -193,6 +214,8 @@ export const INVOICE_WA_BLOCK_LABELS: Record<InvoiceWaBlockReason, string> = {
   'zero-balance': 'pa balancë',
   'no-due-date': 'pa afat',
   'not-due': 'ende jo në fazë',
+  'awaiting-email': 'pret email-in e vonesës',
+  'max-sends-reached': 'u arrit numri maksimal i kujtesave',
   'already-sent': 'dërguar tashmë',
   'no-customer': 'pa klient',
   'customer-opt-out': 'klienti ka fikur kujtesat',
@@ -223,6 +246,8 @@ export function invoiceWaStage(inv: InvoiceWaInvoiceFacts, cfg: InvoiceWaConfig,
 
   if (daysLate > 0) {
     if (daysLate < cfg.overdueDays) return { ok: false, reason: 'not-due' };
+    if (inv.emailChannelAvailable && !inv.overdueEmailSentAtMs) return { ok: false, reason: 'awaiting-email' };
+    if ((inv.overdueWaCount || 0) >= cfg.overdueMaxSends) return { ok: false, reason: 'max-sends-reached' };
     const last = inv.overdueWaSentAtMs || 0;
     if (last && ctx.nowMs - last < cfg.renotifyDays * INVOICE_WA_DAY_MS) return { ok: false, reason: 'already-sent' };
     return { ok: true, stage: 'overdue', daysLate };
@@ -269,9 +294,18 @@ export function invoiceWaDecision(
   return stage;
 }
 
-/** Digits only; anything shorter than 8 digits is not a reachable number. */
+/**
+ * Digits only, in international form; anything shorter than 8 digits is not a
+ * reachable number. Albanian numbers are stored every which way in the CRM
+ * ("069…", "69…", "+355 069…", "00355…"); WhatsApp needs "355…", and a bare
+ * "699249702" became the jid 699249702@s.whatsapp.net — a send that can only fail.
+ */
 export function normalizeInvoiceWaPhone(phone: string | null | undefined): string {
-  const digits = String(phone || '').replace(/\D/g, '');
+  let digits = String(phone || '').replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (/^3550[6-9]/.test(digits)) digits = '355' + digits.slice(4);
+  else if (/^0[6-9]\d{7,8}$/.test(digits)) digits = '355' + digits.slice(1);
+  else if (/^6[6-9]\d{7}$/.test(digits)) digits = '355' + digits;
   return digits.length >= 8 ? digits : '';
 }
 

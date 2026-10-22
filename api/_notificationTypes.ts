@@ -69,6 +69,7 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   invoice_paid: 'invoices',
   invoice_overdue: 'invoices',
   invoice_reminder_sent: 'invoices',
+  invoice_overdue_escalation: 'invoices',
   invoice_reminder1_sent: 'invoices',
   invoice_reminder2_sent: 'invoices',
   auto_invoice_created: 'invoices',

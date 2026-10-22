@@ -1265,6 +1265,12 @@ export interface Invoice {
   /** One-shot stages: "skadon për N ditë" and "skadon sot". */
   preDueWaSentAt?: Date;
   dueWaSentAt?: Date;
+  /** Overdue-stage WhatsApp sends so far (capped by `waOverdueMaxSends`). */
+  overdueWaCount?: number;
+  /** Staff were told the automatic reminders ran out (once per invoice). */
+  overdueWaMaxNotifiedAt?: Date;
+  /** Partial invoice past due: the one-time staff `invoice_overdue` notice (invoice-reminders). */
+  overdueNoticeSentAt?: Date;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

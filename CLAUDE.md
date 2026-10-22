@@ -1302,6 +1302,19 @@ Full runbook: `workspace/WHMCS_SYNC.md`.
   is what stops a 3 a.m. message), `waOptOut` honoured, and every non-send a
   named reason tallied into `teamSettings.waInvoiceLastRun`. Never add a filter
   inline in the cron loop. Needs index `invoices (status, dueDate)`.
+- **Email first, then WhatsApp** (Oct 2026): the overdue email goes out from day 1
+  late (Overdue AND Partial/Pending past due), the overdue WA stage from day
+  `waOverdueDays` (default 4 = "more than 3 days") and only after
+  `overdueEmailSentAt` (`awaiting-email`), unless no email can go out (no address /
+  email opted out / WHMCS-skipped / no SMTP). ONE predicate (`emailCanSend` in
+  `runOverdueReminders`) feeds both legs; never compute it twice. WA repeats every
+  `waInvoiceRenotifyDays` (7) up to `waOverdueMaxSends` (3, `overdueWaCount`) →
+  `max-sends-reached`; the last send notifies creator + managers once
+  (`invoice_overdue_escalation`, `overdueWaMaxNotifiedAt`). The Baileys agent is
+  resolved in the job from `whatsappAccounts` of the invoice's BUSINESS (configured
+  agent → invoice team's → any, connected first) and sent with the AGENT's teamId —
+  the number often lives on another department. `normalizeInvoiceWaPhone` turns
+  Albanian local numbers (`69…`, `069…`, `00355…`) into `355…`.
 - WHMCS invoices are created with every FivoCRM reminder flag already `true`
   and `createdByUserId: null` — WHMCS emails them itself. `overdueEmailSkipWhmcs`
   stops FivoCRM's weekly overdue email duplicating that.

@@ -46,7 +46,7 @@ const SECTION_KEYS = {
     'waAutoReminderDays', 'waAutoReminderStatuses', 'waAutoReminderTemplateId', 'waAutoReminderChannelPhoneNumberId',
     'waOverdueEnabled', 'waOverdueDays', 'waOverdueTemplateId', 'waOverdueChannelPhoneNumberId',
     'waInvoiceSources', 'waInvoiceChannel', 'waInvoiceAgentId', 'waInvoiceText', 'waInvoicePreDueDays', 'waInvoiceOnDue',
-    'waInvoiceRenotifyDays', 'waInvoiceHourStart', 'waInvoiceHourEnd', 'overdueEmailSkipWhmcs'],
+    'waInvoiceRenotifyDays', 'waOverdueMaxSends', 'waInvoiceHourStart', 'waInvoiceHourEnd', 'overdueEmailSkipWhmcs'],
   newLead: ['waAutoCreateLead', 'waAutoCreateLeadDailyCap'],
   playbooks: ['followUpPlaybooks'],
 } as const satisfies Record<string, readonly (keyof TeamSettings)[]>;
@@ -98,7 +98,7 @@ function draftFrom(s: TeamSettings | null): Draft {
     waAutoReminderTemplateId: s?.waAutoReminderTemplateId || '',
     waAutoReminderChannelPhoneNumberId: s?.waAutoReminderChannelPhoneNumberId || '',
     waOverdueEnabled: !!s?.waOverdueEnabled,
-    waOverdueDays: s?.waOverdueDays ?? 60,
+    waOverdueDays: invoiceWa.overdueDays,
     waOverdueTemplateId: s?.waOverdueTemplateId || '',
     waOverdueChannelPhoneNumberId: s?.waOverdueChannelPhoneNumberId || '',
     // Invoice WhatsApp reminders — same resolver the cron reads with.
@@ -109,6 +109,7 @@ function draftFrom(s: TeamSettings | null): Draft {
     waInvoicePreDueDays: invoiceWa.preDueDays,
     waInvoiceOnDue: invoiceWa.onDue,
     waInvoiceRenotifyDays: invoiceWa.renotifyDays,
+    waOverdueMaxSends: invoiceWa.overdueMaxSends,
     waInvoiceHourStart: invoiceWa.hourStart,
     waInvoiceHourEnd: invoiceWa.hourEnd,
     overdueEmailSkipWhmcs: invoiceWa.emailSkipWhmcs,
@@ -289,7 +290,7 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
         const wa = resolveInvoiceWaConfig(draft);
         Object.assign(patch, {
           waOverdueDays: wa.overdueDays, waInvoicePreDueDays: wa.preDueDays, waInvoiceRenotifyDays: wa.renotifyDays,
-          waInvoiceHourStart: wa.hourStart, waInvoiceHourEnd: wa.hourEnd, waInvoiceAgentId: wa.agentId,
+          waOverdueMaxSends: wa.overdueMaxSends, waInvoiceHourStart: wa.hourStart, waInvoiceHourEnd: wa.hourEnd, waInvoiceAgentId: wa.agentId,
           waInvoiceText: String(draft.waInvoiceText || '').trim(),
         });
       }
@@ -527,13 +528,19 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
                 <p className="text-[11px] text-muted-foreground">Meta dërgon vetëm template të aprovuar (kategori Utility). Parametrat e template-it mund t’i lidhësh me: name, firstName, invoiceNumber, amount, currency, dueDate, dueText, daysLate, link, whmcsLink.</p>
               </>
             )}
-            <div className="grid sm:grid-cols-3 gap-4">
+            <p className="text-[11px] text-muted-foreground">
+              Radha: klienti merr në fillim <strong>email-in e vonesës</strong> (dita 1, çdo 7 ditë), pastaj WhatsApp pas ditëve të vonesës më poshtë.
+              WhatsApp pret email-in — përveç kur klienti s’ka email, e ka fikur, ose fatura WHMCS i ka email-et nga WHMCS.
+            </p>
+            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <NumberField label="Para afatit" value={draft.waInvoicePreDueDays} onChange={(v) => set('waInvoicePreDueDays', v)}
                 min={INVOICE_WA_LIMITS.preDueDays.min} max={INVOICE_WA_LIMITS.preDueDays.max} suffix="ditë (0 = fikur)" hint="“Skadon për N ditë”, një herë" disabled={off} />
               <NumberField label="Pas vonesës" value={draft.waOverdueDays} onChange={(v) => set('waOverdueDays', v)}
                 min={INVOICE_WA_LIMITS.overdueDays.min} max={INVOICE_WA_LIMITS.overdueDays.max} suffix="ditë" hint="“Ka N ditë vonesë”" disabled={off} />
               <NumberField label="Përsërit çdo" value={draft.waInvoiceRenotifyDays} onChange={(v) => set('waInvoiceRenotifyDays', v)}
                 min={INVOICE_WA_LIMITS.renotifyDays.min} max={INVOICE_WA_LIMITS.renotifyDays.max} suffix="ditë" hint="Sa shpesh ripërsëritet kujtesa e vonesës" disabled={off} />
+              <NumberField label="Maks. kujtesa WhatsApp" value={draft.waOverdueMaxSends} onChange={(v) => set('waOverdueMaxSends', v)}
+                min={INVOICE_WA_LIMITS.overdueMaxSends.min} max={INVOICE_WA_LIMITS.overdueMaxSends.max} suffix="herë" hint="Pas kësaj ndalet dhe njoftohet stafi" disabled={off} />
             </div>
             <ToggleRow label="Kujtesë edhe ditën e afatit" checked={!!draft.waInvoiceOnDue} onChange={(v) => set('waInvoiceOnDue', v)} disabled={off}
               hint="“Fatura skadon sot” — një herë." />

@@ -60,28 +60,32 @@ describe('api mirror', () => {
 });
 
 describe('resolveInvoiceWaConfig', () => {
-  it('returns the defaults for nothing / {} (disabled, Meta, 60 days, 09–19)', () => {
+  it('returns the defaults for nothing / {} (disabled, Meta, day 4, every 7 days, max 3, 09–19)', () => {
     expect(resolveInvoiceWaConfig(null)).toEqual(INVOICE_WA_DEFAULTS);
     expect(resolveInvoiceWaConfig({})).toEqual(INVOICE_WA_DEFAULTS);
+    // "More than 3 days late" = day 4; then weekly, three times, then staff.
+    expect([INVOICE_WA_DEFAULTS.overdueDays, INVOICE_WA_DEFAULTS.renotifyDays, INVOICE_WA_DEFAULTS.overdueMaxSends]).toEqual([4, 7, 3]);
   });
   it('reads the legacy waOverdue* keys AND the new waInvoice* keys', () => {
     const c = resolveInvoiceWaConfig({
       waOverdueEnabled: true, waOverdueDays: '30', waOverdueTemplateId: 't1', waOverdueChannelPhoneNumberId: 'p1',
       waInvoiceSources: 'whmcs', waInvoiceChannel: 'baileys', waInvoiceAgentId: ' a1 ', waInvoiceText: 'Hi {{name}}',
       waInvoicePreDueDays: 3, waInvoiceOnDue: true, waInvoiceRenotifyDays: 7, waInvoiceHourStart: 8, waInvoiceHourEnd: 20,
-      overdueEmailSkipWhmcs: true,
+      overdueEmailSkipWhmcs: true, waOverdueMaxSends: '5',
     });
     expect(c).toEqual({
       enabled: true, sources: 'whmcs', channel: 'baileys', agentId: 'a1', text: 'Hi {{name}}', templateId: 't1',
-      channelPhoneNumberId: 'p1', preDueDays: 3, onDue: true, overdueDays: 30, renotifyDays: 7, hourStart: 8, hourEnd: 20,
+      channelPhoneNumberId: 'p1', preDueDays: 3, onDue: true, overdueDays: 30, renotifyDays: 7, overdueMaxSends: 5, hourStart: 8, hourEnd: 20,
       emailSkipWhmcs: true,
     });
   });
   it('an invalid value falls back individually, never resetting its neighbours', () => {
-    const c = resolveInvoiceWaConfig({ waOverdueDays: 0, waInvoicePreDueDays: 99, waInvoiceRenotifyDays: 'x', waInvoiceSources: 'bogus', waInvoiceChannel: 'sms' });
-    expect(c.overdueDays).toBe(60);
+    const c = resolveInvoiceWaConfig({ waOverdueDays: 0, waInvoicePreDueDays: 99, waInvoiceRenotifyDays: 'x', waInvoiceSources: 'bogus', waInvoiceChannel: 'sms', waOverdueMaxSends: 11 });
+    expect(c.overdueDays).toBe(4);
     expect(c.preDueDays).toBe(0);
-    expect(c.renotifyDays).toBe(14);
+    expect(c.renotifyDays).toBe(7);
+    expect(c.overdueMaxSends).toBe(3);
+    expect(resolveInvoiceWaConfig({ waOverdueMaxSends: 0 }).overdueMaxSends).toBe(3);
     expect(c.sources).toBe('all');
     expect(c.channel).toBe('meta');
   });
@@ -169,9 +173,52 @@ describe('invoiceWaDecision — the only gate', () => {
     expect(invoiceWaDecision(inv(), customer, cfg({ channel: 'baileys' }), ctx({ hasTemplate: false }))).toMatchObject({ ok: true });
   });
   it('every reason has a label', () => {
-    const reasons = ['disabled', 'source-mismatch', 'settled', 'zero-balance', 'no-due-date', 'not-due', 'already-sent',
+    const reasons = ['disabled', 'source-mismatch', 'settled', 'zero-balance', 'no-due-date', 'not-due', 'awaiting-email',
+      'max-sends-reached', 'already-sent',
       'no-customer', 'customer-opt-out', 'wa-opt-out', 'no-phone', 'outside-hours', 'no-channel', 'no-template'] as const;
     for (const r of reasons) expect(INVOICE_WA_BLOCK_LABELS[r]).toBeTruthy();
+  });
+});
+
+describe('email first, then WhatsApp (overdue stage)', () => {
+  const late = (days: number, over: Partial<InvoiceWaInvoiceFacts> = {}) =>
+    inv({ status: 'Overdue', source: 'manual', dueDateMs: dueIn(-days), ...over });
+  const c = cfg(); // defaults: day 4, every 7 days, max 3
+
+  it('3 days late is not "more than 3 days" — nothing yet', () => {
+    expect(invoiceWaDecision(late(3, { emailChannelAvailable: true, overdueEmailSentAtMs: NOW - 2 * DAY }), customer, c, ctx()))
+      .toEqual({ ok: false, reason: 'not-due' });
+  });
+  it('day 4 with an email possible but not yet sent → awaiting-email', () => {
+    expect(invoiceWaDecision(late(4, { emailChannelAvailable: true }), customer, c, ctx()))
+      .toEqual({ ok: false, reason: 'awaiting-email' });
+  });
+  it('day 4 after the email went out → WhatsApp', () => {
+    expect(invoiceWaDecision(late(4, { emailChannelAvailable: true, overdueEmailSentAtMs: NOW - 3 * DAY }), customer, c, ctx()))
+      .toEqual({ ok: true, stage: 'overdue', daysLate: 4 });
+  });
+  it('no email possible (no address / WHMCS mails it / opted out of email) → WhatsApp goes anyway', () => {
+    expect(invoiceWaDecision(late(4, { emailChannelAvailable: false }), customer, c, ctx()))
+      .toEqual({ ok: true, stage: 'overdue', daysLate: 4 });
+    // Legacy callers that pass no email facts keep the old behaviour.
+    expect(invoiceWaDecision(late(4), customer, c, ctx())).toMatchObject({ ok: true });
+  });
+  it('the email gate never touches the pre-due / due stages', () => {
+    expect(invoiceWaDecision(inv({ dueDateMs: dueIn(0), emailChannelAvailable: true }), customer, cfg({ onDue: true }), ctx()))
+      .toEqual({ ok: true, stage: 'due', daysLate: 0 });
+  });
+  it('repeats every 7 days, at most 3 sends, then max-sends-reached', () => {
+    const base = { emailChannelAvailable: true, overdueEmailSentAtMs: NOW - 10 * DAY };
+    expect(invoiceWaDecision(late(10, { ...base, overdueWaCount: 1, overdueWaSentAtMs: NOW - 6 * DAY }), customer, c, ctx()))
+      .toEqual({ ok: false, reason: 'already-sent' });
+    expect(invoiceWaDecision(late(11, { ...base, overdueWaCount: 1, overdueWaSentAtMs: NOW - 7 * DAY }), customer, c, ctx()))
+      .toEqual({ ok: true, stage: 'overdue', daysLate: 11 });
+    expect(invoiceWaDecision(late(18, { ...base, overdueWaCount: 2, overdueWaSentAtMs: NOW - 7 * DAY }), customer, c, ctx()))
+      .toMatchObject({ ok: true });
+    expect(invoiceWaDecision(late(25, { ...base, overdueWaCount: 3, overdueWaSentAtMs: NOW - 7 * DAY }), customer, c, ctx()))
+      .toEqual({ ok: false, reason: 'max-sends-reached' });
+    expect(invoiceWaDecision(late(25, { ...base, overdueWaCount: 3, overdueWaSentAtMs: NOW - 7 * DAY }), customer, cfg({ overdueMaxSends: 5 }), ctx()))
+      .toMatchObject({ ok: true });
   });
 });
 
@@ -207,6 +254,12 @@ describe('text', () => {
     expect(invoiceWaFirstName('  ')).toBe('');
     expect(normalizeInvoiceWaPhone('+355 69 123 4567')).toBe('355691234567');
     expect(normalizeInvoiceWaPhone('')).toBe('');
+    // Albanian numbers as they are typed into the CRM → international form.
+    expect(normalizeInvoiceWaPhone('699249702')).toBe('355699249702');
+    expect(normalizeInvoiceWaPhone('069 924 9702')).toBe('355699249702');
+    expect(normalizeInvoiceWaPhone('+355 069 924 9702')).toBe('355699249702');
+    expect(normalizeInvoiceWaPhone('00355699249702')).toBe('355699249702');
+    expect(normalizeInvoiceWaPhone('+39 347 123 4567')).toBe('393471234567');
     expect(tallyInvoiceWaBlocked(['no-phone', 'no-phone', 'not-due'])).toEqual({ 'no-phone': 2, 'not-due': 1 });
   });
 });

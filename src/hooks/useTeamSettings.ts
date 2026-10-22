@@ -125,8 +125,10 @@ export interface TeamSettings {
   waInvoicePreDueDays?: number;
   /** "Skadon sot" stage. Default false. */
   waInvoiceOnDue?: boolean;
-  /** Repeat the overdue stage every N days (1–90). Default 14. */
+  /** Repeat the overdue stage every N days (1–90). Default 7. */
   waInvoiceRenotifyDays?: number;
+  /** Overdue-stage WhatsApp sends per invoice (1–10), then staff are notified. Default 3. */
+  waOverdueMaxSends?: number;
   /** Local send window (Europe/Tirane hours, 0–23). Default 9–19. */
   waInvoiceHourStart?: number;
   waInvoiceHourEnd?: number;
