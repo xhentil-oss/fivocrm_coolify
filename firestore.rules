@@ -948,7 +948,8 @@ service cloud.firestore {
                  'nextFollowUpDate', 'nextFollowUpType', 'followUpNote', 'lastFollowUpDate',
                  'lastActivityAt', 'lastReminderSentAt', 'lastInboundAt', 'awaitingReply',
                  'assignedToUserId', 'status', 'tags', 'businessId', 'teamId', 'email',
-                 'createdByUserId']));
+                 'createdByUserId', 'waLid', 'waOptOut', 'waOptOutAt', 'waOptInAt',
+                 'waUndeliverablePhone', 'waUndeliverableAt', 'waUndeliverableError']));
       // Deleting a CRM record is a staff action. The portal never deletes its own
       // customer (PortalProfileView only updates), and a client erasing the record
       // that invoices/projects hang off would orphan the tenant's books.

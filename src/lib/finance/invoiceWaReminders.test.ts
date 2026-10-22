@@ -16,6 +16,10 @@ import {
   invoiceWaDecision,
   invoiceWaDueText,
   invoiceWaFirstName,
+  invoiceWaIdempotencyKey,
+  invoiceWaTemplateParams,
+  invoiceEmailUsable,
+  INVOICE_WA_PARAM_FIELDS,
   invoiceWaStage,
   invoiceWaStageField,
   localHourIn,
@@ -175,7 +179,8 @@ describe('invoiceWaDecision — the only gate', () => {
   it('every reason has a label', () => {
     const reasons = ['disabled', 'source-mismatch', 'settled', 'zero-balance', 'no-due-date', 'not-due', 'awaiting-email',
       'max-sends-reached', 'already-sent',
-      'no-customer', 'customer-opt-out', 'wa-opt-out', 'no-phone', 'outside-hours', 'no-channel', 'no-template'] as const;
+      'no-customer', 'customer-opt-out', 'wa-opt-out', 'no-phone', 'undeliverable', 'outside-hours', 'no-channel', 'no-template',
+      'send-failed'] as const;
     for (const r of reasons) expect(INVOICE_WA_BLOCK_LABELS[r]).toBeTruthy();
   });
 });
@@ -261,5 +266,66 @@ describe('text', () => {
     expect(normalizeInvoiceWaPhone('00355699249702')).toBe('355699249702');
     expect(normalizeInvoiceWaPhone('+39 347 123 4567')).toBe('393471234567');
     expect(tallyInvoiceWaBlocked(['no-phone', 'no-phone', 'not-due'])).toEqual({ 'no-phone': 2, 'not-due': 1 });
+  });
+});
+
+describe('email first — a FAILED email never holds WhatsApp hostage', () => {
+  const late = (days: number, over: Partial<InvoiceWaInvoiceFacts> = {}) =>
+    inv({ status: 'Overdue', source: 'manual', dueDateMs: dueIn(-days), ...over });
+  it('SMTP failed and never succeeded → WhatsApp goes', () => {
+    expect(invoiceWaDecision(late(5, { emailChannelAvailable: true, overdueEmailFailedAtMs: NOW - DAY }), customer, cfg(), ctx()))
+      .toEqual({ ok: true, stage: 'overdue', daysLate: 5 });
+  });
+  it('a failure OLDER than the last success changes nothing', () => {
+    const f = late(5, { emailChannelAvailable: true, overdueEmailSentAtMs: NOW - DAY, overdueEmailFailedAtMs: NOW - 3 * DAY });
+    expect(invoiceEmailUsable(f)).toBe(true);
+    expect(invoiceWaDecision(f, customer, cfg(), ctx())).toMatchObject({ ok: true });
+  });
+  it('no failure, no email yet → still awaiting-email', () => {
+    expect(invoiceWaDecision(late(5, { emailChannelAvailable: true }), customer, cfg(), ctx()))
+      .toEqual({ ok: false, reason: 'awaiting-email' });
+    expect(invoiceEmailUsable(late(5, { emailChannelAvailable: false }))).toBe(false);
+  });
+});
+
+describe('undeliverable numbers', () => {
+  it('a permanent failure for THIS number blocks; a new number re-arms', () => {
+    expect(invoiceWaDecision(inv(), { ...customer, waUndeliverablePhone: '355691234567' }, cfg(), ctx()))
+      .toEqual({ ok: false, reason: 'undeliverable' });
+    expect(invoiceWaDecision(inv(), { ...customer, waUndeliverablePhone: '355690000000' }, cfg(), ctx()))
+      .toMatchObject({ ok: true });
+  });
+});
+
+describe('idempotency key', () => {
+  it('is deterministic per invoice, stage and overdue send number', () => {
+    expect(invoiceWaIdempotencyKey('abc', 'overdue', 2)).toBe('inv_abc_overdue_2');
+    expect(invoiceWaIdempotencyKey('abc', 'due', 7)).toBe('inv_abc_due_1');
+    expect(invoiceWaIdempotencyKey('abc', 'pre-due', 0)).toBe('inv_abc_pre-due_1');
+  });
+});
+
+describe('Meta template params (invoice pseudo-fields)', () => {
+  const tctx = {
+    name: 'Arben Hoxha', firstName: 'Arben', company: 'Fivo', invoiceNumber: 'INV-7', amount: 12500, total: 20000,
+    currency: 'ALL', dueDate: '14.09.2026', dueText: 'ka 5 ditë vonesë', daysLate: 5, link: 'https://x/pay', whmcsLink: '',
+  };
+  it('fills every documented field, aliases included', () => {
+    expect(invoiceWaTemplateParams(
+      ['invoiceNumber', 'amount', 'balanceDue', 'currency', 'dueDate', 'daysLate', 'customerName', 'companyName', 'paymentLink', 'total'],
+      tctx,
+    )).toEqual(['INV-7', '12 500', '12 500', 'ALL', '14.09.2026', '5', 'Arben Hoxha', 'Fivo', 'https://x/pay', '20 000']);
+  });
+  it('unknown / custom / non-array → empty strings, never a crash', () => {
+    expect(invoiceWaTemplateParams(['custom', 'foo', ''], tctx)).toEqual(['', '', '']);
+    expect(invoiceWaTemplateParams(undefined, tctx)).toEqual([]);
+  });
+  it('a negative daysLate (pre-due) renders 0', () => {
+    expect(invoiceWaTemplateParams(['daysLate'], { ...tctx, daysLate: -3 })).toEqual(['0']);
+  });
+  it('the documented list is what the picker shows', () => {
+    for (const f of ['invoiceNumber', 'amount', 'balanceDue', 'currency', 'dueDate', 'daysLate', 'customerName', 'companyName', 'paymentLink']) {
+      expect(INVOICE_WA_PARAM_FIELDS).toContain(f);
+    }
   });
 });

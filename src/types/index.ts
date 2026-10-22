@@ -18,6 +18,9 @@ export interface WhatsAppAccount {
   connectionStatus?: 'connected' | 'disconnected' | null;
   lastConnectedAt?: Date | null;
   lastDisconnectedAt?: Date | null;
+  /** Why the socket last closed (VPS-written): 'logged_out' | 'replaced' | 'banned' | other code. */
+  lastDisconnectReason?: string | null;
+  businessId?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -50,6 +53,14 @@ export interface WhatsAppMessage {
   sentByUid?: string;
   mediaType?: 'image' | 'video' | 'audio' | 'document' | 'sticker';
   mediaUrl?: string;
+  /** Baileys agent (whatsappAccounts id) the row went through / arrived on. */
+  agentId?: string | null;
+  /** Sent by a machine (cron, campaign, auto-reply), not typed by a person. */
+  automated?: boolean;
+  /** Which machine: 'invoice-reminder' | 'campaign' | 'automation' | 'lead-reminder' | 'follow-up' | 'playbook' | 'auto-reply' | … */
+  automationKind?: string | null;
+  /** Legacy auto-reply marker (api/_waInbound.ts, VPS echo). */
+  isAutoReply?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -119,6 +130,8 @@ export interface WhatsAppBroadcast {
   /** Per-reason count of who the segment excluded on the last run (diagnostics). */
   lastRunBlocked?: Record<string, number>;
   lastRunAt?: Date;                   // evergreen: when the rule last evaluated
+  /** Phones whose send failed: normalised phone → { count, error, at }. */
+  failedPhones?: Record<string, { count?: number; error?: string | null; at?: any }>;
   error?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
@@ -1271,6 +1284,12 @@ export interface Invoice {
   overdueWaMaxNotifiedAt?: Date;
   /** Partial invoice past due: the one-time staff `invoice_overdue` notice (invoice-reminders). */
   overdueNoticeSentAt?: Date;
+  /** Last overdue-email failure (cron-written; cleared on the next successful send). */
+  overdueEmailFailedAt?: Date | null;
+  overdueEmailError?: string | null;
+  /** Last WhatsApp reminder failure / block: an `InvoiceWaBlockReason` code or a provider message. */
+  overdueWaLastError?: string | null;
+  overdueWaLastErrorAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

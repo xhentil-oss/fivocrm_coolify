@@ -19,6 +19,9 @@
 // email part sends under). No address / WHMCS mails it itself / email off →
 // WhatsApp goes anyway. Facts come from the doc snapshot BEFORE the tick, so the
 // WhatsApp leg always lands on a later tick than the email, never alongside it.
+// An email that FAILED (SMTP down, `overdueEmailFailedAt` newer than the last
+// success) does not count as "can go out": the email gate must never hold the
+// WhatsApp leg hostage to a broken mail server.
 //
 // Every non-send is a NAMED reason (never a silent `continue`), counted into
 // `teamSettings.waInvoiceLastRun.blocked` so the panel can show "38 shqyrtuar →
@@ -172,12 +175,16 @@ export interface InvoiceWaInvoiceFacts {
   overdueEmailSentAtMs?: number | null;
   /** An overdue email can reach this client (address, not opted out, not WHMCS-skipped). */
   emailChannelAvailable?: boolean;
+  /** When the last overdue email send THREW (null = never). Newer than the last success = email is broken. */
+  overdueEmailFailedAtMs?: number | null;
 }
 
 export interface InvoiceWaCustomerFacts {
   phone?: string | null;
   waOptOut?: boolean | null;
   disableOverdueReminders?: boolean | null;
+  /** The number a previous send failed PERMANENTLY for (not on WhatsApp / invalid). */
+  waUndeliverablePhone?: string | null;
 }
 
 export interface InvoiceWaContext {
@@ -203,9 +210,12 @@ export type InvoiceWaBlockReason =
   | 'customer-opt-out'
   | 'wa-opt-out'
   | 'no-phone'
+  | 'undeliverable'
   | 'outside-hours'
   | 'no-channel'
-  | 'no-template';
+  | 'no-template'
+  /** Tallied by the cron when the provider refused the send (nothing stamped, nothing counted). */
+  | 'send-failed';
 
 export const INVOICE_WA_BLOCK_LABELS: Record<InvoiceWaBlockReason, string> = {
   'disabled': 'çaktivizuar',
@@ -221,9 +231,11 @@ export const INVOICE_WA_BLOCK_LABELS: Record<InvoiceWaBlockReason, string> = {
   'customer-opt-out': 'klienti ka fikur kujtesat',
   'wa-opt-out': 'klienti ka refuzuar WhatsApp',
   'no-phone': 'pa numër telefoni',
+  'undeliverable': 'numri nuk merr WhatsApp',
   'outside-hours': 'jashtë orarit',
   'no-channel': 'kanali WhatsApp mungon',
   'no-template': 'template mungon',
+  'send-failed': 'dërgimi dështoi',
 };
 
 export type InvoiceWaDecision =
@@ -238,6 +250,18 @@ export function invoiceMatchesSource(sources: InvoiceWaSource, invSource: string
 
 export const SETTLED_STATUSES = new Set(['Paid', 'Cancelled', 'Draft']);
 
+/**
+ * May the email-first gate wait for the email? Only when an email CAN go out
+ * AND the last attempt did not fail after the last success. A failed SMTP send
+ * stamps `overdueEmailFailedAt`; without this the WhatsApp leg waited forever
+ * for an email that was never going to arrive.
+ */
+export function invoiceEmailUsable(inv: InvoiceWaInvoiceFacts): boolean {
+  if (!inv.emailChannelAvailable) return false;
+  const failed = inv.overdueEmailFailedAtMs || 0;
+  return !(failed && failed > (inv.overdueEmailSentAtMs || 0));
+}
+
 /** Which stage (if any) the invoice is in RIGHT NOW, honouring the stamps. */
 export function invoiceWaStage(inv: InvoiceWaInvoiceFacts, cfg: InvoiceWaConfig, ctx: InvoiceWaContext): InvoiceWaDecision {
   if (inv.dueDateMs == null || !Number.isFinite(inv.dueDateMs)) return { ok: false, reason: 'no-due-date' };
@@ -246,7 +270,7 @@ export function invoiceWaStage(inv: InvoiceWaInvoiceFacts, cfg: InvoiceWaConfig,
 
   if (daysLate > 0) {
     if (daysLate < cfg.overdueDays) return { ok: false, reason: 'not-due' };
-    if (inv.emailChannelAvailable && !inv.overdueEmailSentAtMs) return { ok: false, reason: 'awaiting-email' };
+    if (invoiceEmailUsable(inv) && !inv.overdueEmailSentAtMs) return { ok: false, reason: 'awaiting-email' };
     if ((inv.overdueWaCount || 0) >= cfg.overdueMaxSends) return { ok: false, reason: 'max-sends-reached' };
     const last = inv.overdueWaSentAtMs || 0;
     if (last && ctx.nowMs - last < cfg.renotifyDays * INVOICE_WA_DAY_MS) return { ok: false, reason: 'already-sent' };
@@ -284,7 +308,12 @@ export function invoiceWaDecision(
   if (!customer) return { ok: false, reason: 'no-customer' };
   if (customer.disableOverdueReminders) return { ok: false, reason: 'customer-opt-out' };
   if (customer.waOptOut) return { ok: false, reason: 'wa-opt-out' };
-  if (!normalizeInvoiceWaPhone(customer.phone)) return { ok: false, reason: 'no-phone' };
+  const phone = normalizeInvoiceWaPhone(customer.phone);
+  if (!phone) return { ok: false, reason: 'no-phone' };
+  // A permanent failure for THIS number (editing the phone re-arms the customer).
+  if (customer.waUndeliverablePhone && normalizeInvoiceWaPhone(customer.waUndeliverablePhone) === phone) {
+    return { ok: false, reason: 'undeliverable' };
+  }
 
   const hour = localHourIn(ctx.timeZone || INVOICE_WA_DEFAULT_TZ, ctx.nowMs);
   if (hour < cfg.hourStart || hour >= cfg.hourEnd) return { ok: false, reason: 'outside-hours' };
@@ -295,18 +324,31 @@ export function invoiceWaDecision(
 }
 
 /**
- * Digits only, in international form; anything shorter than 8 digits is not a
- * reachable number. Albanian numbers are stored every which way in the CRM
- * ("069…", "69…", "+355 069…", "00355…"); WhatsApp needs "355…", and a bare
- * "699249702" became the jid 699249702@s.whatsapp.net — a send that can only fail.
+ * Digits only, in international form; 8–15 digits or ''. Albanian numbers are
+ * stored every which way in the CRM ("069…", "69…", "+355 069…", "00355…");
+ * WhatsApp needs "355…", and a bare "699249702" became the jid
+ * 699249702@s.whatsapp.net — a send that can only fail.
+ *
+ * SAME RULES as `toWaPhone` (src/lib/messaging/waPhone.ts) — copied, not
+ * imported, because this module is import-free; the test pins the two together.
  */
 export function normalizeInvoiceWaPhone(phone: string | null | undefined): string {
-  let digits = String(phone || '').replace(/\D/g, '');
+  let digits = String(phone ?? '').replace(/\D/g, '');
   if (digits.startsWith('00')) digits = digits.slice(2);
   if (/^3550[6-9]/.test(digits)) digits = '355' + digits.slice(4);
   else if (/^0[6-9]\d{7,8}$/.test(digits)) digits = '355' + digits.slice(1);
-  else if (/^6[6-9]\d{7}$/.test(digits)) digits = '355' + digits;
-  return digits.length >= 8 ? digits : '';
+  else if (/^[6-9]\d{8}$/.test(digits)) digits = '355' + digits;
+  return digits.length >= 8 && digits.length <= 15 ? digits : '';
+}
+
+/**
+ * Deterministic idempotency key for one reminder send: the VPS refuses a second
+ * send with the same key within 24h, so a died run or a racing manual trigger
+ * cannot WhatsApp the same reminder twice. `n` = the overdue send number (1-based);
+ * pre-due/due stages are once-only, so n = 1.
+ */
+export function invoiceWaIdempotencyKey(invoiceId: string, stage: InvoiceWaStage, n: number): string {
+  return `inv_${invoiceId}_${stage}_${stage === 'overdue' ? Math.max(1, Math.floor(n)) : 1}`;
 }
 
 /** The stamp field a successful send of `stage` must write. */
@@ -372,6 +414,53 @@ export function invoiceWaFirstName(name: string | null | undefined): string {
   const n = String(name || '').trim();
   if (!n) return '';
   return n.split(/\s+/)[0];
+}
+
+// ── Meta template parameters ─────────────────────────────────────────────────
+/**
+ * Fields a Meta template's `paramFields` may name for an INVOICE reminder
+ * ({{1}}, {{2}}, … are filled in this order). The UI picker lists exactly these.
+ *
+ *   invoiceNumber  — "INV-2026-014" (or the short doc id)
+ *   amount         — balance still owed, formatted ("12 500")
+ *   balanceDue     — same as amount (explicit name)
+ *   total          — invoice gross total, formatted
+ *   currency       — "ALL" / "EUR"
+ *   dueDate        — "14.09.2026" (Europe/Tirane)
+ *   dueText        — "skadon sot" / "ka 5 ditë vonesë"
+ *   daysLate       — whole days late (0 before/at the due day)
+ *   customerName   — the customer's full name
+ *   firstName      — first word of the customer's name
+ *   companyName    — OUR company name (teamSettings.companyName)
+ *   paymentLink    — the public pay link (same as `link`)
+ *   whmcsLink      — WHMCS viewinvoice link (WHMCS invoices only)
+ *
+ * Legacy aliases still accepted: name, company, link, daysOverdue.
+ */
+export const INVOICE_WA_PARAM_FIELDS = [
+  'invoiceNumber', 'amount', 'balanceDue', 'total', 'currency', 'dueDate', 'dueText', 'daysLate',
+  'customerName', 'firstName', 'companyName', 'paymentLink', 'whmcsLink',
+] as const;
+
+const INVOICE_WA_PARAM_ALIASES: Record<string, string> = {
+  balanceDue: 'amount', customerName: 'name', companyName: 'company', paymentLink: 'link', daysOverdue: 'daysLate',
+};
+
+/** Positional params for a Meta template from its `paramFields`; unknown/'custom' → ''. */
+export function invoiceWaTemplateParams(paramFields: unknown, ctx: InvoiceWaTextContext): string[] {
+  const fields = Array.isArray(paramFields) ? paramFields : [];
+  return fields.map((raw) => {
+    const f = typeof raw === 'string' ? raw.trim() : '';
+    if (!f || f === 'custom') return '';
+    const key = INVOICE_WA_PARAM_ALIASES[f] || f;
+    const v = ctx[key];
+    if (v === null || v === undefined) return '';
+    if ((key === 'amount' || key === 'total') && (typeof v === 'number' || /^-?\d+(\.\d+)?$/.test(String(v)))) {
+      return formatInvoiceWaAmount(Number(v));
+    }
+    if (key === 'daysLate') return String(Math.max(0, Number(v) || 0));
+    return String(v);
+  });
 }
 
 /** Count block reasons for the per-team run summary. */

@@ -29,6 +29,8 @@ export type AutoReplyBlockReason =
   | 'debounced'            // an auto-reply went to this conversation within the debounce window
   | 'inside-hours'         // office is open — a person will answer
   | 'not-first-contact'    // greeting only, and this contact was in touch recently
+  | 'reply-to-automated'   // the contact is answering one of OUR automated messages (invoice reminder, campaign…)
+  | 'no-phone'             // sender-side: only a WhatsApp LID is known, no deliverable phone yet
   | 'meta-window-closed'   // sender-side: Meta's 24h customer-service window is shut
   | 'no-channel';          // sender-side: no Meta token / VPS available to send with
 
@@ -46,6 +48,12 @@ export interface AutoReplySettings {
   waGreetingAfterDays?: number;
   /** Hours between two auto-replies to the same conversation (default 6). */
   waAutoReplyDebounceHours?: number;
+  /**
+   * A message that arrives within this many hours of an AUTOMATED outbound
+   * (reminder, campaign, automation) is a reply to it — no greeting / auto-reply
+   * (default 72).
+   */
+  waReplyToAutomatedHours?: number;
 }
 
 export interface AutoReplyContact {
@@ -63,6 +71,13 @@ export interface AutoReplyHistory {
   lastOutboundMs: number | null;
   /** `whatsappConversations.lastAutoReplyAt` (epoch ms), or null. */
   lastAutoReplyMs: number | null;
+  /**
+   * Newest outbound `whatsappMessages` row to this phone (epoch ms), or null.
+   * Optional: absent = unknown = the reply-to-automated rule does not apply.
+   */
+  lastOutboundMessageMs?: number | null;
+  /** Was that newest outbound row sent by automation (`automated: true` / a campaign / a reminder)? */
+  lastOutboundMessageAutomated?: boolean;
 }
 
 export interface AutoReplyInput {
@@ -85,6 +100,7 @@ export type AutoReplyDecision =
   | { blocked: AutoReplyBlockReason };
 
 export const DEFAULT_AUTO_REPLY_DEBOUNCE_HOURS = 6;
+export const DEFAULT_REPLY_TO_AUTOMATED_HOURS = 72;
 export const DEFAULT_GREETING_AFTER_DAYS = 7;
 export const DEFAULT_BUSINESS_DAYS: readonly number[] = [1, 2, 3, 4, 5];
 export const DEFAULT_WA_TIMEZONE = 'Europe/Tirane';
@@ -93,6 +109,11 @@ export const DEFAULT_WA_TIMEZONE = 'Europe/Tirane';
 export const WA_OPT_OUT_RE = /^\s*(stop|ndalo|hiq|unsubscribe)\s*[.!]?\s*$/i;
 export const isOptOutMessage = (text: string | null | undefined): boolean =>
   typeof text === 'string' && WA_OPT_OUT_RE.test(text);
+
+/** Resubscribe keywords: a whole-message START / FILLO / RIFILLO clears `waOptOut`. */
+export const WA_OPT_IN_RE = /^\s*(start|fillo|rifillo)\s*[.!]?\s*$/i;
+export const isOptInMessage = (text: string | null | undefined): boolean =>
+  typeof text === 'string' && WA_OPT_IN_RE.test(text);
 
 export const AUTO_REPLY_BLOCK_LABELS: Record<AutoReplyBlockReason, string> = {
   'disabled': 'Përgjigjet automatike janë të çaktivizuara',
@@ -104,6 +125,8 @@ export const AUTO_REPLY_BLOCK_LABELS: Record<AutoReplyBlockReason, string> = {
   'debounced': 'U dërgua tashmë një përgjigje automatike së fundmi',
   'inside-hours': 'Brenda orarit të punës — përgjigjet një person',
   'not-first-contact': 'Kontakt i njohur — përshëndetja dërgohet vetëm herën e parë',
+  'reply-to-automated': 'Klienti po i përgjigjet një mesazhi tonë automatik (kujtesë, fushatë) — përgjigjet një person',
+  'no-phone': 'Numri i telefonit nuk dihet ende (vetëm LID e WhatsApp)',
   'meta-window-closed': 'Dritarja 24-orëshe e Meta është e mbyllur',
   'no-channel': 'S\'ka kanal dërgimi (token Meta / VPS) të konfiguruar',
 };
@@ -231,6 +254,18 @@ export function decideAutoReply(input: AutoReplyInput): AutoReplyDecision {
   const autoOn = s.waAutoReplyEnabled === true;
   const greetOn = s.waGreetingEnabled === true;
   if (!autoOn && !greetOn) return { blocked: 'disabled' };
+
+  // "E pagova sot" in answer to an invoice reminder must not get "Mirë se vini!".
+  const h = input.history;
+  const lastOutMsg = h?.lastOutboundMessageMs ?? null;
+  const automatedHours = positiveNumber(s.waReplyToAutomatedHours, DEFAULT_REPLY_TO_AUTOMATED_HOURS);
+  if (
+    h?.lastOutboundMessageAutomated === true
+    && typeof lastOutMsg === 'number' && lastOutMsg > 0
+    && input.nowMs - lastOutMsg < automatedHours * MS_PER_HOUR
+  ) {
+    return { blocked: 'reply-to-automated' };
+  }
 
   const debounceHours = positiveNumber(s.waAutoReplyDebounceHours, DEFAULT_AUTO_REPLY_DEBOUNCE_HOURS);
   const lastAuto = input.history?.lastAutoReplyMs ?? null;

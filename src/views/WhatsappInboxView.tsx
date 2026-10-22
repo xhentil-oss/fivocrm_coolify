@@ -67,11 +67,22 @@ const WhatsappInboxView: React.FC = () => {
   const navigate = useNavigate();
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
 
-  const { data: messages } = useCollection<WhatsAppMessage>('whatsappMessages', {
+  // Newest N rows only (index whatsappMessages: teamId + createdAt DESC). The
+  // inbox used to stream EVERY message the team ever exchanged, on every mount;
+  // older conversations come back with "Ngarko më shumë".
+  const INBOX_PAGE = 300;
+  const [inboxLimit, setInboxLimit] = useState(INBOX_PAGE);
+  const { data: messages, loading: messagesLoading } = useCollection<WhatsAppMessage>('whatsappMessages', {
     skip: !waEnabled || !teamId,
     where: teamId ? [{ field: 'teamId', operator: '==', value: teamId }] : undefined,
+    orderBy: { field: 'createdAt', direction: 'desc' },
+    limit: inboxLimit,
     skipTeamFilter: true,
   });
+  const inboxHasMore = (messages?.length || 0) >= inboxLimit;
+  // Admin/Manager (and the owner / platform operator) see every conversation; any
+  // other role sees the ones assigned to them plus the unassigned queue.
+  const seesAllConversations = !!(permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin);
   const { data: threads } = useCollection<WhatsAppThread>('whatsappThreads', { skip: !teamId });
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
@@ -119,9 +130,18 @@ const WhatsappInboxView: React.FC = () => {
     return Array.from(map.values()).sort((a, b) => b.lastMs - a.lastMs);
   }, [messages]);
 
+  // Role scope first — every count, tab and the selected thread read from this.
+  const visibleConversations = useMemo(() => {
+    if (seesAllConversations) return conversations;
+    return conversations.filter((c) => {
+      const owner = threadByPhone.get(c.phone)?.assignedToUserId;
+      return !owner || owner === user?.uid;
+    });
+  }, [conversations, threadByPhone, seesAllConversations, user?.uid]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return conversations.filter((c) => {
+    return visibleConversations.filter((c) => {
       const t = threadByPhone.get(c.phone);
       if (tab === 'unread' && c.unread === 0) return false;
       if (tab === 'mine' && t?.assignedToUserId !== user?.uid) return false;
@@ -130,14 +150,25 @@ const WhatsappInboxView: React.FC = () => {
       const name = (c.leadName || c.pushName || '').toLowerCase();
       return name.includes(q) || c.phone.includes(q) || c.lastText.toLowerCase().includes(q);
     });
-  }, [conversations, threadByPhone, tab, search, user?.uid]);
+  }, [visibleConversations, threadByPhone, tab, search, user?.uid]);
 
   const totalUnread = useMemo(
-    () => conversations.reduce((sum, c) => sum + c.unread, 0),
-    [conversations]
+    () => visibleConversations.reduce((sum, c) => sum + c.unread, 0),
+    [visibleConversations]
   );
 
-  const selected = selectedPhone ? conversations.find((c) => c.phone === selectedPhone) : null;
+  // Deep link for an unresolved WhatsApp LID thread (staff notification →
+  // /app/whatsapp?lid=<lid>): pick the conversation whose jid is that LID. When it
+  // is not among the loaded rows nothing is selected — the list still renders.
+  const lidParam = searchParams.get('lid');
+  useEffect(() => {
+    const lid = (lidParam || '').replace(/@lid$/, '').trim();
+    if (!lid || selectedPhone) return;
+    const hit = conversations.find((c) => c.jid === `${lid}@lid` || c.phone === lid);
+    if (hit) setSelectedPhone(hit.phone);
+  }, [lidParam, conversations, selectedPhone]);
+
+  const selected = selectedPhone ? visibleConversations.find((c) => c.phone === selectedPhone) : null;
   const selectedThread = selectedPhone ? threadByPhone.get(selectedPhone) : undefined;
 
   const saveThread = async (phone: string, patch: Partial<WhatsAppThread>) => {
@@ -208,7 +239,7 @@ const WhatsappInboxView: React.FC = () => {
           >
             <BarChart3 className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Statistika</span>
           </button>
-          {(permissions.isOwner || permissions.isAdmin) && (
+          {(permissions.isOwner || permissions.isAdmin || permissions.isSuperAdmin) && (
             <button
               onClick={() => navigate('/app/settings?tab=automation')}
               className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-md border border-border hover:bg-muted"
@@ -257,7 +288,7 @@ const WhatsappInboxView: React.FC = () => {
             {filtered.length === 0 && (
               <div className="flex flex-col items-center justify-center h-full gap-2 text-center p-6 text-muted-foreground">
                 <Inbox className="w-7 h-7" />
-                <p className="text-sm">Asnjë bisedë.</p>
+                <p className="text-sm">{messagesLoading ? 'Duke ngarkuar…' : 'Asnjë bisedë.'}</p>
               </div>
             )}
             {filtered.map((c) => {
@@ -314,6 +345,21 @@ const WhatsappInboxView: React.FC = () => {
                 </button>
               );
             })}
+            {inboxHasMore && (
+              <div className="flex justify-center p-3">
+                <button
+                  onClick={() => setInboxLimit((n) => n + INBOX_PAGE)}
+                  className="text-xs px-3 py-1.5 rounded-full border border-border hover:bg-muted"
+                >
+                  Ngarko më shumë
+                </button>
+              </div>
+            )}
+            {!seesAllConversations && (
+              <p className="px-3 py-2 text-[10px] text-muted-foreground text-center">
+                Shfaqen bisedat e caktuara te ti dhe ato pa caktuar.
+              </p>
+            )}
           </div>
         </div>
 

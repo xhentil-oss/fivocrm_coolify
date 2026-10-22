@@ -282,9 +282,13 @@ export function useTeamSettingsSync(): void {
         localStorage.setItem('usd_all_rate', settings.usdAllRate);
       }
 
-      if (settings.whatsappEnabled !== undefined) {
-        localStorage.setItem('whatsapp_enabled', String(settings.whatsappEnabled));
-        setGlobalWaEnabled(settings.whatsappEnabled);
+      // "WhatsApp is on" = Baileys switched on OR a configured Meta channel. The
+      // flag used to mirror `whatsappEnabled` (the Baileys switch) alone, so a
+      // Meta-only tenant never saw a WhatsApp button anywhere in the CRM.
+      if (settings.whatsappEnabled !== undefined || settings.metaEnabled !== undefined) {
+        const on = anyWhatsappChannel(settings);
+        localStorage.setItem('whatsapp_enabled', String(on));
+        setGlobalWaEnabled(on);
       }
 
       if (settings.whatsappVpsUrl !== undefined) {
@@ -316,23 +320,46 @@ export function useTeamSettingsSync(): void {
   }, [teamId]);
 }
 
+/** Meta enabled with at least one channel (phone number id). */
+export function metaWhatsappConfigured(s: Partial<TeamSettings> | null | undefined): boolean {
+  if (!s?.metaEnabled) return false;
+  return (s.metaPhoneNumberIds?.length || 0) > 0 || (s.metaChannels || []).some((c) => !!c?.phoneNumberId);
+}
+
+/** Any WhatsApp channel switched on for the team: Baileys (VPS) OR Meta Cloud API. */
+export function anyWhatsappChannel(s: Partial<TeamSettings> | null | undefined): boolean {
+  return !!s?.whatsappEnabled || metaWhatsappConfigured(s);
+}
+
+/**
+ * teamSettings as reactive state PLUS the team id the document was read from.
+ * A form that displays these values must save to THIS id — not to whatever the
+ * active team is at click time (Cilësimet used to show team A and write team B
+ * after a team switch). `settings` resets to null when the team changes, so a
+ * form never shows the previous team's values under the new team's id.
+ */
+export function useTeamSettingsDoc(): { settings: TeamSettings | null; teamId: string | null } {
+  const teamId = useGlobalTeamId();
+  const [state, setState] = useState<{ settings: TeamSettings | null; teamId: string | null }>({ settings: null, teamId: null });
+
+  useEffect(() => {
+    setState({ settings: null, teamId: null });
+    if (!teamId) return;
+    const docRef = doc(db, 'teamSettings', teamId);
+    const unsub = onSnapshot(docRef, (snap) => {
+      setState({ settings: snap.exists() ? (snap.data() as TeamSettings) : {}, teamId });
+    });
+    return unsub;
+  }, [teamId]);
+
+  return state;
+}
+
 /**
  * Returns teamSettings as reactive React state, refreshed whenever Firestore
  * updates. Returns null until the first snapshot arrives (teamId not yet
  * resolved or document not yet loaded).
  */
 export function useTeamSettingsData(): TeamSettings | null {
-  const [settings, setSettings] = useState<TeamSettings | null>(null);
-  const teamId = useGlobalTeamId();
-
-  useEffect(() => {
-    if (!teamId) return;
-    const docRef = doc(db, 'teamSettings', teamId);
-    const unsub = onSnapshot(docRef, (snap) => {
-      setSettings(snap.exists() ? (snap.data() as TeamSettings) : {});
-    });
-    return unsub;
-  }, [teamId]);
-
-  return settings;
+  return useTeamSettingsDoc().settings;
 }

@@ -1834,6 +1834,10 @@ test('50a. portal client edits own profile field but cannot write follow-up fiel
   await assertFails(updateDoc(doc(carol, 'customers', 'cust1'), { awaitingReply: false }));
   await assertFails(updateDoc(doc(carol, 'customers', 'cust1'), { lastActivityAt: new Date() }));
   await assertFails(updateDoc(doc(carol, 'customers', 'cust1'), { assignedToUserId: 'carol' }));
+  // WhatsApp identity/consent is staff-owned: a client claiming someone else's LID
+  // would have that person's inbound messages routed to their record.
+  await assertFails(updateDoc(doc(carol, 'customers', 'cust1'), { waLid: '123456789012345' }));
+  await assertFails(updateDoc(doc(carol, 'customers', 'cust1'), { waOptOut: false }));
 });
 test('50b. staff member schedules a next step on a customer of their business', async () => {
   const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);

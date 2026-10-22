@@ -31,6 +31,7 @@ import {
   Mail,
   Boxes,
   Coins,
+  Loader2,
 } from 'lucide-react';
 import { WhatsAppAccount, TeamMember, UserProfile } from '../types';
 import { MetaChannel } from '../hooks/useTeamSettings';
@@ -51,7 +52,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Checkbox } from '../components/ui/checkbox';
 import { Badge } from '../components/ui/badge';
 import { useCollection, useMutation, setGlobalWaEnabled, useGlobalTeamId, getGlobalBusinessId } from '../hooks/useFirestore';
-import { saveTeamSettings, useTeamSettingsData } from '../hooks/useTeamSettings';
+import { saveTeamSettings, useTeamSettingsDoc, anyWhatsappChannel } from '../hooks/useTeamSettings';
+import { toWaPhone } from '../lib/messaging/waPhone';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '../components/ui/alert-dialog';
 import { saveTenantSecrets } from '../lib/tenantSecrets';
 import { isBreakReminderEnabled, setBreakReminderEnabled } from '../hooks/useBreakReminder';
 import { useAuth } from '../contexts/AuthContext';
@@ -140,7 +146,11 @@ const ADMIN_ONLY_TABS = ['integrations', 'automation', 'roles', 'modules'];
 
 // ─── SettingsView ──────────────────────────────────────────────────────────────
 const SettingsView: React.FC = () => {
-  const { teamId: permTeamId, isAdmin, isOwner, isSuperAdmin } = usePermissions();
+  const { teamId: permTeamId, isAdmin, isOwner, isSuperAdmin, isManager } = usePermissions();
+  // WhatsApp agent management (connect/QR, enable, delete): Admin/Manager by the
+  // permission FLAGS — Owner / SuperAdmin carry other role strings. Same set the
+  // API (`hasManagerRole`) and the whatsappAccounts rules (isBusinessAdmin) accept.
+  const canManageWa = !!(isAdmin || isManager || isOwner || isSuperAdmin);
   // bankAccounts / financeSettings / rateCard are owner/Admin-only in the rules
   // (teamSettingsFinanceKeys): a Manager runs a department, not the IBAN clients
   // pay into or every colleague's cost rate.
@@ -150,7 +160,12 @@ const SettingsView: React.FC = () => {
   // still work for them.
   const globalActiveTeamId = useGlobalTeamId();
   const teamId = permTeamId || globalActiveTeamId;
-  const firestoreSettings = useTeamSettingsData();
+  // The settings document AND the team it was read from. The WhatsApp / Meta /
+  // automation forms display this document, so they must SAVE to this id — not to
+  // `teamId` above, which can differ (permissions team vs active team) and used to
+  // write team B's form into team A.
+  const { settings: firestoreSettings, teamId: settingsTeamId } = useTeamSettingsDoc();
+  const waTeamId = settingsTeamId || teamId;
   // `?tab=` deep link (e.g. the WhatsApp inbox's "Automatizime" button →
   // /app/settings?tab=automation). Admin-only tabs fall back to the profile.
   const [searchParams, setSearchParams] = useSearchParams();
@@ -269,6 +284,22 @@ const SettingsView: React.FC = () => {
     setMetaLoaded(true);
   }, [firestoreSettings]);
 
+  // WhatsApp / Meta fields are (re)loaded per TEAM: the one-shot loader above runs
+  // once per mount, so after a team switch the form kept showing the previous
+  // team's VPS URL and channels while saving into the new team.
+  const waLoadedForTeam = React.useRef<string | null>(null);
+  useEffect(() => {
+    if (!firestoreSettings || !settingsTeamId) return;
+    if (waLoadedForTeam.current === settingsTeamId) return;
+    waLoadedForTeam.current = settingsTeamId;
+    setWhatsappEnabled(!!firestoreSettings.whatsappEnabled);
+    setWhatsappVpsUrl(firestoreSettings.whatsappVpsUrl || '');
+    setWhatsappVpsSecret('');
+    setMetaEnabled(!!firestoreSettings.metaEnabled);
+    setMetaChannels((firestoreSettings.metaChannels || []).map((c) => ({ ...c, accessToken: '' })));
+    setMetaWebhookVerifyToken('');
+  }, [firestoreSettings, settingsTeamId]);
+
   // ── Foreign → ALL exchange rates (shared by CRM, invoices and the calculator) ──
   const [eurAllRate, setEurAllRate] = useState(() => localStorage.getItem('eur_all_rate') || '100');
   const [usdAllRate, setUsdAllRate] = useState(() => localStorage.getItem('usd_all_rate') || '92');
@@ -314,6 +345,15 @@ const SettingsView: React.FC = () => {
   const [qrData, setQrData] = useState<{ status: string; qrDataUrl: string | null; connectedPhone: string | null } | null>(null);
   const [qrLoading, setQrLoading] = useState(false);
   const qrPollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  // Bumped on every open/close: an open whose awaits finish AFTER the dialog was
+  // closed must not start a poll nobody will ever clear.
+  const qrSessionRef = React.useRef(0);
+  const stopQrPoll = useCallback(() => {
+    if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
+  }, []);
+  useEffect(() => () => { qrSessionRef.current++; stopQrPoll(); }, [stopQrPoll]);
+  const [waDeleteTarget, setWaDeleteTarget] = useState<WhatsAppAccount | null>(null);
+  const [waDeleting, setWaDeleting] = useState(false);
   const { user } = useAuth();
 
   // ── Profile (Cilësimet > Profili) ──
@@ -410,23 +450,36 @@ const SettingsView: React.FC = () => {
     });
   };
 
-  const fetchQrData = async (acc: WhatsAppAccount) => {
+  const QR_POLL_MAX_MS = 5 * 60 * 1000;
+  const fetchQrData = async (acc: WhatsAppAccount, session: number) => {
     try {
       const token = await user?.getIdToken();
       const res = await fetch(`/api/whatsapp?agentId=${enc(acc.id)}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) return;
+      if (session !== qrSessionRef.current) return;
+      if (!res.ok) {
+        // 403/404 will not fix themselves by asking again every 4 s.
+        if (res.status === 403 || res.status === 404) {
+          stopQrPoll();
+          setQrData({ status: 'error', qrDataUrl: null, connectedPhone: null });
+        }
+        return;
+      }
       const d = await res.json();
+      if (session !== qrSessionRef.current) return;
       setQrData({ status: d.status, qrDataUrl: d.qrDataUrl || null, connectedPhone: d.connectedPhone || null });
       if (d.status === 'connected') {
-        if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
+        stopQrPoll();
         await waMutation.update(acc.id, { connectedPhone: d.connectedPhone });
       }
     } catch { /* ignore */ }
   };
 
   const openQrDialog = async (acc: WhatsAppAccount) => {
+    if (!canManageWa) return; // the API answers 403 for anyone else
+    const session = ++qrSessionRef.current;
+    stopQrPoll();
     setQrDialogAccount(acc);
     setQrData(null);
     setQrLoading(true);
@@ -438,28 +491,36 @@ const SettingsView: React.FC = () => {
         headers: { Authorization: `Bearer ${token}` },
       });
     } catch { /* non-critical */ }
-    await fetchQrData(acc);
+    if (session !== qrSessionRef.current) return; // closed while reloading
+    await fetchQrData(acc, session);
+    if (session !== qrSessionRef.current) return;
     setQrLoading(false);
-    if (qrPollRef.current) clearInterval(qrPollRef.current);
-    qrPollRef.current = setInterval(() => fetchQrData(acc), 4000);
+    stopQrPoll();
+    const startedAt = Date.now();
+    qrPollRef.current = setInterval(() => {
+      if (session !== qrSessionRef.current || Date.now() - startedAt > QR_POLL_MAX_MS) { stopQrPoll(); return; }
+      void fetchQrData(acc, session);
+    }, 4000);
   };
 
   const closeQrDialog = () => {
+    qrSessionRef.current++;
+    stopQrPoll();
     setQrDialogAccount(null);
     setQrData(null);
-    if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
+    setQrLoading(false);
   };
 
   // helper to avoid import
   const enc = encodeURIComponent;
 
   const handleAddWaAccount = async () => {
-    if (!newWaLabel.trim() || !teamId) return;
+    if (!newWaLabel.trim() || !waTeamId || !canManageWa) return;
     setWaAdding(true);
     try {
       const assignedMember = teamMembersForWa?.find(m => m.userId === newWaUserId);
       await waMutation.create({
-        teamId,
+        teamId: waTeamId,
         label: newWaLabel.trim(),
         assignedToUserId: newWaUserId || null,
         assignedToName: assignedMember?.displayName || assignedMember?.email || null,
@@ -478,13 +539,36 @@ const SettingsView: React.FC = () => {
     await waMutation.update(acc.id, { enabled: !acc.enabled });
   };
 
+  // Deleting the document logs the VPS session out and wipes it (vps/server.ts
+  // watchAccounts → unloadAgent) — irreversible, so it is confirmed first.
   const handleDeleteWaAccount = async (id: string) => {
+    if (waDeleting) return;
+    setWaDeleting(true);
     try {
       await waMutation.remove(id);
-      toast({ title: 'Llogaria u fshi' });
+      toast({ title: 'Llogaria u fshi', description: 'Numri u shkëput nga FivoCRM dhe sesioni u fshi.' });
+      setWaDeleteTarget(null);
     } catch (err: any) {
       toast({ title: 'Fshirja dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
+    } finally {
+      setWaDeleting(false);
     }
+  };
+
+  /** Albanian reading of the VPS-stamped disconnect reason. */
+  const waDisconnectLabel = (reason: string | null | undefined): string | null => {
+    if (!reason) return null;
+    const r = String(reason).toLowerCase();
+    if (r === 'logged_out' || r === 'loggedout' || r === '401') return 'U shkëput nga telefoni — skano QR';
+    if (r === 'replaced' || r === 'connectionreplaced' || r === '440') return 'U hap në një pajisje tjetër';
+    if (r === 'banned' || r === 'forbidden' || r === '403') return 'Numri u bllokua nga WhatsApp';
+    if (r === 'restart_required' || r === 'restartrequired' || r === '515') return 'Po rinis lidhjen';
+    if (r === 'timed_out' || r === 'connectionlost' || r === '408' || r === '428') return 'Lidhja ra — po rilidhet';
+    return reason;
+  };
+  const fmtWaDate = (v: any): string | null => {
+    const d = v?.toDate ? v.toDate() : v instanceof Date ? v : v ? new Date(v) : null;
+    return d && !isNaN(d.getTime()) ? d.toLocaleString('sq-AL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : null;
   };
 
   // ── Meta WhatsApp Cloud API settings ──
@@ -656,21 +740,27 @@ const SettingsView: React.FC = () => {
     setTimeout(() => setBankSaved(false), 3000);
   };
 
+  // The global "WhatsApp on" flag (CRM buttons, the inbox) = Baileys OR Meta.
+  const publishWaFlag = (next: { whatsappEnabled?: boolean; metaEnabled?: boolean }) => {
+    const on = anyWhatsappChannel({ ...firestoreSettings, ...next });
+    localStorage.setItem('whatsapp_enabled', String(on));
+    setGlobalWaEnabled(on);
+  };
+
   const handleToggleWhatsapp = (val: boolean) => {
     setWhatsappEnabled(val);
-    localStorage.setItem('whatsapp_enabled', String(val));
-    setGlobalWaEnabled(val);
-    if (teamId) saveTeamSettings(teamId, { whatsappEnabled: val });
+    publishWaFlag({ whatsappEnabled: val });
+    if (waTeamId) saveTeamSettings(waTeamId, { whatsappEnabled: val });
   };
 
   const handleSaveWhatsappSettings = async () => {
-    localStorage.setItem('whatsapp_enabled', String(whatsappEnabled));
     localStorage.setItem('whatsapp_vps_url', whatsappVpsUrl);
-    if (teamId) saveTeamSettings(teamId, { whatsappEnabled, whatsappVpsUrl });
-    // The VPS secret is a credential → server-only vault.
-    if (teamId && whatsappVpsSecret.trim()) {
+    publishWaFlag({ whatsappEnabled });
+    if (waTeamId) saveTeamSettings(waTeamId, { whatsappEnabled, whatsappVpsUrl });
+    // The VPS secret is a credential → server-only vault. Blank = keep the stored one.
+    if (waTeamId && whatsappVpsSecret.trim()) {
       try {
-        await saveTenantSecrets(teamId, { whatsappVpsSecret: whatsappVpsSecret.trim() });
+        await saveTenantSecrets(waTeamId, { whatsappVpsSecret: whatsappVpsSecret.trim() });
         setWhatsappVpsSecret('');
       } catch (e) {
         toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' });
@@ -684,21 +774,30 @@ const SettingsView: React.FC = () => {
   // ── Meta Cloud API handlers ──
   const handleToggleMeta = (val: boolean) => {
     setMetaEnabled(val);
-    if (teamId) saveTeamSettings(teamId, { metaEnabled: val });
+    publishWaFlag({ metaEnabled: val });
+    if (waTeamId) saveTeamSettings(waTeamId, { metaEnabled: val });
   };
 
   const handleSaveMetaSettings = async () => {
-    if (!teamId) return;
+    if (!waTeamId) return;
+    const teamId = waTeamId; // save to the team the form was loaded from
     // Denormalize phoneNumberIds for Firestore array-contains querying in webhook
-    const metaPhoneNumberIds = metaChannels.map(ch => ch.phoneNumberId).filter(Boolean);
+    const metaPhoneNumberIds = metaChannels.map(ch => (ch.phoneNumberId || '').trim()).filter(Boolean);
     // Channel METADATA stays in teamSettings; the per-channel access token is a
-    // credential and goes to the vault keyed by phoneNumberId.
-    const channelMeta = metaChannels.map(({ accessToken: _t, ...rest }) => rest) as MetaChannel[];
+    // credential and goes to the vault keyed by phoneNumberId. The display number
+    // is stored in the one WhatsApp form (international digits, `toWaPhone`).
+    const channelMeta = metaChannels.map(({ accessToken: _t, ...rest }) => ({
+      ...rest,
+      phoneNumberId: (rest.phoneNumberId || '').trim(),
+      phone: toWaPhone(rest.phone) || (rest.phone || '').trim(),
+    })) as MetaChannel[];
     const metaChannelTokens: Record<string, string> = {};
     for (const ch of metaChannels) {
       if (ch.phoneNumberId && ch.accessToken?.trim()) metaChannelTokens[ch.phoneNumberId] = ch.accessToken.trim();
     }
     saveTeamSettings(teamId, { metaEnabled, metaChannels: channelMeta, metaPhoneNumberIds });
+    publishWaFlag({ metaEnabled });
+    setMetaChannels(channelMeta.map(ch => ({ ...ch, accessToken: '' })));
     try {
       await saveTenantSecrets(teamId, {
         ...(Object.keys(metaChannelTokens).length ? { metaChannelTokens } : {}),
@@ -896,6 +995,9 @@ const SettingsView: React.FC = () => {
             if (!myWaAccount) return null;
             const myLive = waLiveState(myWaAccount);
             const connected = myLive.connected;
+            // Connecting (QR) is Admin/Manager work in the API — anyone else sees the
+            // status read-only instead of a button that answers 403.
+            const myReason = !connected ? waDisconnectLabel(myWaAccount.lastDisconnectReason) : null;
             return (
               <Card className="p-6 space-y-4">
                 <div className="flex items-center gap-4">
@@ -905,17 +1007,24 @@ const SettingsView: React.FC = () => {
                   <div className="flex-1">
                     <h3 className="text-h4 text-foreground">WhatsApp Personal</h3>
                     <p className="text-body-sm text-muted-foreground">
-                      {connected ? myLive.label : `${myLive.label} — skano QR-in për t'u lidhur`}
+                      {connected
+                        ? myLive.label
+                        : canManageWa
+                          ? `${myLive.label} — skano QR-in për t'u lidhur`
+                          : `${myLive.label} — kërkoji një admini/menaxheri ta lidhë (QR)`}
                     </p>
+                    {myReason && <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">{myReason}</p>}
                   </div>
                   {connected
                     ? <div className="flex items-center gap-2 text-[#25D366]"><Wifi className="w-4 h-4" /><span className="text-sm font-medium">Aktiv</span></div>
-                    : <Button className="bg-[#25D366] text-white hover:bg-[#1da851] gap-2" onClick={() => openQrDialog(myWaAccount)}>
-                        <QrCode className="w-4 h-4" />Lidho WhatsApp
-                      </Button>
+                    : canManageWa
+                      ? <Button className="bg-[#25D366] text-white hover:bg-[#1da851] gap-2" onClick={() => openQrDialog(myWaAccount)}>
+                          <QrCode className="w-4 h-4" />Lidho WhatsApp
+                        </Button>
+                      : <div className="flex items-center gap-2 text-muted-foreground"><WifiOff className="w-4 h-4" /><span className="text-sm">Jo aktiv</span></div>
                   }
                 </div>
-                {connected && (
+                {connected && canManageWa && (
                   <Button variant="outline" size="sm" className="gap-2" onClick={() => openQrDialog(myWaAccount)}>
                     <QrCode className="w-3.5 h-3.5" />Shiko Status
                   </Button>
@@ -1920,7 +2029,8 @@ const SettingsView: React.FC = () => {
                     <Button
                       className="bg-[#25D366] text-white hover:bg-[#1da851]"
                       onClick={handleSaveWhatsappSettings}
-                      disabled={!whatsappVpsUrl || !whatsappVpsSecret}
+                      disabled={!whatsappVpsUrl || (!whatsappVpsSecret.trim() && !firestoreSettings?.hasWhatsappVpsSecret)}
+                      title={!whatsappVpsSecret.trim() && !firestoreSettings?.hasWhatsappVpsSecret ? 'Shkruaj çelësin sekret të VPS (ruhet një herë)' : undefined}
                     >
                       Ruaj Cilësimet WhatsApp
                     </Button>
@@ -1931,7 +2041,7 @@ const SettingsView: React.FC = () => {
           </Card>
 
           {/* WhatsApp Agents — multi-account Baileys */}
-          {whatsappEnabled && (isAdmin || isOwner) && (
+          {whatsappEnabled && canManageWa && (
             <Card className="p-6 space-y-6">
               <div className="flex items-center gap-4">
                 <div className="p-3 bg-[#25D366]/10 rounded-lg">
@@ -1967,6 +2077,18 @@ const SettingsView: React.FC = () => {
                             {live.label}
                             {acc.assignedToName && ` · ${acc.assignedToName}`}
                           </p>
+                          {!isConnected && (acc.lastDisconnectReason || acc.lastDisconnectedAt) && (
+                            <p className="text-[11px] text-amber-600 dark:text-amber-400 truncate" title={acc.lastDisconnectReason || undefined}>
+                              {waDisconnectLabel(acc.lastDisconnectReason) || 'U shkëput'}
+                              {fmtWaDate(acc.lastDisconnectedAt) ? ` · ${fmtWaDate(acc.lastDisconnectedAt)}` : ''}
+                            </p>
+                          )}
+                          {acc.connectionStatus && (
+                            <p className="text-[10px] text-muted-foreground/80">
+                              Statusi i fundit nga serveri: {acc.connectionStatus === 'connected' ? 'i lidhur' : 'i shkëputur'}
+                              {acc.connectionStatus === 'connected' && fmtWaDate(acc.lastConnectedAt) ? ` · ${fmtWaDate(acc.lastConnectedAt)}` : ''}
+                            </p>
+                          )}
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                           {whatsappVpsUrl && (
@@ -1988,7 +2110,9 @@ const SettingsView: React.FC = () => {
                             size="sm"
                             variant="ghost"
                             className="h-7 w-7 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                            onClick={() => handleDeleteWaAccount(acc.id)}
+                            onClick={() => setWaDeleteTarget(acc)}
+                            disabled={waDeleting}
+                            aria-label={`Fshi llogarinë ${acc.label}`}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </Button>
@@ -2048,6 +2172,30 @@ const SettingsView: React.FC = () => {
             </Card>
           )}
 
+          <AlertDialog open={!!waDeleteTarget} onOpenChange={(o) => { if (!o && !waDeleting) setWaDeleteTarget(null); }}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Fshi llogarinë “{waDeleteTarget?.label}”?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Numri{waDeleteTarget?.connectedPhone ? ` +${waDeleteTarget.connectedPhone}` : ''} do të shkëputet (logout) nga serveri dhe
+                  sesioni i tij do të fshihet. Mesazhet nuk do të dërgohen më nga ky numër; për ta përdorur sërish duhet ta shtosh dhe ta skanosh QR-in nga e para.
+                  Historiku i bisedave mbetet.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={waDeleting}>Anulo</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  disabled={waDeleting}
+                  onClick={(e) => { e.preventDefault(); if (waDeleteTarget) void handleDeleteWaAccount(waDeleteTarget.id); }}
+                >
+                  {waDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />}
+                  Shkëput dhe fshi
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
           {/* QR Dialog */}
           <Dialog open={!!qrDialogAccount} onOpenChange={open => { if (!open) closeQrDialog(); }}>
             <DialogContent className="sm:max-w-sm">
@@ -2089,6 +2237,12 @@ const SettingsView: React.FC = () => {
                       Duke pritur skanim...
                     </div>
                   </>
+                )}
+                {!qrLoading && qrData?.status === 'error' && (
+                  <div className="flex flex-col items-center gap-2 py-6">
+                    <AlertCircle className="w-8 h-8 text-destructive" />
+                    <p className="text-sm text-muted-foreground text-center">Nuk ke leje ose agjenti nuk u gjet. Rifresko faqen.</p>
+                  </div>
                 )}
                 {!qrLoading && (qrData?.status === 'connecting' || qrData?.status === 'disconnected' || !qrData) && (
                   <div className="flex flex-col items-center gap-2 py-6">
@@ -2222,6 +2376,9 @@ const SettingsView: React.FC = () => {
                           <label className="text-xs text-muted-foreground">Numri i telefonit</label>
                           <input
                             value={ch.phone}
+                            type="tel"
+                            inputMode="tel"
+                            autoComplete="tel"
                             onChange={(e) => updateMetaChannel(ch.id, 'phone', e.target.value)}
                             placeholder="+355 6x xxx xxxx"
                             className="w-full h-9 px-3 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono"
@@ -2313,7 +2470,7 @@ const SettingsView: React.FC = () => {
         <TabsContent value="automation" className="space-y-6">
           {/* Ndjekja & Përgjigjet automatike — every follow-up / WhatsApp-reply
               knob in one place (replaces the old WhatsappAutomation modal). */}
-          <FollowUpSettingsPanel teamId={teamId} settings={firestoreSettings} canEdit={isAdmin || isOwner} />
+          <FollowUpSettingsPanel teamId={waTeamId} settings={firestoreSettings} canEdit={isAdmin || isOwner || isSuperAdmin} />
 
           {/* Nazmija — the virtual secretary (chat digests + @mention replies). */}
           <NazmijeSettingsPanel teamId={teamId} settings={firestoreSettings} canEdit={isAdmin || isOwner} />

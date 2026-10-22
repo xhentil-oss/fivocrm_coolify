@@ -82,6 +82,7 @@ import { buildFollowUpQueue, dueState, touchContactPatch } from '../lib/crm/foll
 import { useFollowUpActions, targetFromLead } from '../hooks/useFollowUpActions';
 import { resolvePlaybooks, enrollPlaybookPatch, stopCadencePatch, nextPlaybookStep, currentPlaybookStep, withPlaybookTag } from '../lib/crm/playbooks';
 import FollowUpBadge from '../components/crm/FollowUpBadge';
+import WaOptOutControl, { WaOptOutBadge } from '../components/WaOptOutControl';
 import NextStepPopover from '../components/crm/NextStepPopover';
 import SnoozeMenu from '../components/crm/SnoozeMenu';
 import ContactQuickActions from '../components/crm/ContactQuickActions';
@@ -750,6 +751,8 @@ const CRMView: React.FC = () => {
 
   const handleSendRecontactWhatsApp = async () => {
     if (!selectedLead?.phoneNumber || !recontactMsg.trim()) return;
+    if ((liveLead || selectedLead).waOptOut
+      && !window.confirm('Ky kontakt ka refuzuar mesazhet WhatsApp. Dërgo gjithsesi këtë mesazh manual?')) return;
     setSendingWa(true);
     try {
       const token = await user?.getIdToken();
@@ -1611,6 +1614,7 @@ const CRMView: React.FC = () => {
                       <span className="shrink-0">{TEMP_META[getTemp(lead)].emoji}</span>
                       <p className="font-medium text-foreground truncate">{lead.name}</p>
                       {getSla(lead).breached && <span className="text-[10px] px-1 py-0.5 rounded-full font-medium bg-red-500 text-white shrink-0">SLA</span>}
+                      {lead.waOptOut && <WaOptOutBadge className="shrink-0" />}
                       <Badge className={`${getStatusColor(lead.status)} text-[10px] py-0 px-1.5 shrink-0`}>
                         {getStatusLabel(lead.status)}
                       </Badge>
@@ -2003,6 +2007,7 @@ const CRMView: React.FC = () => {
                               {s.breached && <span title="Pa përgjigje brenda 24h" className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-red-500 text-white">⏰ SLA</span>}
                               {!s.breached && s.stale && <span title="Pa aktivitet prej 14+ ditësh" className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300">💤 Ngrirë</span>}
                             </>); })()}
+                            {lead.waOptOut && <WaOptOutBadge />}
                           </div>
                           {lead.jobTitle && (
                             <p className="text-body-sm text-muted-foreground">{lead.jobTitle}</p>
@@ -2264,6 +2269,7 @@ const CRMView: React.FC = () => {
                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${TEMP_META[t].className}`}>{TEMP_META[t].emoji} {TEMP_META[t].label}</span>
                 {s.breached && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-500 text-white">⏰ SLA e shkelur</span>}
                 {!s.breached && s.stale && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300">💤 Ngrirë</span>}
+                <WaOptOutControl kind="lead" id={selectedLead.id} optedOut={!!(liveLead || selectedLead).waOptOut} />
               </div>
             ); })()}
             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Kontakto</p>

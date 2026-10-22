@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useCollection, useMutation, useDocument, getGlobalTeamId } from '../hooks/useFirestore';
-import { useTeamSettingsData } from '../hooks/useTeamSettings';
+import { useTeamSettingsData, metaWhatsappConfigured } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
-import { X, Send, MessageSquare, Loader2, Phone, FileText, Paperclip, Zap, Sparkles, RefreshCw, Clock, AlertCircle } from 'lucide-react';
+import { X, Send, MessageSquare, Loader2, Phone, FileText, Paperclip, Zap, Sparkles, RefreshCw, Clock, AlertCircle, Bot, RotateCcw, Ban } from 'lucide-react';
 import { Button } from './ui/button';
 import { normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { useFileUpload } from '../hooks/useFileUpload';
@@ -11,13 +11,27 @@ import { useWhatsAppStatus } from '../hooks/useWhatsAppStatus';
 import WhatsAppStatusBadge from './WhatsAppStatusBadge';
 import { resolveLeadParams } from '../lib/whatsappTemplates';
 import { safeExternalUrl } from '../lib/safeUrl';
-import type { WhatsAppMessage, WhatsAppTemplate, Lead } from '../types';
+import WaOptOutControl from './WaOptOutControl';
+import type { WhatsAppMessage, WhatsAppTemplate, Lead, Customer } from '../types';
+
+/** Albanian label for a machine-sent row (`automationKind`). */
+export const WA_AUTOMATION_KIND_LABELS: Record<string, string> = {
+  'invoice-reminder': 'Kujtesë fature',
+  campaign: 'Fushatë',
+  automation: 'Automatizim',
+  'lead-reminder': 'Rikujtim',
+  'follow-up': 'Ndjekje',
+  playbook: 'Playbook',
+  'auto-reply': 'Përgjigje automatike',
+};
 
 interface Props {
   phone: string;
   jid?: string | null;
   leadName: string;
   leadId?: string;
+  /** The customer this chat belongs to (Customer360 / Klientët / Ndjekjet) — for the opt-out flag. */
+  customerId?: string;
   onClose: () => void;
   /** When true, render inline (fills its container) instead of as a fixed right-side drawer. */
   embedded?: boolean;
@@ -32,7 +46,7 @@ interface Props {
   initialText?: string;
 }
 
-const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, leadId, onClose, embedded, onSent, initialText }) => {
+const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, leadId, customerId, onClose, embedded, onSent, initialText }) => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [text, setText] = useState(initialText || '');
@@ -57,8 +71,17 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
 
   // Saved templates + the linked lead (for auto-filling template variables)
   const { data: savedTemplates } = useCollection<WhatsAppTemplate>('waTemplates');
-  const { data: leadsForTpl } = useCollection<Lead>('leads', { skip: !leadId });
-  const linkedLead = leadId ? leadsForTpl?.find((l) => l.id === leadId) : undefined;
+  // ONE document, not the whole `leads` collection (a business-isolated read of
+  // `leads` downloads every lead of the tenant to find this one).
+  const { data: leadDoc } = useDocument<Lead>('leads', leadId);
+  const { data: customerDoc } = useDocument<Customer>('customers', customerId);
+  const linkedLead = leadId && leadDoc?.id === leadId ? leadDoc : undefined;
+  const linkedCustomer = customerId && customerDoc?.id === customerId ? customerDoc : undefined;
+  // The contact asked not to be messaged on WhatsApp: automated senders skip them;
+  // a manual send needs an explicit confirmation (reset per contact).
+  const optedOut = !!(linkedLead?.waOptOut || linkedCustomer?.waOptOut);
+  const [optOutAck, setOptOutAck] = useState(false);
+  useEffect(() => { setOptOutAck(false); }, [leadId, customerId, phone]);
 
   const applySavedTemplate = (id: string) => {
     const t = savedTemplates?.find((x) => x.id === id);
@@ -128,15 +151,54 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
   // For Meta-channel chats: if the last inbound message is older than 24h,
   // free-text sends will be rejected (Meta requires a pre-approved template).
   // We surface this as a warning banner so the user knows ahead of time.
+  //
+  // The CHANNEL comes from the conversation's own rows when it has any (the latest
+  // inbound, else the latest row), and from the team's SETTINGS when it is empty:
+  // Meta configured and no connected Baileys agent → Meta (template first). It used
+  // to come from history alone, so a Meta-only tenant could never start a chat —
+  // an empty conversation always read as "Baileys".
+  const metaReady = metaWhatsappConfigured(teamSettings);
+  const baileysOn = !!teamSettings?.whatsappEnabled;
   const windowState = useMemo(() => {
-    if (!messages || messages.length === 0) return { isMeta: false, withinWindow: true, lastInboundMs: 0 };
-    const isMeta = messages.some(m => (m as any).channel === 'meta');
+    const list = messages || [];
+    const lastInbound = [...list].reverse().find(m => m.direction === 'inbound');
+    const lastWithChannel = [...list].reverse().find(m => !!m.channel);
+    const historyChannel = lastInbound?.channel || lastWithChannel?.channel;
+    let isMeta: boolean;
+    if (historyChannel === 'meta') isMeta = true;
+    else if (historyChannel === 'baileys') isMeta = !baileysOn && metaReady; // Baileys switched off since
+    else isMeta = metaReady && !waStatus.anyConnected && !(baileysOn && waStatus.loading);
     if (!isMeta) return { isMeta: false, withinWindow: true, lastInboundMs: 0 };
-    const lastInbound = [...messages].reverse().find(m => m.direction === 'inbound');
     if (!lastInbound) return { isMeta: true, withinWindow: false, lastInboundMs: 0 };
     const ms = getTimestampMs(lastInbound.createdAt);
     return { isMeta: true, withinWindow: Date.now() - ms < 24 * 60 * 60 * 1000, lastInboundMs: ms };
-  }, [messages]);
+  }, [messages, metaReady, baileysOn, waStatus.anyConnected, waStatus.loading]);
+
+  // The Baileys agent this conversation lives on. With no agent named, the send API
+  // picked "an agent of the tenant", so a reply could leave from a different number
+  // than the one the client wrote to. Order: the latest inbound row's agent, else
+  // the latest outbound's, else the team's connected agent (mine first). A
+  // remembered agent the live status no longer lists (deleted) is skipped so the
+  // send doesn't 404.
+  const agentId = useMemo<string | null>(() => {
+    const list = messages || [];
+    const liveIds = new Set(waStatus.agents.map(a => a.id));
+    const usable = (id: string | null | undefined) =>
+      !!id && (!waStatus.serverOnline || waStatus.loading || liveIds.has(id));
+    for (let i = list.length - 1; i >= 0; i--) {
+      const m = list[i];
+      if (m.direction === 'inbound' && usable(m.agentId)) return m.agentId as string;
+    }
+    for (let i = list.length - 1; i >= 0; i--) {
+      const m = list[i];
+      if (m.direction === 'outbound' && usable(m.agentId)) return m.agentId as string;
+    }
+    const connected = waStatus.agents.filter(a => a.status === 'connected');
+    const pick = connected.find(a => a.assignedToUserId === user?.uid)
+      || connected.find(a => a.teamId === teamId)
+      || connected[0];
+    return pick?.id || null;
+  }, [messages, waStatus.agents, waStatus.serverOnline, waStatus.loading, user?.uid, teamId]);
 
   // Derive jid from messages if not passed as prop (handles LID contacts in CRM panel)
   const jid = jidProp || messages?.find(m => m.jid)?.jid || null;
@@ -160,11 +222,26 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
       .forEach(m => waMutation.update(m.id, { status: 'read' } as any).catch(() => {}));
   }, [messages?.length]);
 
-  const handleSend = async () => {
-    if (!text.trim() || sending || !user) return;
+  /**
+   * Send a text. The body is passed EXPLICITLY when it does not come from the
+   * composer (AI suggestion "Dërgo", "Riprovo" on a failed row) — the old
+   * `setText(x); setTimeout(handleSend)` read the composer's previous state and
+   * sent stale text.
+   */
+  const handleSend = async (override?: string, opts?: { fromComposer?: boolean }) => {
+    const fromComposer = opts?.fromComposer ?? override === undefined;
+    const body = (override ?? text).trim();
+    if (!body || sending || !user) return;
+    if (optedOut && !optOutAck) {
+      toast({
+        title: 'Kontakti ka refuzuar WhatsApp',
+        description: 'Konfirmo dërgimin manual te paralajmërimi sipër fushës së mesazhit.',
+        variant: 'destructive',
+      });
+      return;
+    }
     setSending(true);
-    const body = text.trim();
-    setText('');
+    if (fromComposer) setText('');
     try {
       const token = await user.getIdToken();
       const isMeta = windowState.isMeta;
@@ -176,7 +253,10 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
         leadName,
         teamId: getGlobalTeamId(),
       };
-      if (!isMeta) payload.jid = jid || undefined;
+      if (!isMeta) {
+        payload.jid = jid || undefined;
+        if (agentId) payload.agentId = agentId;
+      }
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -187,7 +267,7 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
       });
       const data = await res.json();
       if (!res.ok) {
-        setText(body); // restore on error
+        if (fromComposer) setText(body); // restore on error
         // Window-expired? Suggest opening template dialog.
         if (data?.code === 'WINDOW_EXPIRED' || data?.code === 'NO_INBOUND') {
           toast({
@@ -211,6 +291,10 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
 
   const handleTemplateSend = async () => {
     if (!tplName.trim() || tplSending || !user) return;
+    if (optedOut && !optOutAck) {
+      toast({ title: 'Kontakti ka refuzuar WhatsApp', description: 'Konfirmo dërgimin manual para se të dërgosh template-in.', variant: 'destructive' });
+      return;
+    }
     setTplSending(true);
     try {
       const token = await user.getIdToken();
@@ -268,6 +352,10 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
     // Reset input so the same file can be re-picked later
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (!file || !user) return;
+    if (optedOut && !optOutAck) {
+      toast({ title: 'Kontakti ka refuzuar WhatsApp', description: 'Konfirmo dërgimin manual para se të dërgosh skedarin.', variant: 'destructive' });
+      return;
+    }
 
     if (file.size > MAX_MEDIA_BYTES) {
       toast({
@@ -369,6 +457,14 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
             <Phone className="w-3 h-3 text-muted-foreground" />
             <p className="text-xs text-muted-foreground">{phone}</p>
             {!windowState.isMeta && <WhatsAppStatusBadge variant="pill" />}
+            {windowState.isMeta && (
+              <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-700 dark:text-blue-400">Meta</span>
+            )}
+            {linkedLead ? (
+              <WaOptOutControl kind="lead" id={linkedLead.id} optedOut={!!linkedLead.waOptOut} />
+            ) : linkedCustomer ? (
+              <WaOptOutControl kind="customer" id={linkedCustomer.id} optedOut={!!linkedCustomer.waOptOut} />
+            ) : null}
           </div>
         </div>
         <Button variant="ghost" size="sm" onClick={onClose} className="shrink-0 h-8 w-8 p-0">
@@ -462,6 +558,18 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
                   <p style={{ wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{msg.message}</p>
                 )}
                 <div className={`flex items-center gap-1 mt-1 ${isOut ? 'justify-end' : 'justify-start'}`}>
+                  {(msg.automated || msg.isAutoReply) && (
+                    <span
+                      className="inline-flex items-center gap-0.5 text-[9px] px-1 py-px rounded bg-violet-500/10 text-violet-700 dark:text-violet-300"
+                      title="Dërguar automatikisht, jo nga një person"
+                    >
+                      <Bot className="w-2.5 h-2.5" />
+                      {(() => {
+                        const kind = msg.automationKind || (msg.isAutoReply ? 'auto-reply' : '');
+                        return `Automatik${kind ? ` · ${WA_AUTOMATION_KIND_LABELS[kind] || kind}` : ''}`;
+                      })()}
+                    </span>
+                  )}
                   <span className="text-[10px] text-muted-foreground">{timeStr}</span>
                   {isOut && (
                     // WhatsApp's own vocabulary: clock = not yet accepted by the server,
@@ -469,8 +577,19 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
                     // Before this every outbound row showed ✓, including ones WhatsApp
                     // had never accepted.
                     msg.status === 'failed' ? (
-                      <span className="inline-flex items-center gap-0.5 text-[10px] text-red-600" title={(msg as any).error || 'Dërgimi dështoi'}>
+                      <span className="inline-flex items-center gap-1 text-[10px] text-red-600" title={(msg as any).error || 'Dërgimi dështoi'}>
                         <AlertCircle className="w-3 h-3" /> Dështoi
+                        {msg.message && !msg.isTemplate && !(msg as any).mediaType && (
+                          <button
+                            type="button"
+                            onClick={() => void handleSend(msg.message, { fromComposer: false })}
+                            disabled={sending}
+                            className="inline-flex items-center gap-0.5 ml-1 px-1.5 py-px rounded border border-red-500/40 hover:bg-red-500/10 disabled:opacity-50"
+                            title="Dërgo sërish të njëjtin tekst (si mesazh i ri)"
+                          >
+                            <RotateCcw className="w-2.5 h-2.5" /> Riprovo
+                          </button>
+                        )}
                       </span>
                     ) : msg.status === 'pending' ? (
                       <span className="text-[10px] text-muted-foreground" title="Në pritje të konfirmimit nga WhatsApp">
@@ -498,9 +617,30 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
             <WhatsAppStatusBadge variant="banner" />
           </div>
         )}
+        {optedOut && (
+          <div className="mb-2 px-3 py-2 rounded-md bg-red-500/10 border border-red-500/30 text-[11px] text-red-700 dark:text-red-400 leading-snug space-y-1.5">
+            <p className="flex items-start gap-1.5">
+              <Ban className="w-3.5 h-3.5 shrink-0 mt-px" />
+              <span>Ky kontakt ka kërkuar të mos marrë mesazhe WhatsApp. Dërgo vetëm nëse ju ka shkruar vetë ose e ka kërkuar shprehimisht.</span>
+            </p>
+            {optOutAck ? (
+              <p className="font-medium">Dërgimi manual u konfirmua për këtë bisedë.</p>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setOptOutAck(true)}
+                className="px-2 py-1 rounded border border-red-500/40 hover:bg-red-500/10 font-medium"
+              >
+                E kuptoj — lejo dërgimin manual
+              </button>
+            )}
+          </div>
+        )}
         {windowState.isMeta && !windowState.withinWindow && (
           <div className="mb-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-700 dark:text-amber-400 leading-snug">
-            ⚠️ Jashtë dritares 24-orëshe të Meta. Mesazhet me tekst të lirë do refuzohen — duhet të përdorni një template të aprovuar.
+            {(messages?.length || 0) === 0
+              ? '⚠️ Bisedë e re në Meta: mesazhi i parë duhet të jetë një template i aprovuar (butoni Template). Pasi klienti përgjigjet, hapet dritarja 24-orëshe për tekst të lirë.'
+              : '⚠️ Jashtë dritares 24-orëshe të Meta. Mesazhet me tekst të lirë do refuzohen — duhet të përdorni një template të aprovuar.'}
           </div>
         )}
         {aiAssistOn && conversation?.awaitingReply && (
@@ -525,8 +665,8 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
                   Ndrysho
                 </Button>
                 <Button size="sm" className="h-7 text-xs bg-[#25D366] hover:bg-[#1da851] text-white"
-                  onClick={() => { setText(conversation.suggestedReply); setTimeout(() => { void handleSend(); }, 0); }}
-                  disabled={sending}>
+                  onClick={() => { void handleSend(String(conversation.suggestedReply || ''), { fromComposer: true }); }}
+                  disabled={sending || (optedOut && !optOutAck)}>
                   <Send className="w-3 h-3 mr-1" /> Dërgo
                 </Button>
               </div>
@@ -619,8 +759,8 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
           <Button
             size="sm"
             className="bg-[#25D366] hover:bg-[#1da851] text-white h-[42px] w-[42px] p-0 rounded-full shrink-0"
-            onClick={handleSend}
-            disabled={!text.trim() || sending}
+            onClick={() => void handleSend()}
+            disabled={!text.trim() || sending || (optedOut && !optOutAck)}
           >
             {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           </Button>

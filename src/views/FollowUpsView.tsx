@@ -333,6 +333,7 @@ const FollowUpsView: React.FC = () => {
           phone={waItem.phone}
           leadName={waItem.name}
           leadId={waItem.kind === 'lead' ? waItem.id : undefined}
+          customerId={waItem.kind === 'customer' ? waItem.id : undefined}
           onClose={() => setWaItem(null)}
           initialText={playbookFor(waItem)?.text || undefined}
           onSent={(e) => void actions.logContact(targetOf(waItem), 'whatsapp', e.body, { countsAsFollowUp: true })}

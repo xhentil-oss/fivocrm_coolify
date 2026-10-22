@@ -847,8 +847,46 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
   `useWhatsAppStatus` polls it, and Cilësimet renders that; `connectionStatus` /
   `lastDisconnectedAt` on the doc are the offline fallback. Baileys' own logger is
   `warn` (`BAILEYS_LOG_LEVEL`) — `silent` hid every send failure for a year.
-- Known gap: `/send` without `agentId` still picks the first connected agent
-  regardless of `teamId` / `assignedToUserId`. WhatsAppChatPanel sends no `agentId`.
+- WhatsAppChatPanel now sends the conversation's `agentId` (last inbound → last
+  outbound → connected agent of the team). `/send` without one still picks by team.
+
+### WhatsApp hardening (Oct 2026 — every sender, both channels)
+
+- **One phone rule**: `src/lib/messaging/waPhone.ts` (`toWaPhone`; byte-identical
+  `api/_waPhone.ts`, the VPS carries the same rules). `069…`/`69…`/`00355…`/`3550…` →
+  `355…`. Never write another normaliser.
+- **One agent picker**: `api/_waAgent.ts` (`pickWaAgent` in `_waSend.ts`): connected
+  first, then same team; preferred only if connected; legacy accounts found via
+  `teams.businessId`. Always send with the AGENT's teamId.
+- **Opt-out is per PHONE, every sender honours it**: STOP/NDALO sets `waOptOut` on every
+  lead+customer of the business with that phone, START/FILLO clears it; campaigns,
+  automations, lead reminders, follow-ups and invoices block `opted-out`. A number
+  WhatsApp rejects is stamped `waUndeliverablePhone` (re-armed when the phone changes).
+  Portal clients cannot write `waLid`/`waOptOut*`/`waUndeliverable*` (rules test 50a).
+- **Nothing is "sent" before it is sent**: stamps, counters, escalations and timeline
+  rows happen only after a successful result. Errors are classified once
+  (`isPermanentWaError` / `isUndeliverableNumberError` / `isChannelWaError`).
+- **Idempotency everywhere**: VPS `/send` takes `idempotencyKey` (24h); keys are
+  deterministic (`inv_<id>_<stage>_<n>`, `bc_<broadcast>_<phone>`,
+  `auto_<rule>_<phone>_<day>`, `fu_<lead>_<day>`). Inbound claims
+  `waInboundEvents/{key}` (`Idempotency-Key` header / `meta_<wamid>`); the VPS keeps a
+  durable `waInboundOutbox`. WA crons run under `withJobLease` (`api/_jobLease.ts`).
+  Broadcasts claim `inFlightPhones`, write `sentPhones` per message, record
+  `failedPhones` (permanent / 3 attempts) so a bad head never stalls the queue.
+- **Row ids**: Baileys rows are `${agentId}_${waMessageId}` (two of our numbers no longer
+  overwrite each other); Meta rows are the wamid (cron included) so status callbacks
+  land. Meta status never regresses. Automated rows carry `automated`,
+  `automationKind`, `source` (badged in the UI, and auto-reply is blocked
+  `reply-to-automated` for 72h after one).
+- **Quiet hours** 09:00–20:00 Tirane for broadcasts/automations; SLA counts business
+  minutes only (`businessMinutesBetween`). Staff get `whatsapp_send_failed` (per run,
+  throttled) and `whatsapp_disconnected` (from conversation-sla).
+- **VPS**: reconnect by `DisconnectReason` (401/440/403/500 stop and say why in
+  `connectionStatus`), `onWhatsApp` check before a new number (422 `not-on-whatsapp`),
+  raw `CB:ack` = sent, `pending` > 10 min → `failed/no-ack`, per-agent send queue
+  (≥1.2s), LID resolved via `senderPn`, LID lookups ≤ once/24h, `getMessage`,
+  `markOnlineOnConnect: false`. `npm run prod` now BUILDS first — the old
+  `dist/server.js` was months stale.
 
 ### WhatsApp campaign automation (conditions + variants + evergreen rules)
 

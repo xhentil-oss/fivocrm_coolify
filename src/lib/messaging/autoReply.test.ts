@@ -10,6 +10,7 @@ import {
   AUTO_REPLY_BLOCK_LABELS,
   DEFAULT_WA_TIMEZONE,
   decideAutoReply,
+  isOptInMessage,
   isOptOutMessage,
   isOutsideBusinessHours,
   renderAutoReplyTokens,
@@ -157,8 +158,39 @@ describe('decideAutoReply — block reasons', () => {
     const reasons: AutoReplyBlockReason[] = [
       'disabled', 'own-echo', 'auto-reply-echo', 'not-a-message', 'opted-out', 'no-text-configured',
       'debounced', 'inside-hours', 'not-first-contact', 'meta-window-closed', 'no-channel',
+      'reply-to-automated', 'no-phone',
     ];
     for (const r of reasons) expect(AUTO_REPLY_BLOCK_LABELS[r]?.length).toBeGreaterThan(5);
+  });
+});
+
+describe('decideAutoReply — reply to one of our automated messages', () => {
+  const blocked = (d: ReturnType<typeof decideAutoReply>) => ('blocked' in d ? d.blocked : `sent:${d.kind}`);
+
+  it('blocks the greeting and the outside-hours reply within 72h of an automated outbound', () => {
+    const h = { ...brandNew, lastOutboundMessageMs: WED_23_00 - 5 * HOUR, lastOutboundMessageAutomated: true };
+    expect(blocked(decideAutoReply(input({ nowMs: WED_23_00, history: h })))).toBe('reply-to-automated');
+    // Inside hours, brand-new by every other measure (an invoice reminder is the first message ever).
+    expect(blocked(decideAutoReply(input({ history: { ...h, lastOutboundMessageMs: WED_11_00 - 2 * DAY } })))).toBe('reply-to-automated');
+  });
+
+  it('does not apply after the window, nor when the last outbound was a person', () => {
+    const old = { ...brandNew, lastOutboundMessageMs: WED_23_00 - 4 * DAY, lastOutboundMessageAutomated: true };
+    expect(blocked(decideAutoReply(input({ nowMs: WED_23_00, history: old })))).toBe('sent:outside-hours');
+    const human = { ...brandNew, lastOutboundMessageMs: WED_23_00 - 5 * HOUR, lastOutboundMessageAutomated: false };
+    expect(blocked(decideAutoReply(input({ nowMs: WED_23_00, history: human })))).toBe('sent:outside-hours');
+  });
+
+  it('honours a configured window (waReplyToAutomatedHours)', () => {
+    const h = { ...brandNew, lastOutboundMessageMs: WED_23_00 - 30 * HOUR, lastOutboundMessageAutomated: true };
+    expect(blocked(decideAutoReply(input({ nowMs: WED_23_00, history: h, settings: { ...settingsOn, waReplyToAutomatedHours: 24 } }))))
+      .toBe('sent:outside-hours');
+  });
+
+  it('still reports opted-out / disabled first', () => {
+    const h = { ...brandNew, lastOutboundMessageMs: WED_23_00 - HOUR, lastOutboundMessageAutomated: true };
+    expect(blocked(decideAutoReply(input({ nowMs: WED_23_00, history: h, contact: { waOptOut: true } })))).toBe('opted-out');
+    expect(blocked(decideAutoReply(input({ nowMs: WED_23_00, history: h, settings: {} })))).toBe('disabled');
   });
 });
 
@@ -196,5 +228,13 @@ describe('isOptOutMessage', () => {
   it('matches the whole-message keywords only', () => {
     for (const t of ['STOP', 'stop', 'Ndalo', ' hiq ', 'unsubscribe.', 'Stop!']) expect(isOptOutMessage(t)).toBe(true);
     for (const t of ['stop it', 'ndalo pak', 'hiqni ofertën', '', null, undefined]) expect(isOptOutMessage(t)).toBe(false);
+    for (const t of ['START', 'fillo', 'Rifillo!']) expect(isOptOutMessage(t)).toBe(false);
+  });
+});
+
+describe('isOptInMessage', () => {
+  it('matches START / FILLO / RIFILLO as the whole message only', () => {
+    for (const t of ['START', 'start', ' Fillo ', 'rifillo.', 'Start!']) expect(isOptInMessage(t)).toBe(true);
+    for (const t of ['start the project', 'fillojmë nesër', 'stop', '', null, undefined]) expect(isOptInMessage(t)).toBe(false);
   });
 });

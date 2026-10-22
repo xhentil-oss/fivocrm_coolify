@@ -12,6 +12,8 @@ import {
   isDefaultFollowUpConfig,
   normalizeCadenceDays,
   resolveFollowUpConfig,
+  businessMinutesBetween,
+  DEFAULT_BUSINESS_HOURS,
 } from './followUpConfig';
 
 describe('api mirror', () => {
@@ -97,5 +99,32 @@ describe('normalizeCadenceDays', () => {
   it('an invalid cadence in settings resolves to the default cadence', () => {
     expect(resolveFollowUpConfig({ leadCadenceDays: [0, 3] }).leadCadenceDays).toEqual([1, 3, 7, 14]);
     expect(resolveFollowUpConfig({ leadCadenceDays: 'nope' }).leadCadenceDays).toEqual([1, 3, 7, 14]);
+  });
+});
+
+describe('businessMinutesBetween', () => {
+  // 2026-10-16 is a Friday; Tirane is UTC+2 (CEST) until 25 Oct.
+  const at = (iso: string) => Date.parse(iso);
+  it('counts only Mon–Fri 09:00–18:00 local', () => {
+    // Fri 10:00 → 12:00 local = 120 min.
+    expect(businessMinutesBetween(at('2026-10-16T08:00:00Z'), at('2026-10-16T10:00:00Z'))).toBe(120);
+  });
+  it('a message on Friday 17:50 has used 10 minutes by Monday 09:00', () => {
+    expect(businessMinutesBetween(at('2026-10-16T15:50:00Z'), at('2026-10-19T07:00:00Z'))).toBe(10);
+    // …and 40 by Monday 09:30.
+    expect(businessMinutesBetween(at('2026-10-16T15:50:00Z'), at('2026-10-19T07:30:00Z'))).toBe(40);
+  });
+  it('nights and weekends are zero', () => {
+    expect(businessMinutesBetween(at('2026-10-17T08:00:00Z'), at('2026-10-18T16:00:00Z'))).toBe(0); // Sat → Sun
+    expect(businessMinutesBetween(at('2026-10-15T17:00:00Z'), at('2026-10-16T06:59:00Z'))).toBe(0); // Thu 19:00 → Fri 08:59
+  });
+  it('a full working day is 540 minutes; empty/negative ranges are 0', () => {
+    expect(businessMinutesBetween(at('2026-10-15T22:00:00Z'), at('2026-10-16T22:00:00Z'))).toBe(540);
+    expect(businessMinutesBetween(at('2026-10-16T10:00:00Z'), at('2026-10-16T09:00:00Z'))).toBe(0);
+    expect(businessMinutesBetween(NaN, 0)).toBe(0);
+  });
+  it('honours custom hours', () => {
+    expect(businessMinutesBetween(at('2026-10-17T08:00:00Z'), at('2026-10-17T09:00:00Z'),
+      { ...DEFAULT_BUSINESS_HOURS, days: [6] })).toBe(60);
   });
 });

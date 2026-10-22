@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
-import { resolveInvoiceWaConfig } from '../lib/finance/invoiceWaReminders';
+import { resolveInvoiceWaConfig, INVOICE_WA_BLOCK_LABELS } from '../lib/finance/invoiceWaReminders';
 import { getNextInvoiceNumber, recordInvoicePartialPayment, deleteInvoicePaymentRows } from '../lib/firebase';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -4353,13 +4353,37 @@ function InvoiceReminderHistory({ invoice }: { invoice: Invoice }) {
   if (email) rows.push({ label: 'Email vonese', value: email });
   const wa = fmt(invoice.overdueWaSentAt);
   if (wa) rows.push({ label: 'WhatsApp vonese', value: `${wa}${invoice.overdueWaCount ? ` (${invoice.overdueWaCount}/${maxSends})` : ''}` });
-  if (!rows.length) return null;
+  // Why the last attempt did NOT go out. The WhatsApp field is either a block
+  // reason code (labelled by the engine's own table) or a provider message.
+  const sentMs = (raw: unknown): number => {
+    const d = (raw as any)?.toDate ? (raw as any).toDate() : raw ? new Date(raw as any) : null;
+    return d && !isNaN(d.getTime()) ? d.getTime() : 0;
+  };
+  const problems: { label: string; value: string; at: string }[] = [];
+  const waErr = (invoice.overdueWaLastError || '').trim();
+  const lastWaSentMs = Math.max(sentMs(invoice.overdueWaSentAt), sentMs(invoice.dueWaSentAt), sentMs(invoice.preDueWaSentAt));
+  if (waErr && (!invoice.overdueWaLastErrorAt || sentMs(invoice.overdueWaLastErrorAt) >= lastWaSentMs)) {
+    const label = (INVOICE_WA_BLOCK_LABELS as Record<string, string>)[waErr];
+    problems.push({ label: 'WhatsApp nuk u dërgua', value: label || waErr, at: fmt(invoice.overdueWaLastErrorAt) });
+  }
+  const emailErr = (invoice.overdueEmailError || '').trim();
+  if ((invoice.overdueEmailFailedAt || emailErr) && sentMs(invoice.overdueEmailFailedAt) >= sentMs(invoice.overdueEmailSentAt)) {
+    problems.push({ label: 'Email-i i vonesës dështoi', value: emailErr || 'gabim i panjohur', at: fmt(invoice.overdueEmailFailedAt) });
+  }
+  if (!rows.length && !problems.length) return null;
   return (
     <div className="rounded-md border border-border p-3 text-xs space-y-1">
       <p className="font-medium text-foreground">Kujtesat e dërguara klientit</p>
       {rows.map((r) => (
         <div key={r.label} className="flex justify-between gap-2 text-muted-foreground">
           <span>{r.label}</span><span className="font-medium text-foreground">{r.value}</span>
+        </div>
+      ))}
+      {!rows.length && <p className="text-muted-foreground">Asnjë kujtesë e dërguar ende.</p>}
+      {problems.map((p) => (
+        <div key={p.label} className="flex justify-between gap-2 text-destructive">
+          <span>{p.label}{p.at ? ` · ${p.at}` : ''}</span>
+          <span className="font-medium text-right break-words min-w-0">{p.value}</span>
         </div>
       ))}
       {invoice.overdueWaMaxNotifiedAt && (

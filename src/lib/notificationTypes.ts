@@ -159,6 +159,14 @@ export const NOTIFICATION_TYPES = {
   billing:                              { category: 'system', priority: 'warning' },
   recurring_project_no_budget:          { category: 'system', priority: 'warning' },
   recurring_project_billing_misconfigured: { category: 'system', priority: 'warning' },
+  // Automated WhatsApp (invoice reminders, campaigns, automations, follow-ups)
+  // failed to send — ONE aggregated row per job run per business, to managers.
+  // `system`, not `messages`: the messages category is email-throttled, and a
+  // broken sender is a setup problem, not a chat.
+  whatsapp_send_failed:                 { category: 'system', priority: 'warning',  groupLabel: 'dërgime WhatsApp të dështuara' },
+  // A WhatsApp number (whatsappAccounts) has been disconnected for > 10 min —
+  // every automated reminder through it is failing. Once per disconnect.
+  whatsapp_disconnected:                { category: 'system', priority: 'critical', groupLabel: 'numra WhatsApp të shkëputur' },
 } as const satisfies Record<string, NotificationTypeSpec>;
 
 /** Every type the product may emit. A value outside this union is a bug. */

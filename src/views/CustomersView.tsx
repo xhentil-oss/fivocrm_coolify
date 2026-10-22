@@ -1664,6 +1664,7 @@ const CustomersView: React.FC = () => {
       {waCustomer && waCustomer.phone && (
         <WhatsAppChatPanel
           phone={waCustomer.phone}
+          customerId={waCustomer.id}
           leadName={waCustomer.name}
           onClose={() => setWaCustomer(null)}
           onSent={(e) => void followUp.logContact(targetFromCustomer(waCustomer), 'whatsapp', e.body, { countsAsFollowUp: true })}

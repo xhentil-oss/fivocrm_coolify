@@ -27,12 +27,29 @@ import { runCrmAutomations } from '../_crmAutomationJob.js';
 import { runHostingLifecycle, runHostingSync, runHostingBackups, runHostingExpiryReport } from '../_hostingJobs.js';
 // "Who are this tenant's managers" — one resolver, shared with _gmb and _waInbound.
 import { managerIdsForBusiness } from '../_staffRecipients.js';
-import { sendBaileysText } from '../_waSend.js';
+import { sendBaileysText, sendMetaTemplate, isPermanentWaError, isUndeliverableNumberError, isChannelWaError } from '../_waSend.js';
 import {
   INVOICE_WA_DEFAULT_TZ, resolveInvoiceWaConfig, invoiceWaDecision, invoiceWaStageField, invoiceWaDueText,
-  renderInvoiceWaText, invoiceWaFirstName, normalizeInvoiceWaPhone, formatInvoiceWaAmount, tallyInvoiceWaBlocked,
-  daysLateOn, type InvoiceWaBlockReason,
+  renderInvoiceWaText, invoiceWaFirstName, normalizeInvoiceWaPhone, tallyInvoiceWaBlocked,
+  daysLateOn, invoiceWaIdempotencyKey, invoiceWaTemplateParams, type InvoiceWaBlockReason,
 } from '../_invoiceWaReminders.js';
+// WhatsApp campaign/automation engine — byte-identical copy of
+// src/lib/marketing/waAutomationCore.ts (test-enforced). Aliased with a `wa`
+// prefix so the names cannot collide with this file's other helpers.
+import {
+  toDate as waToDate, buildCategoryIndex as waBuildCategoryIndex,
+  pickVariant as waPickVariant, variantServiceLabel as waVariantServiceLabel, withUtm as waWithUtm,
+  firstName as waFirstName, summarizeNotes as waSummarizeNotes, renderWaMessage as waRenderMessage,
+  waSendBlockReason, readFailedPhones as waReadFailedPhones, splitInFlight as waSplitInFlight, waFailureBlock,
+  waLocalDayKey, waBroadcastIdempotencyKey, waAutomationIdempotencyKey, waQuietHoursBlock, isWaUndeliverable,
+  MS_PER_DAY as WA_MS_PER_DAY, type WaFailedPhone,
+} from '../_waAutomationCore.js';
+// THE phone rule (byte-identical to src/lib/messaging/waPhone.ts; the core above
+// carries the same body, pinned by waAutomationCore.test.ts).
+import { toWaPhone } from '../_waPhone.js';
+import { makeWaAgentResolver, type WaAgentRef, type WaRelay } from '../_waAgent.js';
+import { withJobLease, claimWindow } from '../_jobLease.js';
+import { businessMinutesBetween } from '../_followUpConfig.js';
 // One delivery path for every notification — see the header of api/_push.ts.
 import { notifyUser, getUserPrefs, isDndActive, isSilenced, escapeHtml, BASE_URL, isValidEmail } from '../_push.js';
 import { runChatScheduled } from '../_chatScheduled.js';
@@ -934,6 +951,11 @@ async function runInvoiceReminders(opts?: { businessId?: string | null }) {
 // Runs every ~2h from the VPS; the local send window (default 09–19
 // Europe/Tirane) is what keeps a 3 a.m. tick from messaging anyone.
 async function runOverdueReminders(opts?: { businessId?: string | null }) {
+  // In run-all AND on its own 2h VPS tick: one copy at a time.
+  return withJobLease('overdue-reminders', opts?.businessId, 10 * 60_000, () => runOverdueRemindersLeased(opts));
+}
+
+async function runOverdueRemindersLeased(opts?: { businessId?: string | null }) {
   const transporter = makeTransporter();
   const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const now = Date.now();
@@ -1006,39 +1028,19 @@ async function runOverdueReminders(opts?: { businessId?: string | null }) {
     return (/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).replace(/\/$/, '');
   })();
   const dueFmt = new Intl.DateTimeFormat('sq-AL', { timeZone: INVOICE_WA_DEFAULT_TZ, day: '2-digit', month: '2-digit', year: 'numeric' });
-  // Baileys agent for an invoice. A team is a DEPARTMENT inside the business, and
-  // the WhatsApp number often lives on another one (e.g. "Ekipi i Shitjeve" while
-  // the invoice belongs to "Ekipi Social Media") — the VPS refuses a teamId with
-  // no agent of its own, so every such reminder failed. The agent is therefore
-  // resolved HERE, from `whatsappAccounts`, and must belong to the invoice's
-  // BUSINESS (the tenant boundary); the VPS then gets the agent's id + its own
-  // teamId, which it re-checks. Preference: the configured agent → an agent of
-  // the invoice's team → any agent of the business; connected first.
-  const agentsByBusiness = new Map<string, Array<{ id: string; teamId: string; connected: boolean }>>();
-  const resolveWaAgent = async (businessId: string | null | undefined, teamId: string, preferredId: string) => {
-    if (!businessId) return null;
-    let list = agentsByBusiness.get(businessId);
-    if (!list) {
-      try {
-        const snap = await db.collection('whatsappAccounts').where('businessId', '==', businessId).get();
-        list = snap.docs
-          .map((d) => ({ id: d.id, data: d.data() as any }))
-          .filter((a) => a.data.enabled !== false && typeof a.data.teamId === 'string' && a.data.teamId)
-          .map((a) => ({ id: a.id, teamId: a.data.teamId as string, connected: a.data.connectionStatus === 'connected' }));
-      } catch (e) {
-        console.error('[overdue-wa] whatsappAccounts lookup failed', e);
-        list = [];
-      }
-      agentsByBusiness.set(businessId, list);
-    }
-    const preferred = preferredId ? list.find((a) => a.id === preferredId) : undefined;
-    if (preferred) return preferred;
-    const rank = (a: { teamId: string; connected: boolean }) => (a.teamId === teamId ? 0 : 2) + (a.connected ? 0 : 1);
-    return [...list].sort((a, b) => rank(a) - rank(b))[0] || null;
-  };
+  // Baileys agent for an invoice: the shared resolver (api/_waAgent.ts) — any
+  // agent of the invoice's BUSINESS, connected first, then the invoice's team;
+  // the configured agent wins only while connected. The VPS gets the agent's id
+  // + its own teamId, which it re-checks.
+  const resolver = makeWaAgentResolver(getTeamSettings);
+  const failures = makeWaFailureReporter('overdue-reminders', 'Kujtesat e faturave në WhatsApp');
+  // Baileys sends wait ≤6s each for the WhatsApp ack; a few in parallel keep the
+  // run inside the function budget without tripping the VPS 30/min limit.
+  const baileysLimit = makeLimiter(3);
 
-  let emailsSent = 0, waSent = 0;
+  let emailsSent = 0, emailsFailed = 0, waSent = 0, waFailed = 0;
   const ops: Promise<any>[] = [];
+  const waOps: Promise<any>[] = [];
   // Per-tenant WA tallies → teamSettings.waInvoiceLastRun.
   const perTeam = new Map<string, { sent: number; considered: number; blocked: InvoiceWaBlockReason[] }>();
   const tally = (teamId: string) => {
@@ -1091,10 +1093,21 @@ async function runOverdueReminders(opts?: { businessId?: string | null }) {
         });
         ops.push(
           transporter.sendMail({ from: senderHeader('FivoCRM', smtpUser), to: customer.email, subject: `⚠️ Faturë e papaguar #${invoiceLabel} (${daysOverdue} ditë vonesë)`, html })
-            .then(() => doc.ref.update({ overdueEmailSentAt: admin.firestore.Timestamp.now() }))
-            .catch((e) => console.error('[overdue-email]', e))
+            .then(async () => {
+              emailsSent++;
+              await doc.ref.update({ overdueEmailSentAt: admin.firestore.Timestamp.now(), overdueEmailError: null });
+            })
+            .catch(async (e) => {
+              // A failed send is RECORDED: the WA engine reads `overdueEmailFailedAt`
+              // and stops waiting for an email that is not coming (email-first gate).
+              emailsFailed++;
+              console.error('[overdue-email]', e);
+              await doc.ref.update({
+                overdueEmailFailedAt: admin.firestore.Timestamp.now(),
+                overdueEmailError: String((e as Error)?.message || e).slice(0, 300),
+              }).catch(() => {});
+            })
         );
-        emailsSent++;
       }
     }
 
@@ -1107,24 +1120,19 @@ async function runOverdueReminders(opts?: { businessId?: string | null }) {
     let metaChannel: any = null;
     let tpl: any = null;
     let hasChannel = false;
-    let waAgent: { id: string; teamId: string } | null = null;
-    let vpsUrl = '';
-    let vpsSecret = '';
+    let waAgent: WaAgentRef | null = null;
+    let relay: WaRelay = { vpsUrl: '', vpsSecret: '' };
     if (cfg.channel === 'meta') {
       const channels: any[] = settings.metaChannels || [];
       metaChannel = channels.find((c) => c.phoneNumberId === cfg.channelPhoneNumberId) || channels[0];
       hasChannel = !!(metaChannel?.accessToken && metaChannel?.phoneNumberId);
       tpl = cfg.templateId ? await getTemplate(cfg.templateId) : null;
     } else {
-      waAgent = await resolveWaAgent(inv.businessId, inv.teamId, cfg.agentId);
-      // The relay credentials are the invoice team's; a team that never saved them
-      // borrows the agent team's (same business, same VPS).
-      const relay = settings.whatsappVpsUrl && settings.whatsappVpsSecret
-        ? settings
-        : (waAgent ? await getTeamSettings(waAgent.teamId) : null);
-      vpsUrl = relay?.whatsappVpsUrl || '';
-      vpsSecret = relay?.whatsappVpsSecret || '';
-      hasChannel = !!(waAgent && vpsUrl && vpsSecret);
+      waAgent = await resolver.resolve(inv.businessId, inv.teamId, cfg.agentId);
+      // The relay credentials: the invoice team's → the agent team's (same
+      // business, same VPS) → the platform env.
+      relay = waAgent ? await resolver.relayFor(inv.teamId, waAgent.teamId) : relay;
+      hasChannel = !!(waAgent && relay.vpsUrl && relay.vpsSecret);
     }
 
     const total = Number(inv.total ?? inv.amount ?? 0) || 0;
@@ -1137,9 +1145,13 @@ async function runOverdueReminders(opts?: { businessId?: string | null }) {
         overdueWaSentAtMs: ms(inv.overdueWaSentAt) || null,
         overdueWaCount: Number(inv.overdueWaCount || 0) || 0,
         overdueEmailSentAtMs: ms(inv.overdueEmailSentAt) || null,
+        overdueEmailFailedAtMs: ms(inv.overdueEmailFailedAt) || null,
         emailChannelAvailable: emailCanSend,
       },
-      customer ? { phone: customer.phone, waOptOut: customer.waOptOut, disableOverdueReminders: customer.disableOverdueReminders } : null,
+      customer ? {
+        phone: customer.phone, waOptOut: customer.waOptOut, disableOverdueReminders: customer.disableOverdueReminders,
+        waUndeliverablePhone: customer.waUndeliverablePhone ?? null,
+      } : null,
       cfg,
       { nowMs: now, timeZone: INVOICE_WA_DEFAULT_TZ, hasChannel, hasTemplate: !!tpl },
     );
@@ -1158,7 +1170,7 @@ async function runOverdueReminders(opts?: { businessId?: string | null }) {
       currency: inv.currency || 'ALL',
       dueDate: dueMs ? dueFmt.format(new Date(dueMs)) : '',
       dueText: invoiceWaDueText(decision.stage, decision.daysLate),
-      daysLate: decision.daysLate,
+      daysLate: Math.max(0, decision.daysLate),
       daysOverdue: Math.max(0, decision.daysLate),
       link,
       whmcsLink: isWhmcs && whmcsBase && inv.whmcsInvoiceId ? `${whmcsBase}/viewinvoice.php?id=${inv.whmcsInvoiceId}` : '',
@@ -1167,12 +1179,29 @@ async function runOverdueReminders(opts?: { businessId?: string | null }) {
     const isOverdueStage = decision.stage === 'overdue';
     const sendsAfter = (Number(inv.overdueWaCount || 0) || 0) + 1;
     const reachesMax = isOverdueStage && sendsAfter >= cfg.overdueMaxSends && !inv.overdueWaMaxNotifiedAt;
-    const stamp = async () => {
+
+    // Everything below happens ONLY after the provider accepted the message:
+    // the stage stamp, the overdue counter, the escalation, the "sent" tally,
+    // the staff notice and the timeline row. A failure records its error and
+    // counts nothing — before, a refused send still burned one of the 3 tries.
+    const onSent = async () => {
+      t.sent++;
+      waSent++;
       await doc.ref.update({
         [stampField]: admin.firestore.Timestamp.now(),
         ...(isOverdueStage ? { overdueWaCount: admin.firestore.FieldValue.increment(1) } : {}),
         ...(reachesMax ? { overdueWaMaxNotifiedAt: admin.firestore.Timestamp.now() } : {}),
+        overdueWaLastError: null,
       });
+      await Promise.allSettled([
+        inv.createdByUserId ? notifyUser({ userId: inv.createdByUserId, type: 'invoice_reminder_sent', title: `💬 Kujtesë WhatsApp (${ctx.dueText}): #${invoiceLabel}`, message: `Kujtesa u dërgua në WhatsApp te ${customer.name || 'klienti'}.`, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', businessId: inv.businessId ?? null, teamId: inv.teamId ?? null, customerId: inv.customerId ?? null, email: false }) : Promise.resolve(),
+        logAutomatedWaTouch({
+          kind: 'customer', id: inv.customerId, teamId: inv.teamId ?? null, businessId: inv.businessId ?? null,
+          title: `WhatsApp automatik — kujtesë fature #${invoiceLabel}`,
+          body: `Kujtesë (${ctx.dueText}) për ${formatMoney(balance, inv.currency || 'ALL')}.`,
+          automationKind: 'invoice-reminder',
+        }),
+      ]);
       if (!reachesMax) return;
       // The last automatic reminder went out — from here a person must call.
       // Once per invoice (`overdueWaMaxNotifiedAt`); a failure never fails the send.
@@ -1188,34 +1217,45 @@ async function runOverdueReminders(opts?: { businessId?: string | null }) {
         })));
       } catch (e) { console.error('[overdue-wa] escalation failed', e); }
     };
+    const onFailed = async (out: WaSendOutcome) => {
+      waFailed++;
+      t.blocked.push('send-failed');
+      failures.add(inv.businessId, inv.teamId, `#${invoiceLabel} → ${customer.name || phone}`, out.error);
+      await doc.ref.update({
+        overdueWaLastError: String(out.error || 'Dërgimi dështoi').slice(0, 300),
+        overdueWaLastErrorAt: admin.firestore.Timestamp.now(),
+        overdueWaLastErrorStage: decision.stage,
+      }).catch(() => {});
+      // A number WhatsApp will never reach: blocked as `undeliverable` from now
+      // on (until the phone is edited) instead of retried every 2h forever.
+      if (out.undeliverable) await markWaUndeliverable('customer', inv.customerId, phone, out.error);
+    };
+    const settle = (p: Promise<WaSendOutcome>) => p
+      .then((out) => (out.ok ? onSent() : onFailed(out)))
+      .catch((e) => onFailed({ ok: false, id: null, error: (e as Error)?.message || String(e), permanent: false, undeliverable: false, channelDown: true }));
 
     if (cfg.channel === 'meta') {
-      // Template params come from `paramFields`; the pseudo-fields above
-      // (dueText, daysLate, link, whmcsLink, firstName) are all addressable.
-      const params: string[] = (tpl.paramFields || []).map((f: string) => {
-        const v = f && f !== 'custom' ? (ctx as Record<string, any>)[f] : undefined;
-        if (v === null || v === undefined) return '';
-        return f === 'amount' || f === 'total' ? formatInvoiceWaAmount(Number(v)) : String(v);
-      });
-      ops.push(
-        sendMetaBroadcastMessage(metaChannel, phone, tpl, params, inv.teamId, null, { id: doc.id, name: customer.name })
-          .then(stamp)
-          .catch((e) => console.error('[overdue-wa:meta]', e))
-      );
+      // Template params come from `paramFields`; the invoice pseudo-fields
+      // (INVOICE_WA_PARAM_FIELDS in _invoiceWaReminders.ts) are all addressable.
+      const params = invoiceWaTemplateParams(tpl.paramFields, ctx);
+      waOps.push(settle(sendAutomatedMetaTemplate({
+        channel: metaChannel, phone, tpl, params, teamId: inv.teamId, businessId: inv.businessId ?? null,
+        kind: 'invoice-reminder', contactName: customer.name || null,
+        customerId: inv.customerId, leadId: null, invoiceId: doc.id,
+      })));
     } else {
       const text = renderInvoiceWaText(cfg.text, ctx);
-      ops.push(
-        sendBaileysText(vpsUrl, vpsSecret, waAgent!.id, phone, text, { teamId: waAgent!.teamId, leadName: customer.name || null })
-          .then((r) => { if (r.ok) return stamp(); console.error('[overdue-wa:baileys]', r.error); })
-          .catch((e) => console.error('[overdue-wa:baileys]', e))
-      );
-    }
-    t.sent++;
-    waSent++;
-    if (inv.createdByUserId) {
-      ops.push(notifyUser({ userId: inv.createdByUserId, type: 'invoice_reminder_sent', title: `💬 Kujtesë WhatsApp (${ctx.dueText}): #${invoiceLabel}`, message: `Kujtesa u dërgua në WhatsApp te ${customer.name || 'klienti'}.`, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', businessId: inv.businessId ?? null, teamId: inv.teamId ?? null, customerId: inv.customerId ?? null, email: false }));
+      waOps.push(settle(baileysLimit(() => sendAutomatedBaileys({
+        relay, agent: waAgent!, phone, text, kind: 'invoice-reminder',
+        idempotencyKey: invoiceWaIdempotencyKey(doc.id, decision.stage, sendsAfter),
+        businessId: inv.businessId ?? null, contactName: customer.name || null,
+        customerId: inv.customerId, invoiceId: doc.id,
+      }))));
     }
   }
+
+  // The sends decide the tallies, so they settle BEFORE the run summary is written.
+  await settleAll(waOps, 'overdue-reminders:wa');
 
   // Per-tenant run summary for the settings panel (one merge write per enabled tenant).
   const waBlocked: Record<string, Record<string, number>> = {};
@@ -1228,7 +1268,8 @@ async function runOverdueReminders(opts?: { businessId?: string | null }) {
   }
 
   await settleAll(ops, 'overdue-reminders');
-  return { emailsSent, waSent, waBlocked, suspendedSkipped, scopedTo: scopeId };
+  const failureNotifications = await failures.flush();
+  return { emailsSent, emailsFailed, waSent, waFailed, failureNotifications, waBlocked, suspendedSkipped, scopedTo: scopeId };
 }
 
 // ── JOB: recurring-tasks ─────────────────────────────────────────────────────
@@ -3222,6 +3263,14 @@ async function dueFollowUpDocs(
 }
 
 async function runFollowUpReminders(opts: { businessId?: string | null } = {}) {
+  // Its WhatsApp leg messages customers: one copy at a time (VPS tick + manual).
+  return withJobLease('lead-follow-up-reminders', opts.businessId, 10 * 60_000, () => runFollowUpRemindersLeased(opts));
+}
+
+/** Follow-up types that may go out as an automated WhatsApp template ('message' = legacy). */
+const FOLLOW_UP_WA_TYPES = new Set(['whatsapp', 'message']);
+
+async function runFollowUpRemindersLeased(opts: { businessId?: string | null } = {}) {
   const now = new Date();
   const nowMs = now.getTime();
   const todayStartMs = startOfRecurrenceDay(now);
@@ -3242,9 +3291,14 @@ async function runFollowUpReminders(opts: { businessId?: string | null } = {}) {
     suspSnap.docs.forEach(d => suspendedBusinessIds.add(d.id));
   } catch { /* fail-open on the read */ }
 
-  let leadsNotified = 0, customersNotified = 0, waSent = 0;
+  let leadsNotified = 0, customersNotified = 0, waSent = 0, waFailed = 0;
   let skippedDebounce = 0, noRecipient = 0, suspendedSkipped = 0, skippedStatus = 0;
   const ops: Promise<any>[] = [];
+  // Every non-send of the WhatsApp leg is a NAMED reason (never a silent skip).
+  const waBlocked: Record<string, number> = {};
+  const waBlock = (r: string) => { waBlocked[r] = (waBlocked[r] || 0) + 1; };
+  const failures = makeWaFailureReporter('lead-follow-up-reminders', 'Ndjekjet në WhatsApp');
+  const waResolver = makeWaAgentResolver(async (teamId: string) => getTeamSettings(teamId));
 
   // Per-run caches so we read each team's settings / template only once.
   const tsCache = new Map<string, any>();
@@ -3308,35 +3362,80 @@ async function runFollowUpReminders(opts: { businessId?: string | null } = {}) {
     ops.push(doc.ref.update({ lastReminderSentAt: admin.firestore.Timestamp.now() }));
 
     // Optional: send a WhatsApp follow-up template if the team enabled it (leads only).
+    // Rules: only when the planned step IS a WhatsApp (or unset/legacy), at most
+    // ONCE per due date (`followUpWaSentForDate` — the reminder above repeats daily
+    // while the step stays overdue, the customer message must not), never to a
+    // contact who said STOP or whose number cannot receive WhatsApp, and stamped
+    // only after Meta accepted the message.
     if (kind !== 'lead') return;
-    const phone = c.phone || c.phoneNumber;
-    if (phone && c.teamId) {
-      const settings = await getTeamSettings(c.teamId);
-      if (settings?.waFollowUpEnabled && settings?.waFollowUpTemplateId && settings?.metaEnabled) {
-        const tpl = await getTemplate(settings.waFollowUpTemplateId);
-        const channels: any[] = settings.metaChannels || [];
-        const channel = channels.find((ch) => ch.phoneNumberId === settings.waFollowUpChannelPhoneNumberId) || channels[0];
-        if (tpl && channel?.accessToken && channel?.phoneNumberId) {
-          const params: string[] = (tpl.paramFields || []).map((f: string) =>
-            f && f !== 'custom' && c[f] != null ? String(c[f]) : ''
-          );
-          ops.push(
-            sendMetaBroadcastMessage(channel, normalizeWaPhone(phone), tpl, params, c.teamId, null, { id: doc.id, name: c.name })
-              .catch((e) => console.error('[follow-up-wa]', e))
-          );
-          waSent++;
+    const rawPhone = c.phone || c.phoneNumber;
+    if (!rawPhone || !c.teamId) return;
+    const settings = await getTeamSettings(c.teamId);
+    // Meta OR Baileys (sendTemplateReminderAnyChannel) — no longer Meta-only.
+    if (!settings?.waFollowUpEnabled || !settings?.waFollowUpTemplateId) return;
+    const fuType = c.nextFollowUpType == null || c.nextFollowUpType === '' ? null : String(c.nextFollowUpType);
+    if (fuType && !FOLLOW_UP_WA_TYPES.has(fuType)) { waBlock('not-whatsapp-step'); return; }
+    const dueKey = waLocalDayKey(dueMs);
+    if (c.followUpWaSentForDate === dueKey) { waBlock('already-sent'); return; }
+    if (c.waOptOut === true) { waBlock('opted-out'); return; }
+    const phone = toWaPhone(rawPhone);
+    if (!phone) { waBlock('no-phone'); return; }
+    if (isWaUndeliverable(c)) { waBlock('undeliverable'); return; }
+    const tpl = await getTemplate(settings.waFollowUpTemplateId);
+    if (!tpl) { waBlock('no-template'); return; }
+    const params: string[] = (tpl.paramFields || []).map((f: string) =>
+      f && f !== 'custom' && c[f] != null ? String(c[f]) : ''
+    );
+    ops.push(
+      sendTemplateReminderAnyChannel({
+        settings, tpl, channelPhoneNumberId: settings.waFollowUpChannelPhoneNumberId, params,
+        phone, teamId: c.teamId, businessId: c.businessId ?? null, kind: 'follow-up',
+        contactName: c.name || null, leadId: doc.id,
+        idempotencyKey: `fu_${doc.id}_${dueKey}`, resolver: waResolver,
+      }).then(async (out) => {
+        if ('blocked' in out) {
+          waBlock(out.blocked);
+          if (out.blocked === 'channel-down') failures.add(c.businessId, c.teamId, c.name || phone, 'Numri WhatsApp nuk është i lidhur');
+          return;
         }
-      }
-    }
+        if (out.ok) {
+          waSent++;
+          await doc.ref.update({
+            followUpWaSentForDate: dueKey,
+            followUpWaSentAt: admin.firestore.Timestamp.now(),
+            followUpWaLastError: null,
+          });
+          await logAutomatedWaTouch({
+            kind: 'lead', id: doc.id, teamId: c.teamId, businessId: c.businessId ?? null,
+            title: 'WhatsApp automatik (ndjekje)',
+            body: c.followUpNote ? `Hapi i planifikuar: ${String(c.followUpNote).slice(0, 200)}` : 'Hapi i planifikuar i ndjekjes.',
+            automationKind: 'follow-up',
+          });
+          return;
+        }
+        waFailed++;
+        waBlock('send-failed');
+        failures.add(c.businessId, c.teamId, c.name || phone, out.error);
+        await doc.ref.update({
+          followUpWaLastError: String(out.error || '').slice(0, 300),
+          followUpWaLastErrorAt: admin.firestore.Timestamp.now(),
+          // A permanent failure (wrong template / not on WhatsApp) is not retried for this due date.
+          ...(out.permanent ? { followUpWaSentForDate: dueKey } : {}),
+        }).catch(() => {});
+        if (out.undeliverable) await markWaUndeliverable('lead', doc.id, phone, out.error);
+      }).catch((e) => console.error('[follow-up-wa]', e))
+    );
   };
 
   for (const d of leadDocs) await process('lead', d);
   for (const d of customerDocs) await process('customer', d);
 
   await settleAll(ops, 'lead-follow-up-reminders');
+  const failureNotifications = await failures.flush();
   return {
     scanned: { leads: leadDocs.length, customers: customerDocs.length },
     leadsNotified, customersNotified, skippedDebounce, noRecipient, suspendedSkipped, skippedStatus, waSent,
+    waFailed, waBlocked, failureNotifications,
     // Legacy key — older run logs / the Settings cron card read `notified`.
     notified: leadsNotified + customersNotified,
     businessId: scope,
@@ -3444,16 +3543,49 @@ async function runLeadSlaAndStaleAlerts(opts?: { businessId?: string | null }) {
 // Index: conversations (awaitingReply, slaBreachNotified, slaFirstResponseDueAt).
 // `opts.businessId` = a manual run from one tenant; the composite-index query
 // cannot take another clause, so the scope is applied in memory before notifying.
+//
+// BUSINESS HOURS: the SLA counts only working minutes (Mon–Fri 09:00–18:00
+// Europe/Tirane, `businessMinutesBetween` in _followUpConfig.ts — no tenant
+// setting exists yet). The wall-clock deadline the inbound handler arms is the
+// EARLIEST possible breach; a row whose working minutes have not reached the
+// tenant's `waResponseSlaMinutes` is left armed and re-checked next tick
+// (`outside-business-hours`), so a Friday-evening message breaches on Monday
+// morning instead of paging managers all weekend.
+//
+// Also here (every 15 min): `whatsapp_disconnected` — see runWhatsappDisconnectAlerts.
 async function runConversationSla(opts?: { businessId?: string | null }) {
+  const sla = await runConversationSlaChecks(opts);
+  let disconnect: Record<string, unknown> = {};
+  try { disconnect = await runWhatsappDisconnectAlerts(opts); } catch (e) {
+    console.error('[conversation-sla] disconnect alerts failed', e);
+    disconnect = { error: (e as Error)?.message || String(e) };
+  }
+  return { ...sla, disconnect };
+}
+
+async function runConversationSlaChecks(opts?: { businessId?: string | null }) {
   const scopeId = opts?.businessId || null;
   let outOfScope = 0;
+  let outsideBusinessHours = 0;
   const now = admin.firestore.Timestamp.now();
+  // 500, not 200: rows waiting for business hours stay in this result set over a
+  // weekend and must not crowd out a breach that is real.
   const snap = await db.collection('conversations')
     .where('awaitingReply', '==', true)
     .where('slaBreachNotified', '==', false)
     .where('slaFirstResponseDueAt', '<=', now)
-    .limit(200)
+    .limit(500)
     .get();
+  const slaMinutesCache = new Map<string, number>();
+  const slaMinutesFor = async (teamId: string | null): Promise<number> => {
+    const key = teamId || '';
+    const hit = slaMinutesCache.get(key);
+    if (hit != null) return hit;
+    let cfg = resolveFollowUpConfig(null);
+    if (teamId) { try { cfg = resolveFollowUpConfig(await getTeamConfig(teamId)); } catch { /* defaults */ } }
+    slaMinutesCache.set(key, cfg.waResponseSlaMinutes);
+    return cfg.waResponseSlaMinutes;
+  };
 
   // The Admin SDK bypasses tenantActive(): exclude suspended tenants ourselves.
   const suspendedBusinessIds = new Set<string>();
@@ -3482,6 +3614,13 @@ async function runConversationSla(opts?: { businessId?: string | null }) {
     const teamId: string | null = conv.teamId || null;
     if (scopeId && businessId !== scopeId) { outOfScope++; continue; }
     if (businessId && suspendedBusinessIds.has(businessId)) { suspendedSkipped++; continue; }
+
+    // Working minutes since the FIRST unanswered message of the burst. The handler
+    // arms `slaFirstResponseDueAt = burstStart + slaMinutes` (lastInboundAt moves
+    // with every message), so the burst start is derived back from it.
+    const slaMinutes = await slaMinutesFor(teamId);
+    const startedMs = ms(conv.slaArmedAt) || (ms(conv.slaFirstResponseDueAt) ? ms(conv.slaFirstResponseDueAt) - slaMinutes * 60_000 : 0);
+    if (startedMs && businessMinutesBetween(startedMs, now.toMillis()) < slaMinutes) { outsideBusinessHours++; continue; }
 
     const recipients = conv.ownerId
       ? Array.from(new Set([conv.ownerId, conv.managerId].filter(Boolean) as string[]))
@@ -3514,7 +3653,72 @@ async function runConversationSla(opts?: { businessId?: string | null }) {
   }
 
   await settleAll(ops, 'conversation-sla');
-  return { checked: snap.size, breached, notified, suspendedSkipped, noRecipient, ...(scopeId ? { outOfScope } : {}) };
+  return { checked: snap.size, breached, notified, suspendedSkipped, noRecipient, outsideBusinessHours, ...(scopeId ? { outOfScope } : {}) };
+}
+
+// ── whatsapp_disconnected (from conversation-sla, every 15 min) ──────────────
+// The VPS writes `connectionStatus`, `lastDisconnectedAt`, `lastDisconnectReason`
+// on each `whatsappAccounts` doc. An ENABLED account that is not connected/open
+// and has been down for more than 10 minutes notifies that business's managers
+// ONCE per disconnect (`disconnectAlertSentAt` >= `lastDisconnectedAt` = already
+// told). Every automated reminder through that number is failing meanwhile.
+const WA_DISCONNECT_GRACE_MS = 10 * 60_000;
+
+async function runWhatsappDisconnectAlerts(opts?: { businessId?: string | null }) {
+  const scopeId = opts?.businessId || null;
+  const nowMs = Date.now();
+  const cutoff = admin.firestore.Timestamp.fromMillis(nowMs - WA_DISCONNECT_GRACE_MS);
+  // Single-field range on lastDisconnectedAt (automatic index); the rest in memory.
+  let q: admin.firestore.Query = db.collection('whatsappAccounts').where('lastDisconnectedAt', '<=', cutoff);
+  const snap = await q.limit(500).get();
+  const suspended = await loadSuspendedBusinessIds();
+  const tsMs = (v: any): number => (v?.toMillis ? v.toMillis() : (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0)));
+  const teamBusiness = new Map<string, string | null>();
+  const businessOfTeam = async (teamId: string): Promise<string | null> => {
+    if (teamBusiness.has(teamId)) return teamBusiness.get(teamId)!;
+    let bid: string | null = null;
+    try { const t = await db.collection('teams').doc(teamId).get(); bid = t.exists ? ((t.data() as any)?.businessId ?? null) : null; } catch { /* unknown */ }
+    teamBusiness.set(teamId, bid);
+    return bid;
+  };
+
+  let alerted = 0, notified = 0, stillConnected = 0, alreadyAlerted = 0, disabled = 0, suspendedSkipped = 0, outOfScope = 0, noBusiness = 0;
+  for (const d of snap.docs) {
+    const a = d.data() as any;
+    if (a.enabled === false) { disabled++; continue; }
+    if (isConnectedWaStatusCron(a.connectionStatus)) { stillConnected++; continue; }
+    const downSince = tsMs(a.lastDisconnectedAt);
+    if (!downSince || nowMs - downSince < WA_DISCONNECT_GRACE_MS) continue;
+    if (tsMs(a.disconnectAlertSentAt) >= downSince) { alreadyAlerted++; continue; }
+    const businessId: string | null = a.businessId || (a.teamId ? await businessOfTeam(String(a.teamId)) : null);
+    if (!businessId) { noBusiness++; continue; }
+    if (scopeId && businessId !== scopeId) { outOfScope++; continue; }
+    if (suspended.has(businessId)) { suspendedSkipped++; continue; }
+
+    // Stamp FIRST (claim the alert), then notify: a crash between the two loses one
+    // alert, never sends it every 15 minutes.
+    await d.ref.update({ disconnectAlertSentAt: admin.firestore.Timestamp.now() });
+    alerted++;
+    const label = String(a.label || a.connectedPhone || a.phone || d.id);
+    const minutes = Math.round((nowMs - downSince) / 60_000);
+    const recipients = await managerIdsForBusiness(businessId, a.teamId || null);
+    const results = await Promise.allSettled(recipients.map((userId) => notifyUser({
+      userId,
+      type: 'whatsapp_disconnected',
+      title: `📵 WhatsApp i shkëputur: ${label}`,
+      message: `Numri ${label} është i shkëputur prej ${minutes} min${a.lastDisconnectReason ? ` (${String(a.lastDisconnectReason).slice(0, 80)})` : ''}. Kujtesat dhe fushatat automatike nuk dërgohen — skanoni QR-in në Cilësimet → WhatsApp.`,
+      actionUrl: '/app/settings',
+      actionLabel: 'Rilidh WhatsApp',
+      businessId,
+      teamId: a.teamId || null,
+    })));
+    notified += results.filter((r) => r.status === 'fulfilled' && (r.value as any)?.written).length;
+  }
+  return { checked: snap.size, alerted, notified, stillConnected, alreadyAlerted, disabled, suspendedSkipped, noBusiness, ...(scopeId ? { outOfScope } : {}) };
+}
+
+function isConnectedWaStatusCron(s: unknown): boolean {
+  return s === 'connected' || s === 'open';
 }
 
 // ── JOB: lead-wa-auto-reminders ──────────────────────────────────────────────
@@ -3525,6 +3729,10 @@ async function runConversationSla(opts?: { businessId?: string | null }) {
 // on WhatsApp, so the scope is applied in memory before any send, and a suspended
 // tenant's leads are never messaged.
 async function runLeadWhatsappAutoReminders(opts?: { businessId?: string | null }) {
+  return withJobLease('lead-wa-auto-reminders', opts?.businessId, 10 * 60_000, () => runLeadWhatsappAutoRemindersLeased(opts));
+}
+
+async function runLeadWhatsappAutoRemindersLeased(opts?: { businessId?: string | null }) {
   const scopeId = opts?.businessId || null;
   const now = Date.now();
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
@@ -3555,18 +3763,25 @@ async function runLeadWhatsappAutoReminders(opts?: { businessId?: string | null 
   };
 
   let sent = 0;
+  let failed = 0;
   const ops: Promise<any>[] = [];
+  // Named reasons for every lead that reached the send decision and did not get a message.
+  const blocked: Record<string, number> = {};
+  const block = (r: string) => { blocked[r] = (blocked[r] || 0) + 1; };
+  const failures = makeWaFailureReporter('lead-wa-auto-reminders', 'Rikujtuesit automatikë WhatsApp');
+  const waResolver = makeWaAgentResolver(async (teamId: string) => getTeamSettings(teamId));
 
   for (const leadDoc of leadsSnap.docs) {
     const lead = leadDoc.data();
     if (scopeId && lead.businessId !== scopeId) { outOfScope++; continue; }
     if (lead.businessId && suspended.has(lead.businessId)) { suspendedSkipped++; continue; }
     if (['Won', 'Lost', 'Converted'].includes(lead.status)) continue;
-    const phone = lead.phone || lead.phoneNumber;
-    if (!phone || !lead.teamId) continue;
+    const rawPhone = lead.phone || lead.phoneNumber;
+    if (!rawPhone || !lead.teamId) continue;
 
     const settings = await getTeamSettings(lead.teamId);
-    if (!settings?.waAutoReminderEnabled || !settings?.metaEnabled || !settings?.waAutoReminderTemplateId) continue;
+    // Meta OR Baileys (sendTemplateReminderAnyChannel) — no longer Meta-only.
+    if (!settings?.waAutoReminderEnabled || !settings?.waAutoReminderTemplateId) continue;
 
     const statuses: string[] = settings.waAutoReminderStatuses?.length ? settings.waAutoReminderStatuses : ['Follow-up', 'Proposal'];
     if (!statuses.includes(lead.status)) continue;
@@ -3579,48 +3794,82 @@ async function runLeadWhatsappAutoReminders(opts?: { businessId?: string | null 
     // Debounce: re-send at most once per `days` window.
     const lastAuto = ms(lead.waAutoReminderAt);
     if (lastAuto && (now - lastAuto) / 86_400_000 < days) continue;
+    // A transient failure is retried at most once a day, not every run.
+    const lastErr = ms(lead.waAutoReminderLastErrorAt);
+    if (lastErr && now - lastErr < 20 * 3_600_000) { block('failed-recently'); continue; }
+
+    // From here on the lead IS due — every non-send is a named reason.
+    if (lead.waOptOut === true) { block('opted-out'); continue; }
+    const phone = toWaPhone(rawPhone);
+    if (!phone) { block('no-phone'); continue; }
+    if (isWaUndeliverable(lead)) { block('undeliverable'); continue; }
 
     const tpl = await getTemplate(settings.waAutoReminderTemplateId);
-    const channels: any[] = settings.metaChannels || [];
-    const channel = channels.find((c) => c.phoneNumberId === settings.waAutoReminderChannelPhoneNumberId) || channels[0];
-    if (!tpl || !channel?.accessToken || !channel?.phoneNumberId) continue;
+    if (!tpl) { block('no-template'); continue; }
 
     const params: string[] = (tpl.paramFields || []).map((f: string) =>
       f && f !== 'custom' && lead[f] != null ? String(lead[f]) : ''
     );
+    const daysQuiet = Math.floor(daysSince);
+    // Stamp, timeline row and staff notice ONLY after Meta accepted the message —
+    // a refused send used to be logged as "u dërgua" and debounced for a week.
     ops.push(
-      sendMetaBroadcastMessage(channel, normalizeWaPhone(phone), tpl, params, lead.teamId, null, { id: leadDoc.id, name: lead.name })
-        .catch((e) => console.error('[wa-auto-reminder]', e))
+      sendTemplateReminderAnyChannel({
+        settings, tpl, channelPhoneNumberId: settings.waAutoReminderChannelPhoneNumberId, params,
+        phone, teamId: lead.teamId, businessId: lead.businessId ?? null, kind: 'lead-reminder',
+        contactName: lead.name || null, leadId: leadDoc.id,
+        idempotencyKey: `lrem_${leadDoc.id}_${waLocalDayKey(now)}`, resolver: waResolver,
+      }).then(async (out) => {
+        if ('blocked' in out) {
+          block(out.blocked);
+          if (out.blocked === 'channel-down') failures.add(lead.businessId, lead.teamId, lead.name || phone, 'Numri WhatsApp nuk është i lidhur');
+          return;
+        }
+        if (!out.ok) {
+          failed++;
+          block('send-failed');
+          failures.add(lead.businessId, lead.teamId, lead.name || phone, out.error);
+          await leadDoc.ref.update({
+            waAutoReminderLastError: String(out.error || '').slice(0, 300),
+            waAutoReminderLastErrorAt: admin.firestore.Timestamp.now(),
+          }).catch(() => {});
+          if (out.undeliverable) await markWaUndeliverable('lead', leadDoc.id, phone, out.error);
+          return;
+        }
+        sent++;
+        const ts = admin.firestore.Timestamp.now();
+        await leadDoc.ref.update({
+          waAutoReminderAt: ts,
+          lastFollowUpDate: ts,
+          lastActivityAt: ts,
+          waAutoReminderLastError: null,
+        });
+        // `businessId` is what the leadActivities read rule keys on — a row without
+        // it exists in the database and is invisible in every timeline.
+        await logAutomatedWaTouch({
+          kind: 'lead', id: leadDoc.id, teamId: lead.teamId, businessId: lead.businessId ?? null,
+          title: 'WhatsApp automatik (rikujtues)',
+          body: `Rikujtues pas ${daysQuiet} ditësh pa komunikim.`,
+          automationKind: 'lead-reminder',
+        });
+        const assignee = lead.assignedToUserId || lead.createdByUserId;
+        if (assignee) {
+          await notifyUser({
+            userId: assignee, type: 'lead_follow_up',
+            title: `📲 Rikujtues WhatsApp u dërgua — ${lead.name}`,
+            message: `Rikujtues automatik WhatsApp u dërgua te ${lead.name} (${daysQuiet} ditë pa komunikim).`,
+            actionUrl: '/app/crm', actionLabel: 'Shiko CRM',
+            businessId: lead.businessId ?? null, teamId: lead.teamId ?? null,
+            email: false,
+          }).catch(() => {});
+        }
+      }).catch((e) => console.error('[wa-auto-reminder]', e))
     );
-    // `businessId` is what the leadActivities read rule keys on — a row without
-    // it exists in the database and is invisible in every timeline.
-    ops.push(db.collection('leadActivities').add({
-      leadId: leadDoc.id, teamId: lead.teamId, businessId: lead.businessId ?? null, type: 'whatsapp',
-      title: 'WhatsApp automatik (rikujtues)',
-      body: `Rikujtues pas ${Math.floor(daysSince)} ditësh pa komunikim.`,
-      userId: null, userName: 'Sistemi', createdAt: admin.firestore.Timestamp.now(),
-    }));
-    ops.push(leadDoc.ref.update({
-      waAutoReminderAt: admin.firestore.Timestamp.now(),
-      lastFollowUpDate: admin.firestore.Timestamp.now(),
-      lastActivityAt: admin.firestore.Timestamp.now(),
-    }));
-    const assignee = lead.assignedToUserId || lead.createdByUserId;
-    if (assignee) {
-      ops.push(notifyUser({
-        userId: assignee, type: 'lead_follow_up',
-        title: `📲 Rikujtues WhatsApp u dërgua — ${lead.name}`,
-        message: `Rikujtues automatik WhatsApp u dërgua te ${lead.name} (${Math.floor(daysSince)} ditë pa komunikim).`,
-        actionUrl: '/app/crm', actionLabel: 'Shiko CRM',
-        businessId: lead.businessId ?? null, teamId: lead.teamId ?? null,
-        email: false,
-      }));
-    }
-    sent++;
   }
 
   await settleAll(ops, 'lead-wa-auto-reminders');
-  return { sent, suspendedSkipped, ...(scopeId ? { outOfScope } : {}) };
+  const failureNotifications = await failures.flush();
+  return { sent, failed, blocked, failureNotifications, suspendedSkipped, ...(scopeId ? { outOfScope } : {}) };
 }
 
 // ── JOB: daily-report-check ──────────────────────────────────────────────────
@@ -4088,295 +4337,272 @@ async function runCleanupOldNotifications() {
   return { deleted, deletedRead, deletedStale, truncated };
 }
 
-// ── WhatsApp automation rules engine ─────────────────────────────────────────
-// MIRROR of src/lib/marketing/waAutomation.ts — the browser previews the segment
-// with that module, the cron sends with this one. They must agree, or the count
-// the user approved is not the count that goes out. Keep the two in sync (the
-// module carries the tests and the full reasoning).
-const WA_MS_PER_DAY = 86_400_000;
+// ── WhatsApp automation — shared machinery for every automated sender ────────
+// The rules engine (gate, phone rule, variants, rendering, quiet hours, failure
+// ledger) is `api/_waAutomationCore.ts`, a BYTE-IDENTICAL copy of
+// src/lib/marketing/waAutomationCore.ts (test-enforced) — the browser previews
+// the segment with the same code the cron sends with. Before the extraction this
+// file carried a hand-kept mirror whose phone rule had drifted, so a customer
+// stored as '069…' never matched their own '35569…' messages and an evergreen
+// rule re-messaged them every day. This section only fetches facts, sends and
+// records.
 
-function waContactTags(e: any): string[] {
-  const t = e?.tags;
-  if (Array.isArray(t)) return t.map((x: any) => String(x).trim()).filter(Boolean);
-  if (typeof t === 'string') return t.split(',').map((s: string) => s.trim()).filter(Boolean);
-  return [];
-}
+type WaAutomationKind = 'invoice-reminder' | 'campaign' | 'automation' | 'lead-reminder' | 'follow-up' | 'playbook';
 
-/** Business category, with the aliases imported rows have written historically. */
-function waContactCategory(e: any): string {
-  const raw = e?.businessCategory ?? e?.category ?? e?.industry;
-  return String(raw ?? '').trim();
-}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Case-insensitive membership — categories are free text typed by the user. */
-function waCategoryMatches(cat: string, want: string[]): boolean {
-  if (!cat) return false;
-  const c = cat.toLowerCase();
-  return want.some((w) => String(w || '').trim().toLowerCase() === c);
-}
-
-function waToDate(v: any): Date | null {
-  if (!v) return null;
-  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
-  if (typeof v?.toDate === 'function') {
-    const d = v.toDate();
-    return d instanceof Date && !isNaN(d.getTime()) ? d : null;
-  }
-  if (typeof v === 'number' || typeof v === 'string') {
-    const d = new Date(v);
-    return isNaN(d.getTime()) ? null : d;
-  }
-  return null;
-}
-
-/** Newest touch across every signal. `createdAt` is deliberately NOT a contact. */
-function waResolveLastContactAt(e: any, lastMessageAt?: Date | null): Date | null {
-  const c = [waToDate(lastMessageAt), waToDate(e?.lastActivityAt), waToDate(e?.lastFollowUpDate), waToDate(e?.firstResponseAt)]
-    .filter((d): d is Date => !!d);
-  return c.length ? c.reduce((a, b) => (b.getTime() > a.getTime() ? b : a)) : null;
-}
-
-function waDaysSince(d: Date | null, now: Date): number | null {
-  return d ? Math.floor((now.getTime() - d.getTime()) / WA_MS_PER_DAY) : null;
-}
-
-/** Most specific matching variant wins; a tagless variant is the fallback. */
-function waPickVariant(e: any, variants: any[] | undefined): any | null {
-  const list = (variants || []).filter((v) => v && String(v.body || '').trim());
-  if (!list.length) return null;
-  const tags = waContactTags(e);
-  let best: any = null;
-  let bestScore = -1;
-  for (const v of list) {
-    const want: string[] = (v.tags || []).filter(Boolean);
-    if (!want.length) { if (bestScore < 0) { best = v; bestScore = 0; } continue; }
-    const hits = want.filter((t) => tags.includes(t)).length;
-    if (hits > 0 && hits > bestScore) { best = v; bestScore = hits; }
-  }
-  return best;
-}
-
-function waVariantServiceLabel(e: any, v: any | null): string {
-  if (!v) return '';
-  const tags = waContactTags(e);
-  return (v.tags || []).find((t: string) => tags.includes(t)) || v.label || '';
-}
-
-function waWithUtm(url: string | undefined, utm?: any): string {
-  const raw = String(url || '').trim();
-  if (!raw || !/^https?:\/\//i.test(raw)) return raw;
-  try {
-    const u = new URL(raw);
-    const map: Record<string, string | undefined> = {
-      utm_source: utm?.source, utm_medium: utm?.medium,
-      utm_campaign: utm?.campaign, utm_content: utm?.content,
-    };
-    for (const [k, v] of Object.entries(map)) if (v && !u.searchParams.has(k)) u.searchParams.set(k, v);
-    return u.toString();
-  } catch { return raw; }
-}
-
-function waFirstName(name?: string): string {
-  return String(name || '').trim().split(/\s+/)[0] || '';
-}
-
-/** First meaningful line of the notes, de-noised and capped — a quotable clause. */
-function waSummarizeNotes(notes?: string, maxLen = 160): string {
-  const first = String(notes || '')
-    .split(/\r?\n/)
-    .map((l) => l.replace(/^\s*(?:[-•*]|\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?\s*[:-]?)\s*/, '').trim())
-    .find((l) => l.length > 0);
-  if (!first) return '';
-  if (first.length <= maxLen) return first;
-  const cut = first.slice(0, maxLen);
-  const lastSpace = cut.lastIndexOf(' ');
-  return `${(lastSpace > maxLen * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[,;:.\s]+$/, '')}…`;
-}
-
-/** Named-token renderer. Unknown tokens render EMPTY — never leak `{{foo}}`. */
-function waRenderMessage(body: string, e: any, ctx: { link?: string; service?: string } = {}): string {
-  const vars: Record<string, string> = {
-    name: waFirstName(e?.name),
-    fullname: String(e?.name || '').trim(),
-    company: String(e?.company || '').trim(),
-    notes: waSummarizeNotes(e?.notes),
-    link: ctx.link || '',
-    service: ctx.service || '',
-  };
-  const hadLinkToken = /\{\{\s*link\s*\}\}/i.test(body || '');
-  let out = String(body || '').replace(/\{\{\s*([a-zA-Z_][\w.]*)\s*\}\}/g, (_m, key: string) => {
-    const v = vars[String(key).toLowerCase()];
-    return v == null ? '' : v;
+/** At most `n` promises in flight (Baileys: the VPS caps 30/min per agent and waits ≤6s per ack). */
+function makeLimiter(n: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  const next = () => { active--; const run = queue.shift(); if (run) run(); };
+  return <T>(fn: () => Promise<T>): Promise<T> => new Promise<T>((resolve, reject) => {
+    const run = () => { active++; fn().then(resolve, reject).finally(next); };
+    if (active < n) run(); else queue.push(run);
   });
-  out = out.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-  if (!hadLinkToken && ctx.link) out = `${out}\n\n${ctx.link}`;
-  return out;
 }
 
-/** The ONE gate: null = send, otherwise the named reason. Cheapest checks first. */
-function waBlockReason(
-  e: any,
-  segment: any,
-  conditions: any,
-  ctx: {
-    now: Date;
-    kind: 'lead' | 'customer';
-    lastMessageByPhone?: Map<string, Date>;
-    sentPhones?: Set<string>;
-    domainCustomerIds?: Set<string> | null;
-    /** contactId → category, for contacts whose own doc carries none (customers). */
-    categoryByContactId?: Map<string, string>;
-  },
-  variants?: any[],
-): string | null {
-  const phone = normalizeWaPhone(e?.phone || e?.phoneNumber);
-  if (phone.length < 7) return 'no-phone';
+interface WaSendOutcome {
+  ok: boolean;
+  /** wamid (Meta) / VPS message id (Baileys). */
+  id: string | null;
+  error?: string;
+  /** Never retry (recipient or message can never succeed). */
+  permanent: boolean;
+  /** The NUMBER cannot receive WhatsApp — recorded on the contact. */
+  undeliverable: boolean;
+  /** Our side is down (VPS / agent / Meta) — not the recipient's attempt. */
+  channelDown: boolean;
+}
 
-  if (ctx.kind === 'lead' && segment?.statuses?.length && !segment.statuses.includes(String(e.status || ''))) {
-    return 'status-mismatch';
-  }
-  const wantTags: string[] = segment?.tags?.length ? segment.tags : (segment?.tag ? [segment.tag] : []);
-  if (wantTags.length) {
-    const has = waContactTags(e);
-    const ok = segment.tagMatch === 'all' ? wantTags.every((t) => has.includes(t)) : wantTags.some((t) => has.includes(t));
-    if (!ok) return 'tag-mismatch';
-  }
-  const wantCategories: string[] = (segment?.categories || []).filter(Boolean);
-  if (wantCategories.length) {
-    const cat = waContactCategory(e) || ctx.categoryByContactId?.get(String(e.id)) || '';
-    if (!waCategoryMatches(cat, wantCategories)) return 'category-mismatch';
-  }
-  if (segment?.assignedToUserId && e.assignedToUserId !== segment.assignedToUserId) return 'assignee-mismatch';
-  if (segment?.source && String(e.source || '') !== segment.source) return 'source-mismatch';
-  if (segment?.hasDomain) {
-    if (ctx.kind === 'lead') return 'domain-mismatch';
-    if (ctx.domainCustomerIds && !ctx.domainCustomerIds.has(String(e.id))) return 'domain-mismatch';
-  }
-  if (ctx.sentPhones?.has(phone)) return 'already-sent';
-
-  if (conditions?.requireNotes && !waSummarizeNotes(e.notes)) return 'no-notes';
-
-  const hasDormancyRule =
-    conditions?.lastContactMinDays != null || conditions?.lastContactMaxDays != null || !!conditions?.requireContacted;
-  if (hasDormancyRule) {
-    const age = waDaysSince(waResolveLastContactAt(e, ctx.lastMessageByPhone?.get(phone) || null), ctx.now);
-    if (age == null) {
-      // Never contacted = maximally dormant, so a min-days rule passes. An
-      // explicit requireContacted, or a window CEILING (a statement about a real
-      // past contact), excludes them.
-      if (conditions.requireContacted) return 'never-contacted';
-      if (conditions.lastContactMaxDays != null) return 'never-contacted';
-    } else {
-      if (conditions.lastContactMinDays != null && age < conditions.lastContactMinDays) return 'contacted-too-recently';
-      if (conditions.lastContactMaxDays != null && age > conditions.lastContactMaxDays) return 'contact-too-old';
-    }
-  }
-
-  if (variants?.length && !waPickVariant(e, variants)) return 'no-variant';
-  return null;
+function waOutcome(r: { ok: boolean; id: string | null; status?: number; code?: number | null; error?: string }): WaSendOutcome {
+  if (r.ok) return { ok: true, id: r.id, permanent: false, undeliverable: false, channelDown: false };
+  const err = { status: r.status, code: r.code, error: r.error };
+  return {
+    ok: false, id: r.id, error: r.error || 'Dërgimi dështoi',
+    permanent: isPermanentWaError(err),
+    undeliverable: isUndeliverableNumberError(err),
+    channelDown: isChannelWaError(err),
+  };
 }
 
 /**
- * Phones contacted since `since`, newest date per phone.
+ * One approved Meta template + its `whatsappMessages` row. The row's doc id IS the
+ * wamid (`create`, falling back to a merge that keeps a status the webhook already
+ * wrote): Meta's status callbacks update `doc(wamid)`, so a random `.add()` id meant
+ * delivered/read/FAILED never reached cron rows and Meta errors were lost.
+ */
+async function sendAutomatedMetaTemplate(o: {
+  channel: any; phone: string; tpl: any; params: string[];
+  teamId: string; businessId: string | null; kind: WaAutomationKind;
+  contactName?: string | null; leadId?: string | null; customerId?: string | null;
+  invoiceId?: string | null; broadcastId?: string | null; ruleId?: string | null;
+}): Promise<WaSendOutcome> {
+  const r = await sendMetaTemplate(o.channel, o.phone, o.tpl, o.params);
+  const display = String(o.tpl?.body || o.tpl?.metaTemplateName || '')
+    .replace(/\{\{(\d+)\}\}/g, (_m: string, n: string) => o.params[Number(n) - 1] || `{{${n}}}`);
+  const now = admin.firestore.Timestamp.now();
+  const row: Record<string, any> = {
+    phone: o.phone,
+    jid: `${o.phone}@s.whatsapp.net`,
+    direction: 'outbound',
+    message: display,
+    // `leadId` only for a LEAD — it used to carry the invoice id.
+    leadId: o.leadId ?? null,
+    customerId: o.customerId ?? null,
+    invoiceId: o.invoiceId ?? null,
+    leadName: o.contactName || null,
+    teamId: o.teamId,
+    businessId: o.businessId ?? null,
+    channel: 'meta',
+    channelPhone: o.channel?.phone || null,
+    metaPhoneNumberId: o.channel?.phoneNumberId || null,
+    isTemplate: true,
+    templateName: o.tpl?.metaTemplateName || null,
+    ...(o.broadcastId ? { broadcastId: o.broadcastId } : {}),
+    ...(o.ruleId ? { ruleId: o.ruleId } : {}),
+    waMessageId: r.id,
+    automated: true,
+    automationKind: o.kind,
+    source: 'cron',
+    createdAt: now,
+    updatedAt: now,
+  };
+  try {
+    if (r.ok && r.id) {
+      const ref = db.collection('whatsappMessages').doc(r.id);
+      try {
+        await ref.create({ ...row, status: 'sent' });
+      } catch (e) {
+        if (!isAlreadyExists(e)) throw e;
+        // The status webhook beat us to the row: keep ITS status.
+        await ref.set(row, { merge: true });
+      }
+    } else {
+      await db.collection('whatsappMessages').add({ ...row, status: 'failed', error: r.error || null, errorCode: r.code ?? null });
+    }
+  } catch (e) {
+    console.error('[wa-meta] outbound row write failed', (e as Error)?.message || e);
+  }
+  return waOutcome(r);
+}
+
+/** One Baileys text through the VPS. The VPS writes the row (with the labels below). */
+async function sendAutomatedBaileys(o: {
+  relay: WaRelay; agent: WaAgentRef; phone: string; text: string; kind: WaAutomationKind;
+  idempotencyKey: string; businessId: string | null;
+  contactName?: string | null; leadId?: string | null; customerId?: string | null;
+  invoiceId?: string | null; broadcastId?: string | null;
+}): Promise<WaSendOutcome> {
+  const r = await sendBaileysText(o.relay.vpsUrl, o.relay.vpsSecret, o.agent.id, o.phone, o.text, {
+    teamId: o.agent.teamId,
+    leadId: o.leadId ?? null,
+    leadName: o.contactName || null,
+    automated: true,
+    automationKind: o.kind,
+    source: 'cron',
+    idempotencyKey: o.idempotencyKey,
+    customerId: o.customerId ?? null,
+    businessId: o.businessId ?? null,
+    invoiceId: o.invoiceId ?? null,
+    broadcastId: o.broadcastId ?? null,
+  });
+  return waOutcome(r);
+}
+
+/**
+ * Failed automated sends, aggregated: ONE `whatsapp_send_failed` notification per
+ * job run per business to its managers (count + the first errors), never one per
+ * message — and at most once per 6h per business per job (`claimWindow`), so a
+ * VPS that is down all night pages nobody every tick.
+ */
+function makeWaFailureReporter(job: string, label: string) {
+  const byBusiness = new Map<string, { teamId: string | null; count: number; samples: string[] }>();
+  return {
+    add(businessId: string | null | undefined, teamId: string | null | undefined, who: string, error: string | undefined) {
+      if (!businessId) return;
+      let e = byBusiness.get(businessId);
+      if (!e) { e = { teamId: teamId || null, count: 0, samples: [] }; byBusiness.set(businessId, e); }
+      e.count++;
+      if (e.samples.length < 3) e.samples.push(`${who}: ${String(error || 'gabim').slice(0, 120)}`);
+    },
+    get total(): number {
+      let n = 0;
+      for (const e of byBusiness.values()) n += e.count;
+      return n;
+    },
+    async flush(): Promise<number> {
+      let notified = 0;
+      for (const [businessId, e] of byBusiness) {
+        try {
+          if (!(await claimWindow(`wa-send-failed_${job}_${businessId}`, 6 * 3_600_000))) continue;
+          const recipients = await managerIdsForBusiness(businessId, e.teamId);
+          const results = await Promise.allSettled(recipients.map((userId) => notifyUser({
+            userId,
+            type: 'whatsapp_send_failed',
+            title: `⚠️ ${e.count} mesazh${e.count === 1 ? '' : 'e'} WhatsApp automatik${e.count === 1 ? '' : 'e'} dështuan`,
+            message: `${label}: ${e.samples.join(' · ')}${e.count > e.samples.length ? ` · +${e.count - e.samples.length} të tjerë` : ''}`,
+            actionUrl: '/app/settings',
+            actionLabel: 'Kontrollo WhatsApp',
+            businessId,
+            teamId: e.teamId,
+          })));
+          notified += results.filter((r) => r.status === 'fulfilled').length;
+        } catch (err) {
+          console.error(`[${job}] failure notification failed`, (err as Error)?.message || err);
+        }
+      }
+      return notified;
+    },
+  };
+}
+
+/**
+ * The automated touch on the CONTACT's timeline (a message the user cannot see in
+ * the history looks like it never happened). Leads → `leadActivities`; customers
+ * → `activities` (the customer timeline). Never fails the send.
+ */
+async function logAutomatedWaTouch(o: {
+  kind: 'lead' | 'customer'; id: string; teamId: string | null; businessId: string | null;
+  title: string; body: string; automationKind: WaAutomationKind;
+}): Promise<void> {
+  const now = admin.firestore.Timestamp.now();
+  try {
+    if (o.kind === 'lead') {
+      await db.collection('leadActivities').add({
+        leadId: o.id, teamId: o.teamId, businessId: o.businessId, type: 'whatsapp',
+        title: o.title, body: o.body, userId: null, userName: 'Sistemi',
+        automated: true, automationKind: o.automationKind, createdAt: now,
+      });
+    } else {
+      await db.collection('activities').add({
+        type: 'note', title: o.title, description: o.body,
+        entityType: 'customer', entityId: o.id, customerId: o.id,
+        teamId: o.teamId, businessId: o.businessId, userId: null, userName: 'Sistemi',
+        automated: true, meta: { channel: 'whatsapp', automationKind: o.automationKind },
+        createdAt: now,
+      });
+    }
+  } catch (e) {
+    console.warn('[wa-timeline] write failed', (e as Error)?.message || e);
+  }
+}
+
+/**
+ * A permanent NUMBER failure, recorded on the contact as the number it failed for
+ * (`waUndeliverablePhone`): every automated sender then blocks it as
+ * `undeliverable` until someone edits the phone. Never fails the caller.
+ */
+async function markWaUndeliverable(kind: 'lead' | 'customer', id: string, phone: string, error: string | undefined): Promise<void> {
+  if (!id || !phone) return;
+  try {
+    await db.collection(kind === 'lead' ? 'leads' : 'customers').doc(id).update({
+      waUndeliverablePhone: phone,
+      waUndeliverableAt: admin.firestore.Timestamp.now(),
+      waUndeliverableError: String(error || '').slice(0, 300) || null,
+    });
+  } catch (e) {
+    console.warn('[wa-undeliverable] stamp failed', (e as Error)?.message || e);
+  }
+}
+
+/**
+ * Phones contacted since `since`, newest date per phone (normalised with the ONE
+ * phone rule on both sides).
  *
  * This is the inverse of the dormancy question, and it's why the condition is
  * cheap: we do NOT read every message ever sent, only the ones inside the
  * window — anyone absent from the result has not been contacted in it. Uses the
- * existing (teamId, createdAt DESC) index.
+ * existing (teamId, createdAt DESC) index, once per team: the campaign's team AND
+ * the sending agent's team (a number on another department writes its rows there).
  */
-async function recentWaContactsByPhone(teamId: string, since: Date): Promise<Map<string, Date>> {
+async function recentWaContactsByPhone(teamIds: Array<string | null | undefined>, since: Date): Promise<Map<string, Date>> {
   const MAX = 5000;
   const map = new Map<string, Date>();
-  if (!teamId) return map;
-  const snap = await db.collection('whatsappMessages')
-    .where('teamId', '==', teamId)
-    .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(since))
-    .orderBy('createdAt', 'desc')
-    .limit(MAX)
-    .get();
-  for (const d of snap.docs) {
-    const m = d.data() as any;
-    const phone = normalizeWaPhone(m.phone);
-    if (!phone) continue;
-    const at = waToDate(m.createdAt);
-    if (!at) continue;
-    const prev = map.get(phone);
-    if (!prev || at.getTime() > prev.getTime()) map.set(phone, at);
-  }
-  if (snap.size >= MAX) {
-    // Truncated → some recent contacts are missing from the exclusion set, so a
-    // few people could be messaged sooner than the rule intends. Loud, not silent.
-    console.warn(`[cron:wa] recent-contact lookup TRUNCATED at ${MAX} for team ${teamId} — dormancy may under-exclude`);
+  for (const teamId of [...new Set(teamIds.filter((t): t is string => !!t))]) {
+    const snap = await db.collection('whatsappMessages')
+      .where('teamId', '==', teamId)
+      .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(since))
+      .orderBy('createdAt', 'desc')
+      .limit(MAX)
+      .get();
+    for (const d of snap.docs) {
+      const m = d.data() as any;
+      const phone = toWaPhone(m.phone);
+      if (!phone) continue;
+      const at = waToDate(m.createdAt);
+      if (!at) continue;
+      const prev = map.get(phone);
+      if (!prev || at.getTime() > prev.getTime()) map.set(phone, at);
+    }
+    if (snap.size >= MAX) {
+      // Truncated → some recent contacts are missing from the exclusion set, so a
+      // few people could be messaged sooner than the rule intends. Loud, not silent.
+      console.warn(`[cron:wa] recent-contact lookup TRUNCATED at ${MAX} for team ${teamId} — dormancy may under-exclude`);
+    }
   }
   return map;
 }
-
-// ── JOB: whatsapp-broadcasts ─────────────────────────────────────────────────
-// Template-only bulk sends via Meta Cloud API.  Idempotent & resumable: each
-// send is logged to whatsappMessages tagged with broadcastId; already-sent
-// phones are skipped, so re-runs continue where they left off.  Processes up to
-// PER_RUN targets per broadcast per invocation (function-timeout safety).
-function normalizeWaPhone(p: string): string {
-  return (p || '').replace(/\D/g, '');
-}
-
-async function sendMetaBroadcastMessage(
-  channel: any,
-  phone: string,
-  tpl: any,
-  params: string[],
-  teamId: string,
-  broadcastId: string | null,
-  lead: { id: string; name?: string }
-): Promise<void> {
-  const components = params.length
-    ? [{ type: 'body', parameters: params.map((p) => ({ type: 'text', text: p && p.trim() ? p : '-' })) }]
-    : [];
-  const payload = {
-    messaging_product: 'whatsapp',
-    to: phone,
-    type: 'template',
-    template: {
-      name: tpl.metaTemplateName,
-      language: { code: tpl.language || 'sq' },
-      ...(components.length ? { components } : {}),
-    },
-  };
-  const resp = await fetch(`https://graph.facebook.com/v21.0/${channel.phoneNumberId}/messages`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${channel.accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  const data: any = await resp.json().catch(() => ({}));
-  const waMessageId = data?.messages?.[0]?.id || null;
-  const ok = resp.ok && !!waMessageId;
-  // Render a display body by filling {{n}} placeholders for the inbox.
-  const display = (tpl.body || tpl.metaTemplateName || '').replace(/\{\{(\d+)\}\}/g, (_m: string, n: string) => params[Number(n) - 1] || `{{${n}}}`);
-  await db.collection('whatsappMessages').add({
-    phone,
-    jid: `${phone}@s.whatsapp.net`,
-    direction: 'outbound',
-    message: display,
-    leadId: lead.id,
-    leadName: lead.name || null,
-    teamId,
-    status: ok ? 'sent' : 'failed',
-    channel: 'meta',
-    channelPhone: channel.phone || null,
-    metaPhoneNumberId: channel.phoneNumberId,
-    isTemplate: true,
-    templateName: tpl.metaTemplateName,
-    ...(broadcastId ? { broadcastId } : {}),
-    waMessageId,
-    createdAt: admin.firestore.Timestamp.now(),
-    updatedAt: admin.firestore.Timestamp.now(),
-  });
-  if (!ok) {
-    throw new Error(`Meta send failed for ${phone}: ${data?.error?.message || resp.status}`);
-  }
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Render a template body's {{n}} placeholders with the given params (free text,
 // used for Baileys which has no template concept).
@@ -4384,34 +4610,52 @@ function renderTemplateBody(body: string, params: string[]): string {
   return (body || '').replace(/\{\{(\d+)\}\}/g, (_m, n: string) => params[Number(n) - 1] || '');
 }
 
-// Send one Baileys broadcast message via the team's VPS /send endpoint.  The
-// VPS writes its own whatsappMessages doc (channel:'baileys'), so we don't.
-// Returns true on success. The transport lives in api/_waSend.ts (shared with
-// the inbound handler's auto-reply); a campaign is deliberately NOT an
-// `isAutoReply` and never calls markConversationAnswered — it is not an answer.
-async function sendBaileysBroadcastMessage(
-  vpsUrl: string,
-  vpsSecret: string,
-  agentId: string,
-  phone: string,
-  message: string,
-  teamId: string,
-  lead: { id: string; name?: string }
-): Promise<boolean> {
-  const r = await sendBaileysText(vpsUrl, vpsSecret, agentId, phone, message, { teamId, leadId: lead.id, leadName: lead.name || null });
-  if (!r.ok) console.error('[broadcast-baileys] send failed', r.error);
-  return r.ok;
+/**
+ * A `waTemplates` reminder (lead auto-reminder, follow-up) through WHICHEVER
+ * channel the tenant has — same rule as the invoice reminders: Meta (the approved
+ * template) when `metaEnabled` + a channel is configured, otherwise Baileys (the
+ * template's body rendered as free text) through the shared agent resolver. Both
+ * jobs used to require `metaEnabled`, so a Baileys-only tenant never sent.
+ * Returns a send outcome, or the named reason nothing was sent.
+ */
+async function sendTemplateReminderAnyChannel(o: {
+  settings: any; tpl: any; channelPhoneNumberId?: string | null; params: string[];
+  phone: string; teamId: string; businessId: string | null; kind: WaAutomationKind;
+  contactName?: string | null; leadId?: string | null; customerId?: string | null;
+  idempotencyKey: string;
+  resolver: ReturnType<typeof makeWaAgentResolver>;
+}): Promise<WaSendOutcome | { blocked: 'no-channel' | 'channel-down' | 'no-template' }> {
+  if (o.settings?.metaEnabled) {
+    const channels: any[] = o.settings.metaChannels || [];
+    const channel = channels.find((ch) => ch.phoneNumberId === o.channelPhoneNumberId) || channels[0];
+    if (channel?.accessToken && channel?.phoneNumberId) {
+      return sendAutomatedMetaTemplate({
+        channel, phone: o.phone, tpl: o.tpl, params: o.params, teamId: o.teamId, businessId: o.businessId,
+        kind: o.kind, contactName: o.contactName, leadId: o.leadId, customerId: o.customerId,
+      });
+    }
+  }
+  const agent = await o.resolver.resolve(o.businessId, o.teamId, null);
+  if (!agent) return { blocked: 'no-channel' };
+  const relay = await o.resolver.relayFor(o.teamId, agent.teamId);
+  if (!relay.vpsUrl || !relay.vpsSecret) return { blocked: 'no-channel' };
+  if (!agent.connected) return { blocked: 'channel-down' };
+  const text = renderTemplateBody(o.tpl?.body || '', o.params).trim();
+  if (!text) return { blocked: 'no-template' };
+  return sendAutomatedBaileys({
+    relay, agent, phone: o.phone, text, kind: o.kind, idempotencyKey: o.idempotencyKey,
+    businessId: o.businessId, contactName: o.contactName, leadId: o.leadId, customerId: o.customerId,
+  });
 }
 
 /**
- * Positional params for a Meta template.
+ * Positional params for a Meta template (contacts: leads/customers).
  *
  * Meta only delivers APPROVED templates outside the 24h window, so variant free
  * text can't be sent there. What we can do is feed the same personalization
  * through the template's own placeholders: alongside real contact fields,
- * `paramFields` now understands the pseudo-fields `firstName`, `notes` (the
- * summarized clause), `service` and `link` (the UTM-tagged landing page). So an
- * approved "Përshëndetje {{1}}, për {{2}} shiko {{3}}" carries the whole idea.
+ * `paramFields` understands the pseudo-fields `firstName`, `notes` (the
+ * summarized clause), `service` and `link` (the UTM-tagged landing page).
  */
 function waTemplateParams(tpl: any, t: any, ctx: { link?: string; service?: string }): string[] {
   return (tpl.paramFields || []).map((f: string) => {
@@ -4426,6 +4670,8 @@ function waTemplateParams(tpl: any, t: any, ctx: { link?: string; service?: stri
   });
 }
 
+type WaCampaignTarget = { contact: any; phone: string; message: string; link: string; service: string; kind: 'lead' | 'customer' };
+
 /**
  * Resolve a campaign's segment to the messages that would go out, and account
  * for everyone excluded. Shared by the one-shot job and the evergreen one — the
@@ -4434,12 +4680,14 @@ function waTemplateParams(tpl: any, t: any, ctx: { link?: string; service?: stri
 async function resolveWaCampaignTargets(
   b: any,
   now: Date,
-  opts: { skipSentPhones: boolean },
-): Promise<{
-  targets: Array<{ contact: any; phone: string; message: string; link: string; service: string; kind: 'lead' | 'customer' }>;
-  blocked: Record<string, number>;
-  considered: number;
-}> {
+  opts: {
+    skipSentPhones: boolean;
+    failedPhones?: Map<string, WaFailedPhone>;
+    inFlightPhones?: Set<string>;
+    /** The sending agent's team — its rows count as contact too. */
+    agentTeamId?: string | null;
+  },
+): Promise<{ targets: WaCampaignTarget[]; blocked: Record<string, number>; considered: number }> {
   const seg = b.segment || {};
   const conditions = b.conditions || {};
   const variants: any[] = Array.isArray(b.variants) ? b.variants : [];
@@ -4457,18 +4705,16 @@ async function resolveWaCampaignTargets(
     conditions.requireContacted ? 1 : 0,
   );
   const lastMessageByPhone = windowDays > 0
-    ? await recentWaContactsByPhone(b.teamId, new Date(now.getTime() - windowDays * WA_MS_PER_DAY))
+    ? await recentWaContactsByPhone([b.teamId, opts.agentTeamId], new Date(now.getTime() - windowDays * WA_MS_PER_DAY))
     : undefined;
 
   const sentPhones = opts.skipSentPhones
-    ? new Set<string>((b.sentPhones || []).map((p: string) => normalizeWaPhone(p)))
+    ? new Set<string>((b.sentPhones || []).map((p: string) => toWaPhone(p)).filter(Boolean))
     : undefined;
 
   const blocked: Record<string, number> = {};
   const bump = (r: string) => { blocked[r] = (blocked[r] || 0) + 1; };
-  const byPhone = new Map<string, {
-    contact: any; phone: string; message: string; link: string; service: string; kind: 'lead' | 'customer';
-  }>();
+  const byPhone = new Map<string, WaCampaignTarget>();
   let considered = 0;
 
   // A link depends only on the variant — build each one once, not per contact.
@@ -4482,8 +4728,7 @@ async function resolveWaCampaignTargets(
 
   // The audience is materialised BEFORE the loop because the category filter is
   // cross-record: the category lives on the LEAD, and a customer is filtered by
-  // the category of the lead it was converted from. Leads are therefore loaded
-  // for a customers-only audience too — but only when that filter is actually on.
+  // the category of the lead it was converted from.
   const wantCategories: string[] = (seg.categories || []).filter(Boolean);
   const needLeadDocs = audience.includes('leads') || (wantCategories.length > 0 && audience.includes('customers'));
   const leadDocs = needLeadDocs ? await tenantScopedDocs('leads', audienceScope) : [];
@@ -4491,30 +4736,22 @@ async function resolveWaCampaignTargets(
     ? await tenantScopedDocs('customers', audienceScope)
     : [];
 
-  // contactId → category (mirror of buildCategoryIndex in src/lib/marketing/waAutomation.ts)
-  let categoryByContactId: Map<string, string> | undefined;
-  if (wantCategories.length) {
-    categoryByContactId = new Map<string, string>();
-    for (const { id, data } of leadDocs) {
-      const cat = waContactCategory(data);
-      if (!cat) continue;
-      categoryByContactId.set(String(id), cat);
-      if ((data as any).customerId) categoryByContactId.set(String((data as any).customerId), cat);
-    }
-    for (const { id, data } of customerDocs) {
-      if (waContactCategory(data)) { categoryByContactId.set(String(id), waContactCategory(data)); continue; }
-      const leadId = (data as any).leadId;
-      const fromLead = leadId ? categoryByContactId.get(String(leadId)) : undefined;
-      if (fromLead) categoryByContactId.set(String(id), fromLead);
-    }
-  }
+  const categoryByContactId: Map<string, string> | undefined = wantCategories.length
+    ? waBuildCategoryIndex(
+      leadDocs.map(({ id, data }) => ({ ...(data as any), id })),
+      customerDocs.map(({ id, data }) => ({ ...(data as any), id })),
+    )
+    : undefined;
 
   const consider = (raw: any, id: string, kind: 'lead' | 'customer') => {
     considered++;
     const e = { ...raw, id };
-    const reason = waBlockReason(e, seg, conditions, { now, kind, lastMessageByPhone, sentPhones, domainCustomerIds, categoryByContactId }, variants);
+    const reason = waSendBlockReason(e, seg, conditions, {
+      now, kind, lastMessageByPhone, sentPhones, domainCustomerIds, categoryByContactId,
+      failedPhones: opts.failedPhones, inFlightPhones: opts.inFlightPhones,
+    }, variants);
     if (reason) { bump(reason); return; }
-    const phone = normalizeWaPhone(e.phone || e.phoneNumber);
+    const phone = toWaPhone(e.phone || e.phoneNumber);
     if (byPhone.has(phone)) return;   // same person as lead AND customer → one chat
     const variant = waPickVariant(e, variants);
     const service = waVariantServiceLabel(e, variant);
@@ -4536,81 +4773,86 @@ async function resolveWaCampaignTargets(
   return { targets: Array.from(byPhone.values()), blocked, considered };
 }
 
-const PER_RUN_META = 200;     // Meta: high throughput, parallel, safe
+const PER_RUN_META = 200;     // Meta: high throughput, chunked-parallel
+const META_CHUNK = 10;        // Meta sends in flight at once (one doc write per chunk)
 const PER_RUN_BAILEYS = 8;    // Baileys: tiny batch + paced to limit ban risk
 
 /**
- * Record the touch on the LEAD after a campaign message lands.
+ * The touch on the CONTACT after a campaign message lands.
  *
- * Two reasons, and the second one is a bug fix:
- *
- *  1. The CRM timeline should show that we reached out — a message the user can't
- *     see in the lead's history looks like it never happened.
- *  2. `lead-wa-auto-reminders` (the team-wide stale-lead reminder) decides from
- *     `lastActivityAt`/`lastFollowUpDate` ALONE — it never looks at
- *     `whatsappMessages`. Without this stamp, a campaign could message a lead and
- *     that job would message them AGAIN days later, both believing the lead had
- *     gone quiet. Stamping the same fields it reads (plus its own
- *     `waAutoReminderAt` debounce) makes the two suppress each other.
+ *  1. The CRM timeline shows that we reached out (leadActivities / activities).
+ *  2. `lead-wa-auto-reminders` decides from `lastActivityAt`/`lastFollowUpDate`
+ *     ALONE — it never looks at `whatsappMessages`. Without this stamp a campaign
+ *     could message a lead and that job would message them AGAIN days later.
+ *     Stamping the fields it reads (plus its `waAutoReminderAt` debounce) makes
+ *     the two suppress each other. Customers get `lastActivityAt` (the dormancy
+ *     signal) for the same reason.
  *
  * Never allowed to fail the send — the message is already delivered by now.
  */
-async function stampWaCampaignTouch(
-  targets: Array<{ contact: any; kind: 'lead' | 'customer' }>,
-  sentPhones: Set<string>,
-  campaignName: string,
-  teamId: string,
-): Promise<void> {
+async function stampWaCampaignTouch(t: WaCampaignTarget, b: any, kind: WaAutomationKind): Promise<void> {
   const now = admin.firestore.Timestamp.now();
-  const ops: Promise<any>[] = [];
-  // The timeline row must carry `businessId` (the leadActivities read rule keys
-  // on it). Prefer the lead's own; fall back to the team's, read once per call.
-  let teamBusinessId: string | null | undefined;
-  const businessIdFor = async (contact: any): Promise<string | null> => {
-    if (contact?.businessId) return String(contact.businessId);
-    if (teamBusinessId === undefined) {
-      try {
-        const t = await db.collection('teams').doc(teamId).get();
-        teamBusinessId = t.exists ? ((t.data() as any)?.businessId ?? null) : null;
-      } catch { teamBusinessId = null; }
-    }
-    return teamBusinessId ?? null;
-  };
-  for (const t of targets) {
-    if (t.kind !== 'lead' || !sentPhones.has(normalizeWaPhone(t.contact.phone || t.contact.phoneNumber))) continue;
-    const businessId = await businessIdFor(t.contact);
-    ops.push(db.collection('leads').doc(t.contact.id).update({
-      lastActivityAt: now,
-      lastFollowUpDate: now,
-      waAutoReminderAt: now,   // shares the older job's debounce
-      updatedAt: now,
-    }).catch(() => {}));
-    ops.push(db.collection('leadActivities').add({
-      leadId: t.contact.id,
-      teamId,
-      businessId,
-      type: 'whatsapp',
-      title: 'WhatsApp automatik (fushatë)',
-      body: `Fushata “${campaignName}”.`,
-      userId: null,
-      userName: 'Sistemi',
-      createdAt: now,
-    }).catch(() => {}));
-  }
-  await Promise.allSettled(ops);
+  const businessId: string | null = t.contact.businessId || b.businessId || null;
+  await Promise.allSettled([
+    db.collection(t.kind === 'lead' ? 'leads' : 'customers').doc(t.contact.id).update(
+      t.kind === 'lead'
+        ? { lastActivityAt: now, lastFollowUpDate: now, waAutoReminderAt: now, updatedAt: now }
+        : { lastActivityAt: now, updatedAt: now },
+    ),
+    logAutomatedWaTouch({
+      kind: t.kind, id: t.contact.id, teamId: b.teamId || null, businessId,
+      title: kind === 'automation' ? 'WhatsApp automatik (rregull)' : 'WhatsApp automatik (fushatë)',
+      body: `${kind === 'automation' ? 'Rregulli' : 'Fushata'} “${b.name || 'pa emër'}”.`,
+      automationKind: kind,
+    }),
+  ]);
+}
+
+interface WaBatchResult {
+  total: number;
+  succeeded: string[];
+  /** Phones that failed in THIS run (each one attempt). */
+  failed: number;
+  /** …of which reached a final state (permanent / retries exhausted). */
+  finalFailedNow: number;
+  /** Targets still owed a send after this run. */
+  remaining: number;
+  /** Phones recovered from a died run's in-flight claims as already SENT. */
+  recoveredSent: string[];
+  blocked: Record<string, number>;
+  considered: number;
+  /** The ledger after this run (for counts on the doc). */
+  failedPhones: Map<string, WaFailedPhone>;
+  inFlightLeft: number;
 }
 
 /**
  * Send one campaign's next batch. Returns what happened; the CALLER decides what
  * that means for the doc (a one-shot completes, an evergreen rule never does).
- * Throws on a misconfiguration the caller should record as `failed`.
+ * Throws on a misconfiguration the caller should record as `failed`/`paused`.
+ *
+ * Per-phone safety (one-shot AND evergreen):
+ *  - every phone of the batch is CLAIMED (`inFlightPhones.<phone>`) before any
+ *    send, and released right after its own outcome is recorded;
+ *  - a success is written (`sentPhones` arrayUnion for one-shots) immediately —
+ *    per message for Baileys, per chunk of ≤10 for Meta — never after the batch,
+ *    so a run killed mid-batch cannot re-send what already went out;
+ *  - a claim older than 15 min (a run that died) is resolved against
+ *    `whatsappMessages` (broadcastId + phone): a row that is not `failed` = sent,
+ *    otherwise one failed attempt ('interrupted');
+ *  - failures go to `failedPhones.<phone>` {count, permanent, error, at}: a
+ *    permanent one is never retried, a transient one at most 3 times;
+ *  - a CHANNEL failure (VPS/agent/Meta down) stops the batch, releases the claims
+ *    and counts NO attempt — the recipients did nothing wrong.
  */
 async function sendWaCampaignBatch(
   bDoc: admin.firestore.QueryDocumentSnapshot,
   b: any,
   now: Date,
-  opts: { skipSentPhones: boolean },
-): Promise<{ total: number; succeeded: string[]; blocked: Record<string, number>; considered: number }> {
+  opts: { oneShot: boolean; kind: WaAutomationKind },
+  resolver: ReturnType<typeof makeWaAgentResolver>,
+  failures: ReturnType<typeof makeWaFailureReporter>,
+): Promise<WaBatchResult> {
   const tplDoc = b.templateId ? await db.collection('waTemplates').doc(b.templateId).get() : null;
   const tpl = tplDoc?.exists ? (tplDoc.data() as any) : null;
   const variants: any[] = Array.isArray(b.variants) ? b.variants : [];
@@ -4625,75 +4867,234 @@ async function sendWaCampaignBatch(
     throw new Error('Kanali Meta kërkon një template të aprovuar (variantet me tekst të lirë punojnë vetëm me Baileys)');
   }
 
-  const settings = await getTeamConfig(b.teamId);
   let metaChannel: any = null;
-  let vpsUrl = '';
-  let vpsSecret = '';
+  let agent: WaAgentRef | null = null;
+  let relay: WaRelay = { vpsUrl: '', vpsSecret: '' };
   if (useBaileys) {
-    vpsUrl = settings.whatsappVpsUrl || '';
-    vpsSecret = settings.whatsappVpsSecret || '';
-    if (!vpsUrl || !vpsSecret || !b.agentId) throw new Error('Konfigurimi i Baileys/VPS mungon');
+    // Same resolver as the invoice reminders: the number may live on another
+    // department of the SAME business; the send carries the agent's own teamId.
+    agent = await resolver.resolve(b.businessId, b.teamId, b.agentId);
+    if (!agent) throw new Error('Asnjë numër WhatsApp (Baileys) i konfiguruar për këtë biznes');
+    relay = await resolver.relayFor(b.teamId, agent.teamId);
+    if (!relay.vpsUrl || !relay.vpsSecret) throw new Error('Konfigurimi i Baileys/VPS mungon');
   } else {
+    const settings = await getTeamConfig(b.teamId);
     const channels: any[] = settings.metaChannels || [];
     metaChannel = channels.find((c) => c.phoneNumberId === b.channelPhoneNumberId) || channels[0];
     if (!metaChannel?.accessToken || !metaChannel?.phoneNumberId) throw new Error('Kanali Meta mungon');
   }
 
-  const { targets, blocked, considered } = await resolveWaCampaignTargets(b, now, opts);
+  const nowMs = now.getTime();
+  const failedPhones = waReadFailedPhones(b.failedPhones);
+  const { fresh: inFlight, stale } = waSplitInFlight(b.inFlightPhones, nowMs);
+  const recoveredSent: string[] = [];
+
+  // A run that died mid-send left claims behind: resolve each one honestly.
+  if (stale.length) {
+    const patch: Record<string, any> = { updatedAt: admin.firestore.Timestamp.now() };
+    for (const phone of stale) {
+      let sent = false;
+      try {
+        const rows = await db.collection('whatsappMessages')
+          .where('broadcastId', '==', bDoc.id).where('phone', '==', phone).limit(5).get();
+        sent = rows.docs.some((d) => (d.data() as any).status !== 'failed');
+      } catch { /* unknown → counted as an attempt below */ }
+      patch[`inFlightPhones.${phone}`] = admin.firestore.FieldValue.delete();
+      if (sent) {
+        recoveredSent.push(phone);
+      } else {
+        const prev = failedPhones.get(phone);
+        const entry: WaFailedPhone = { count: (prev?.count || 0) + 1, permanent: false, error: 'interrupted', at: admin.firestore.Timestamp.now() };
+        failedPhones.set(phone, entry);
+        patch[`failedPhones.${phone}`] = entry;
+      }
+    }
+    if (recoveredSent.length && opts.oneShot) patch.sentPhones = admin.firestore.FieldValue.arrayUnion(...recoveredSent);
+    await bDoc.ref.update(patch);
+    if (opts.oneShot) b = { ...b, sentPhones: [...(b.sentPhones || []), ...recoveredSent] };
+  }
+
+  const { targets, blocked, considered } = await resolveWaCampaignTargets(b, now, {
+    skipSentPhones: opts.oneShot,
+    failedPhones,
+    inFlightPhones: inFlight,
+    agentTeamId: agent?.teamId || null,
+  });
   const total = targets.length;
+  const result: WaBatchResult = {
+    total, succeeded: [], failed: 0, finalFailedNow: 0, remaining: total, recoveredSent,
+    blocked, considered, failedPhones, inFlightLeft: inFlight.size,
+  };
+  if (!total) return result;
+
+  // The number is down → stop before claiming anything (nothing consumed).
+  if (agent && !agent.connected) {
+    blocked['channel-down'] = (blocked['channel-down'] || 0) + 1;
+    failures.add(b.businessId, b.teamId, b.name || 'Fushatë', 'Numri WhatsApp nuk është i lidhur');
+    return result;
+  }
 
   const cap = Number(b.conditions?.dailyCap) || 0;
   const perRun = Math.min(useBaileys ? PER_RUN_BAILEYS : PER_RUN_META, cap > 0 ? cap : Number.MAX_SAFE_INTEGER);
   const batch = targets.slice(0, perRun);
-  const succeeded: string[] = [];
+
+  // Claim BEFORE sending: a concurrent run (or the next one, if this dies) skips them.
+  const claimAt = admin.firestore.Timestamp.now();
+  const claim: Record<string, any> = { updatedAt: claimAt };
+  for (const t of batch) claim[`inFlightPhones.${t.phone}`] = claimAt;
+  await bDoc.ref.update(claim);
+
+  const dayKey = waLocalDayKey(nowMs);
+  const idemKey = (phone: string) => (opts.oneShot
+    ? waBroadcastIdempotencyKey(bDoc.id, phone)
+    : waAutomationIdempotencyKey(bDoc.id, phone, dayKey));
+
+  const sendOne = async (t: WaCampaignTarget): Promise<WaSendOutcome | null> => {
+    if (useBaileys) {
+      // A variant's rendered body wins; otherwise the legacy positional template.
+      const message = t.message || renderTemplateBody(tpl?.body || '', waTemplateParams(tpl || {}, t.contact, t));
+      if (!message.trim()) return null;
+      return sendAutomatedBaileys({
+        relay, agent: agent!, phone: t.phone, text: message, kind: opts.kind,
+        idempotencyKey: idemKey(t.phone), businessId: b.businessId || null,
+        contactName: t.contact.name || null,
+        leadId: t.kind === 'lead' ? t.contact.id : null,
+        customerId: t.kind === 'customer' ? t.contact.id : null,
+        broadcastId: bDoc.id,
+      });
+    }
+    return sendAutomatedMetaTemplate({
+      channel: metaChannel, phone: t.phone, tpl, params: waTemplateParams(tpl, t.contact, t),
+      teamId: b.teamId, businessId: b.businessId || null, kind: opts.kind,
+      contactName: t.contact.name || null,
+      leadId: t.kind === 'lead' ? t.contact.id : null,
+      customerId: t.kind === 'customer' ? t.contact.id : null,
+      broadcastId: bDoc.id,
+      ruleId: opts.oneShot ? null : bDoc.id,
+    });
+  };
+
+  // Outcome of one phone → its share of the doc patch (+ side effects, awaited before return).
+  let channelDown = false;
+  const sideEffects: Promise<unknown>[] = [];
+  const recordInto = (patch: Record<string, any>, sentNow: string[], t: WaCampaignTarget, out: WaSendOutcome | null) => {
+    patch[`inFlightPhones.${t.phone}`] = admin.firestore.FieldValue.delete();
+    if (out === null) { blocked['no-variant'] = (blocked['no-variant'] || 0) + 1; return; }
+    if (out.ok) {
+      sentNow.push(t.phone);
+      result.succeeded.push(t.phone);
+      if (failedPhones.has(t.phone)) { failedPhones.delete(t.phone); patch[`failedPhones.${t.phone}`] = admin.firestore.FieldValue.delete(); }
+      sideEffects.push(stampWaCampaignTouch(t, b, opts.kind));
+      return;
+    }
+    if (out.channelDown) {
+      // Our side, not theirs: no attempt counted; the batch stops after this.
+      channelDown = true;
+      return;
+    }
+    const prev = failedPhones.get(t.phone);
+    const entry: WaFailedPhone = { count: (prev?.count || 0) + 1, permanent: out.permanent, error: String(out.error || '').slice(0, 300), at: admin.firestore.Timestamp.now() };
+    failedPhones.set(t.phone, entry);
+    patch[`failedPhones.${t.phone}`] = entry;
+    result.failed++;
+    if (waFailureBlock(entry)) result.finalFailedNow++;
+    failures.add(b.businessId, b.teamId, `${b.name || 'Fushatë'} → ${t.contact.name || t.phone}`, out.error);
+    if (out.undeliverable) sideEffects.push(markWaUndeliverable(t.kind, t.contact.id, t.phone, out.error));
+  };
+  const flush = async (patch: Record<string, any>, sentNow: string[]) => {
+    if (opts.oneShot && sentNow.length) patch.sentPhones = admin.firestore.FieldValue.arrayUnion(...sentNow);
+    patch.updatedAt = admin.firestore.Timestamp.now();
+    await bDoc.ref.update(patch);
+  };
+  const releaseRest = async (rest: WaCampaignTarget[]) => {
+    if (!rest.length) return;
+    const patch: Record<string, any> = { updatedAt: admin.firestore.Timestamp.now() };
+    for (const t of rest) patch[`inFlightPhones.${t.phone}`] = admin.firestore.FieldValue.delete();
+    await bDoc.ref.update(patch).catch((e) => console.error('[wa-campaign] claim release failed', e));
+  };
 
   if (useBaileys) {
     // Sequential + randomized pacing to look human and respect the VPS
     // 30/min per-agent limit (reduces — does not eliminate — ban risk).
-    for (const t of batch) {
-      // A variant's rendered body wins; otherwise the legacy positional template.
-      const message = t.message
-        || renderTemplateBody(tpl?.body || '', waTemplateParams(tpl || {}, t.contact, t));
-      if (!message.trim()) { blocked['no-variant'] = (blocked['no-variant'] || 0) + 1; continue; }
-      const ok = await sendBaileysBroadcastMessage(
-        vpsUrl, vpsSecret, b.agentId, t.phone, message, b.teamId,
-        { id: t.contact.id, name: t.contact.name },
-      );
-      if (ok) succeeded.push(t.phone);
-      await sleep(1500 + Math.floor(Math.random() * 2500)); // 1.5–4s between sends
+    for (let i = 0; i < batch.length; i++) {
+      const t = batch[i];
+      const out = await sendOne(t);
+      const patch: Record<string, any> = {};
+      const sentNow: string[] = [];
+      recordInto(patch, sentNow, t, out);
+      await flush(patch, sentNow);   // per message: a kill now loses nothing
+      if (channelDown) { await releaseRest(batch.slice(i + 1)); break; }
+      if (i < batch.length - 1) await sleep(1500 + Math.floor(Math.random() * 2500)); // 1.5–4s between sends
     }
   } else {
-    const results = await Promise.allSettled(
-      batch.map((t) => sendMetaBroadcastMessage(
-        metaChannel, t.phone, tpl, waTemplateParams(tpl, t.contact, t), b.teamId, bDoc.id,
-        { id: t.contact.id, name: t.contact.name },
-      ).then(() => t.phone)),
-    );
-    for (const r of results) if (r.status === 'fulfilled') succeeded.push(r.value);
+    for (let i = 0; i < batch.length; i += META_CHUNK) {
+      const chunk = batch.slice(i, i + META_CHUNK);
+      const outs = await Promise.all(chunk.map((t) => sendOne(t).catch((e): WaSendOutcome => ({
+        ok: false, id: null, error: (e as Error)?.message || String(e), permanent: false, undeliverable: false, channelDown: true,
+      }))));
+      const patch: Record<string, any> = {};
+      const sentNow: string[] = [];
+      chunk.forEach((t, k) => recordInto(patch, sentNow, t, outs[k]));
+      await flush(patch, sentNow);
+      if (channelDown) { await releaseRest(batch.slice(i + META_CHUNK)); break; }
+    }
+  }
+  if (channelDown) {
+    blocked['channel-down'] = (blocked['channel-down'] || 0) + 1;
+    failures.add(b.businessId, b.teamId, b.name || 'Fushatë', 'Kanali WhatsApp nuk u përgjigj (VPS / Meta)');
   }
 
-  if (succeeded.length) {
-    await stampWaCampaignTouch(batch, new Set(succeeded), b.name || 'pa emër', b.teamId);
-  }
-
-  return { total, succeeded, blocked, considered };
+  await Promise.allSettled(sideEffects);
+  result.remaining = Math.max(0, total - result.succeeded.length - result.finalFailedNow);
+  return result;
 }
 
+/** Count of final failures (permanent + exhausted) in a ledger. */
+function waFinalFailureCounts(ledger: Map<string, WaFailedPhone>): { permanent: number; exhausted: number } {
+  let permanent = 0, exhausted = 0;
+  for (const f of ledger.values()) {
+    const r = waFailureBlock(f);
+    if (r === 'failed-permanent') permanent++;
+    else if (r === 'retries-exhausted') exhausted++;
+  }
+  return { permanent, exhausted };
+}
+
+// ── JOB: whatsapp-broadcasts ─────────────────────────────────────────────────
+// One-shot campaigns (Meta templates or Baileys variants). Idempotent &
+// resumable: `sentPhones` is the permanent exclusion list, written per message;
+// `failedPhones` keeps a failing head target from blocking everyone behind it
+// (permanent → never retried, transient → at most 3 attempts). A campaign
+// COMPLETES when every target is sent, failed permanently or out of retries.
+// Quiet hours 09:00–20:00 Europe/Tirane: outside them nothing is read or sent.
+//
 // `opts.businessId` = a manual run ("Nis tani" in Marketing) from one tenant: only
 // that tenant's campaigns are processed (applied in memory — the read is a
 // `status in`). A suspended tenant's campaigns wait; a campaign whose team does not
 // belong to its business is FAILED with `team-business-mismatch` instead of sent.
+// In run-all too, so it runs under a job lease.
 async function runWhatsappBroadcasts(opts?: { businessId?: string | null }) {
+  return withJobLease('whatsapp-broadcasts', opts?.businessId, 10 * 60_000, () => runWhatsappBroadcastsLeased(opts));
+}
+
+async function runWhatsappBroadcastsLeased(opts?: { businessId?: string | null }) {
   const scopeId = opts?.businessId || null;
   const now = new Date();
+  const quiet = waQuietHoursBlock(now.getTime());
+  if (quiet) return { skipped: quiet, processed: 0, sent: 0 };
+
   const snap = await db.collection('waBroadcasts')
     .where('status', 'in', ['queued', 'sending'])
     .get();
   const suspended = await loadSuspendedBusinessIds();
   const teamBelongsToBusiness = teamBusinessChecker();
+  const resolver = makeWaAgentResolver();
+  const failures = makeWaFailureReporter('whatsapp-broadcasts', 'Fushatat WhatsApp');
 
   let processed = 0;
   let sent = 0;
+  let failed = 0;
+  let completed = 0;
   let suspendedSkipped = 0;
   let outOfScope = 0;
   let mismatched = 0;
@@ -4713,21 +5114,25 @@ async function runWhatsappBroadcasts(opts?: { businessId?: string | null }) {
       // Respect scheduling.
       if (b.scheduledAt?.toDate && b.scheduledAt.toDate() > now) continue;
 
-      // One-shot: `sentPhones` is the permanent exclusion list, so a re-run
-      // resumes where it stopped instead of messaging anyone twice.
-      const alreadySent = new Set<string>((b.sentPhones || []).map((p: string) => normalizeWaPhone(p)));
-      const { total, succeeded, blocked } = await sendWaCampaignBatch(bDoc, b, now, { skipSentPhones: true });
-      sent += succeeded.length;
+      const alreadySent = new Set<string>((b.sentPhones || []).map((p: string) => toWaPhone(p)).filter(Boolean));
+      const r = await sendWaCampaignBatch(bDoc, b, now, { oneShot: true, kind: 'campaign' }, resolver, failures);
+      sent += r.succeeded.length;
+      failed += r.failed;
 
-      const newSentTotal = alreadySent.size + succeeded.length;
-      const remaining = total - succeeded.length;
+      const sentTotal = alreadySent.size + r.recoveredSent.length + r.succeeded.length;
+      const finals = waFinalFailureCounts(r.failedPhones);
+      const done = r.remaining === 0 && r.inFlightLeft === 0;
+      if (done) completed++;
       await bDoc.ref.update({
-        totalTargets: alreadySent.size + total,
-        sentCount: newSentTotal,
-        // arrayUnion requires ≥1 element — only include when something succeeded.
-        ...(succeeded.length ? { sentPhones: admin.firestore.FieldValue.arrayUnion(...succeeded) } : {}),
-        status: remaining > 0 ? 'sending' : 'completed',
-        lastRunBlocked: blocked,
+        totalTargets: sentTotal + finals.permanent + finals.exhausted + r.remaining + r.inFlightLeft,
+        sentCount: sentTotal,
+        failedCount: finals.permanent + finals.exhausted,
+        failedPermanentCount: finals.permanent,
+        failedExhaustedCount: finals.exhausted,
+        lastRunSent: r.succeeded.length,
+        lastRunFailed: r.failed,
+        status: done ? 'completed' : 'sending',
+        lastRunBlocked: r.blocked,
         lastRunAt: now,
         error: null,
         updatedAt: new Date(),
@@ -4739,7 +5144,8 @@ async function runWhatsappBroadcasts(opts?: { businessId?: string | null }) {
     }
   }
 
-  return { processed, sent, suspendedSkipped, mismatched, ...(scopeId ? { outOfScope } : {}) };
+  const failureNotifications = await failures.flush();
+  return { processed, sent, failed, completed, failureNotifications, suspendedSkipped, mismatched, ...(scopeId ? { outOfScope } : {}) };
 }
 
 // ── JOB: whatsapp-automations ────────────────────────────────────────────────
@@ -4752,13 +5158,22 @@ async function runWhatsappBroadcasts(opts?: { businessId?: string | null }) {
 // `sentPhones`. The dormancy condition is the cooldown: sending resets the
 // contact's last-contact date, so they drop out of the segment for the length of
 // the window and re-enter only if they go quiet again. A permanent sent-list
-// would turn a recurring rule into a once-per-contact-ever blast.
+// would turn a recurring rule into a once-per-contact-ever blast. (`failedPhones`
+// is different: it records numbers that CANNOT be reached, and a success clears
+// the entry.)
 //
-// Mirrors the email module's `purchase-campaigns` in spirit. NOT part of run-all
-// on purpose — an evergreen sender should be scheduled deliberately, once a day.
+// NOT part of run-all on purpose — an evergreen sender should be scheduled
+// deliberately, once a day. Quiet hours + a job lease like the broadcasts.
 async function runWhatsappAutomations(opts?: { businessId?: string | null }) {
+  return withJobLease('whatsapp-automations', opts?.businessId, 10 * 60_000, () => runWhatsappAutomationsLeased(opts));
+}
+
+async function runWhatsappAutomationsLeased(opts?: { businessId?: string | null }) {
   const scopeId = opts?.businessId || null;
   const now = new Date();
+  const quiet = waQuietHoursBlock(now.getTime());
+  if (quiet) return { skipped: quiet, rules: 0, processed: 0, sent: 0 };
+
   let q: admin.firestore.Query = db.collection('waBroadcasts').where('trigger', '==', 'dormant');
   if (scopeId) q = q.where('businessId', '==', scopeId); // equality + equality: no composite index
   const snap = await q.get();
@@ -4766,9 +5181,12 @@ async function runWhatsappAutomations(opts?: { businessId?: string | null }) {
   if (!rules.length) return { rules: 0, processed: 0, sent: 0, suspendedSkipped: 0, mismatched: 0 };
   const suspended = await loadSuspendedBusinessIds();
   const teamBelongsToBusiness = teamBusinessChecker();
+  const resolver = makeWaAgentResolver();
+  const failures = makeWaFailureReporter('whatsapp-automations', 'Automatizimet WhatsApp');
 
   let processed = 0;
   let sent = 0;
+  let failed = 0;
   let suspendedSkipped = 0;
   let mismatched = 0;
 
@@ -4795,17 +5213,22 @@ async function runWhatsappAutomations(opts?: { businessId?: string | null }) {
         continue;
       }
 
-      const { total, succeeded, blocked, considered } = await sendWaCampaignBatch(bDoc, b, now, { skipSentPhones: false });
-      sent += succeeded.length;
+      const r = await sendWaCampaignBatch(bDoc, b, now, { oneShot: false, kind: 'automation' }, resolver, failures);
+      sent += r.succeeded.length;
+      failed += r.failed;
+      const finals = waFinalFailureCounts(r.failedPhones);
       await bDoc.ref.update({
-        totalTargets: total,
-        sentCount: admin.firestore.FieldValue.increment(succeeded.length),
+        totalTargets: r.total,
+        sentCount: admin.firestore.FieldValue.increment(r.succeeded.length),
+        failedCount: finals.permanent + finals.exhausted,
+        lastRunSent: r.succeeded.length,
+        lastRunFailed: r.failed,
         lastRunAt: now,
-        lastRunBlocked: blocked,
+        lastRunBlocked: r.blocked,
         error: null,
         updatedAt: now,
       });
-      console.log(`[CRON:whatsapp-automations] ${b.name}: ${succeeded.length} dërguar, ${total} të pranueshëm nga ${considered} kontakte`);
+      console.log(`[CRON:whatsapp-automations] ${b.name}: ${r.succeeded.length} dërguar, ${r.failed} dështuan, ${r.total} të pranueshëm nga ${r.considered} kontakte`);
       processed++;
     } catch (err: any) {
       // A broken evergreen rule is PAUSED, not left retrying every run — it
@@ -4815,7 +5238,8 @@ async function runWhatsappAutomations(opts?: { businessId?: string | null }) {
     }
   }
 
-  return { rules: rules.length, processed, sent, suspendedSkipped, mismatched };
+  const failureNotifications = await failures.flush();
+  return { rules: rules.length, processed, sent, failed, failureNotifications, suspendedSkipped, mismatched };
 }
 
 // ── JOB: email-campaigns ─────────────────────────────────────────────────────

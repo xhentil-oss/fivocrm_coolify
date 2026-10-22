@@ -9,15 +9,36 @@ import { Boom } from '@hapi/boom';
 import admin from 'firebase-admin';
 import QRCode from 'qrcode';
 import { readFileSync, existsSync, rmSync, mkdirSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { join, dirname, basename, resolve as resolvePath } from 'path';
+import { fileURLToPath } from 'url';
 import cors from 'cors';
 import multer from 'multer';
 import pino from 'pino';
 import { randomUUID, timingSafeEqual } from 'crypto';
 import { lookup as dnsLookup } from 'dns/promises';
 
-process.on('unhandledRejection', (err) => { console.error('[WA] Unhandled rejection:', err); });
-process.on('uncaughtException', (err) => { console.error('[WA] Uncaught exception:', err); });
+/**
+ * Crash policy. A rejected promise is logged and survived (Baileys rejects plenty
+ * of fire-and-forget promises on a flapping socket). An uncaught EXCEPTION means
+ * the process may be in an undefined state — log the stack and exit(1) so pm2
+ * restarts a clean one — unless it is known, benign Baileys/socket noise, which
+ * used to be the only kind we ever saw and is why exceptions were swallowed.
+ */
+const BENIGN_EXCEPTION_PATTERNS: RegExp[] = [
+  /Connection Closed/i, /Connection Terminated/i, /Connection Failure/i, /Timed Out/i,
+  /Stream Errored/i, /WebSocket was closed before the connection was established/i,
+  /Bad MAC/i, /No session(s)? (record|found)?/i, /No SenderKeyRecord/i, /Invalid PreKey ID/i,
+  /MessageCounterError/i, /Key used already or never filled/i,
+  /\bECONNRESET\b/, /\bEPIPE\b/, /\bETIMEDOUT\b/, /\bECONNREFUSED\b/,
+];
+process.on('unhandledRejection', (err) => { console.error('[WA] Unhandled rejection:', (err as Error)?.stack || err); });
+process.on('uncaughtException', (err) => {
+  const text = `${err?.name || ''}: ${err?.message || ''}`;
+  console.error('[WA] Uncaught exception:', err?.stack || err);
+  if (BENIGN_EXCEPTION_PATTERNS.some((re) => re.test(text))) return;
+  console.error('[WA] Gabim fatal — dal me kod 1 që pm2 të rinisë procesin');
+  setTimeout(() => process.exit(1), 250).unref?.();
+});
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
@@ -304,20 +325,61 @@ admin.initializeApp({ credential: admin.credential.cert(saJson as admin.ServiceA
 const db = admin.firestore();
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type ConnectionStatus = 'disconnected' | 'connecting' | 'qr_ready' | 'connected';
+/**
+ * In-memory connection state. The first four are live states; the rest are
+ * TERMINAL: the agent stopped on purpose and waits for an EXPLICIT request
+ * (GET /qr-data/:agentId, /qr/:agentId, POST /sync/:agentId) instead of looping.
+ * A logged-out / replaced / banned number used to reconnect every 5 s forever —
+ * a QR loop at best, a ping-pong with the other WhatsApp Web session at worst.
+ */
+type ConnectionStatus =
+  | 'disconnected' | 'connecting' | 'qr_ready' | 'connected'
+  | 'logged_out' | 'replaced' | 'banned' | 'bad_session' | 'qr_timeout';
+const TERMINAL_STATUSES = new Set<ConnectionStatus>(['logged_out', 'replaced', 'banned', 'bad_session', 'qr_timeout']);
 
 interface AgentConfig {
   id: string;
   teamId: string;
+  businessId: string | null;
   label: string;
   assignedToUserId?: string;
   enabled: boolean;
+  /**
+   * The env-based TEAM_ID agent (no Firestore document). It is never logged out
+   * and its session is never wiped by the reconciler: the first real account
+   * appearing in Firestore used to `logout()` + `rmSync` the legacy ./auth_info.
+   */
+  fromEnv: boolean;
+}
+
+interface DisconnectInfo { code: number | null; name: string; at: string }
+
+/** Minimal CacheStore (get/set/del/flushAll) with a TTL — Baileys' msgRetryCounterCache. */
+class TtlCache {
+  private m = new Map<string, { v: unknown; exp: number }>();
+  constructor(private ttlMs: number, private max = 5000) {}
+  get<T>(key: string): T | undefined {
+    const e = this.m.get(key);
+    if (!e) return undefined;
+    if (e.exp < Date.now()) { this.m.delete(key); return undefined; }
+    return e.v as T;
+  }
+  set<T>(key: string, value: T): void {
+    if (this.m.size >= this.max && !this.m.has(key)) {
+      const first = this.m.keys().next().value;
+      if (first !== undefined) this.m.delete(first);
+    }
+    this.m.set(key, { v: value, exp: Date.now() + this.ttlMs });
+  }
+  del(key: string): void { this.m.delete(key); }
+  flushAll(): void { this.m.clear(); }
 }
 
 interface AgentState {
   config: AgentConfig;
   sock: ReturnType<typeof makeWASocket> | null;
-  authKeys: any | null;
+  /** `state.creds` of the current session — `registered` tells a pairing attempt from a paired device. */
+  authCreds: any | null;
   connectionStatus: ConnectionStatus;
   qrDataUrl: string | null;
   reconnectTimer: ReturnType<typeof setTimeout> | null;
@@ -336,13 +398,35 @@ interface AgentState {
    * that is exactly how a deleted account kept sending for a day.
    */
   unloading: boolean;
-  /** /send waits here for the server ack (messages.update status ≥ 2) of a message id. */
+  /** /send waits here for the server ack (CB:ack or messages.update status ≥ 2) of a message id. */
   ackWaiters: Map<string, (status: number) => void>;
+  /** In-flight connectAgent(): a second caller joins it instead of opening a second socket. */
+  connecting: Promise<void> | null;
+  reconnectAttempts: number;
+  /** A QR was shown on the current socket (an unscanned QR that times out stops, it does not loop). */
+  sawQr: boolean;
+  lastDisconnect: DisconnectInfo | null;
+  lastConnectedAt: Date | null;
+  lastExplicitStartAt: number;
+  /** ms epoch of the last USync reverse lookup (persisted on the account doc). */
+  lastReverseLookupAt: number;
+  lookupRunning: boolean;
+  /** Phones already looked up by USync (phone → ms), so the daily run rotates instead of repeating. */
+  lookedUpPhones: Map<string, number>;
+  /** Per-agent outbound queue: one message at a time, ≥ SEND_GAP_MS apart. */
+  sendChain: Promise<unknown>;
+  nextSendAt: number;
+  lastSentAt: number;
+  /** whatsappMessages doc ids waiting in the queue (the stale-pending sweeper skips them). */
+  queuedDocIds: Set<string>;
+  /** WhatsApp ids we sent and have not seen the server ack for yet (id → sent at). */
+  outstanding: Map<string, number>;
+  msgRetryCache: TtlCache;
 }
 
 function createAgentState(config: AgentConfig): AgentState {
   return {
-    config, sock: null, authKeys: null,
+    config, sock: null, authCreds: null,
     connectionStatus: 'disconnected', qrDataUrl: null,
     reconnectTimer: null, lidResyncTimer: null, cacheEvictTimer: null,
     isSyncing: false,
@@ -353,6 +437,21 @@ function createAgentState(config: AgentConfig): AgentState {
     connectedPhone: null,
     unloading: false,
     ackWaiters: new Map(),
+    connecting: null,
+    reconnectAttempts: 0,
+    sawQr: false,
+    lastDisconnect: null,
+    lastConnectedAt: null,
+    lastExplicitStartAt: 0,
+    lastReverseLookupAt: 0,
+    lookupRunning: false,
+    lookedUpPhones: new Map(),
+    sendChain: Promise.resolve(),
+    nextSendAt: 0,
+    lastSentAt: 0,
+    queuedDocIds: new Set(),
+    outstanding: new Map(),
+    msgRetryCache: new TtlCache(60 * 60 * 1000),
   };
 }
 
@@ -366,17 +465,99 @@ const BAILEYS_LOG_LEVEL = process.env.BAILEYS_LOG_LEVEL || 'warn';
 
 /**
  * How long /send waits for WhatsApp's server ack before answering. The Vercel
- * relay (api/whatsapp.ts) aborts at 10s, so this must stay well under it. A
- * message that is not acked in time is returned as `status: 'pending'` (still a
- * 200 — it may well be acked a second later) and the messages.update handler
- * upgrades the row when the receipt arrives.
+ * relay (api/whatsapp.ts) aborts at 10s, so the WHOLE request is held to
+ * REQUEST_BUDGET_MS and the ack wait is whatever is left of it (never more than
+ * this). A message that is not acked in time is returned as `status: 'pending'`
+ * (still a 200 — it may well be acked a second later) and the ack handlers
+ * upgrade the row when the receipt arrives.
  */
 const SEND_ACK_TIMEOUT_MS = 6_000;
+const REQUEST_BUDGET_MS = 8_500;
+/** A queue wait longer than this is not waited for inline: the row stays `pending`, the answer is `queued`. */
+const QUEUE_INLINE_MAX_MS = 3_000;
+/**
+ * Minimum spacing between two outbound messages of ONE number (+ jitter). A
+ * parallel blast — a campaign tick plus three staff replies in the same second —
+ * is exactly the pattern WhatsApp bans companion devices for.
+ */
+const SEND_GAP_MS = 1_200;
+const SEND_GAP_JITTER_MS = 800;
+/** A queued (background) send waits this long for its ack before letting the receipt handlers finish the job. */
+const BACKGROUND_ACK_WAIT_MS = 30_000;
+const ON_WA_TIMEOUT_MS = 3_000;
+const ON_WA_TTL_MS = 24 * 60 * 60 * 1000;
+const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+/** A row still `pending` this long after creation never got an ack → `failed` / `no-ack`. */
+const PENDING_STALE_MS = 10 * 60 * 1000;
+/** Process start: a message older than this may have a legacy (bare-id) row. */
+const BOOT_AT_MS = Date.now();
 
-/** Baileys WAMessageStatus → the `whatsappMessages.status` we store. */
+/** Baileys WAMessageStatus → the `whatsappMessages.status` we store. 1 (PENDING) is not a receipt. */
 const RECEIPT_STATUS: Record<number, 'failed' | 'sent' | 'delivered' | 'read'> = {
   0: 'failed', 2: 'sent', 3: 'delivered', 4: 'read', 5: 'read',
 };
+/** Receipts can arrive out of order; never downgrade read → delivered → sent. */
+const STATUS_RANK: Record<string, number> = { pending: 0, queued: 0, sent: 1, delivered: 2, read: 3 };
+
+/** DisconnectReason (Baileys 6.7.24) → a readable name for logs and the account doc. 408 is both lost/timedOut. */
+const DISCONNECT_NAMES: Record<number, string> = {
+  [DisconnectReason.connectionClosed]: 'connectionClosed',
+  [DisconnectReason.connectionLost]: 'connectionLost',
+  [DisconnectReason.connectionReplaced]: 'connectionReplaced',
+  [DisconnectReason.loggedOut]: 'loggedOut',
+  [DisconnectReason.badSession]: 'badSession',
+  [DisconnectReason.restartRequired]: 'restartRequired',
+  [DisconnectReason.multideviceMismatch]: 'multideviceMismatch',
+  [DisconnectReason.forbidden]: 'forbidden',
+  [DisconnectReason.unavailableService]: 'unavailableService',
+};
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, Math.max(0, ms)));
+const nowTs = () => admin.firestore.Timestamp.fromDate(new Date());
+/** Firestore Timestamp | Date | ISO | ms → ms epoch (0 when unknown). */
+function tsMs(v: any): number {
+  if (!v) return 0;
+  if (typeof v === 'number') return v;
+  if (typeof v.toMillis === 'function') return v.toMillis();
+  if (v instanceof Date) return v.getTime();
+  const t = new Date(v).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+/** Best-effort write of connection facts to the account doc (the cron alerts staff from these). */
+function writeAccountStatus(agent: AgentState, patch: Record<string, unknown>): void {
+  if (agent.config.fromEnv) return;
+  db.collection('whatsappAccounts').doc(agent.config.id).update(patch)
+    .catch((e) => console.warn(`[${agent.config.id}] whatsappAccounts update dështoi:`, (e as Error)?.message || e));
+}
+
+// ── Socket lifecycle ──────────────────────────────────────────────────────────
+
+/** Every ev channel we subscribe to — removed on teardown so a dead socket can never write again. */
+const SOCKET_EVENTS = ['creds.update', 'connection.update', 'contacts.upsert', 'contacts.update', 'messaging-history.set', 'messages.upsert', 'messages.update'] as const;
+const SERVER_ACK_FRAME = 'CB:ack,class:message';
+
+function detachSocket(sock: ReturnType<typeof makeWASocket>): void {
+  for (const ev of SOCKET_EVENTS) { try { (sock.ev as any).removeAllListeners(ev); } catch {} }
+  try { (sock.ws as any).removeAllListeners(SERVER_ACK_FRAME); } catch {}
+}
+/** Detach + end + close the raw websocket. Each step on its own: one throwing must not keep the others from running. */
+function closeSocket(sock: ReturnType<typeof makeWASocket>): void {
+  detachSocket(sock);
+  try { sock.end(undefined); } catch {}
+  try { (sock.ws as any).close(); } catch {}
+}
+/** Drop the agent's current socket (the close it causes is ignored: agent.sock no longer points at it). */
+function teardownSocket(agent: AgentState): void {
+  const sock = agent.sock;
+  agent.sock = null;
+  if (sock) closeSocket(sock);
+}
+
+function rejectAckWaiters(agent: AgentState, code: number): void {
+  for (const resolve of agent.ackWaiters.values()) resolve(code);
+  agent.ackWaiters.clear();
+}
 
 /**
  * Stop an agent whose Firestore account was deleted or disabled. Before this
@@ -388,42 +569,71 @@ const RECEIPT_STATUS: Record<number, 'failed' | 'sent' | 'delivered' | 'read'> =
  * - `deleted`  → log the companion device out of WhatsApp and wipe the session.
  * - `disabled` → just close the socket; the session stays so re-enabling works
  *                without a new QR scan.
+ * Whatever logout() does (times out, throws), the socket is ended, the raw ws
+ * closed and every listener removed — a half-dead socket used to keep sending.
  */
 async function unloadAgent(agent: AgentState, reason: 'deleted' | 'disabled'): Promise<void> {
   const id = agent.config.id;
   agent.unloading = true;
-  agents.delete(id);
+  if (agents.get(id) === agent) agents.delete(id);
   if (agent.reconnectTimer) { clearTimeout(agent.reconnectTimer); agent.reconnectTimer = null; }
   if (agent.lidResyncTimer) { clearInterval(agent.lidResyncTimer); agent.lidResyncTimer = null; }
   if (agent.cacheEvictTimer) { clearInterval(agent.cacheEvictTimer); agent.cacheEvictTimer = null; }
-  for (const resolve of agent.ackWaiters.values()) resolve(0);
-  agent.ackWaiters.clear();
+  rejectAckWaiters(agent, 0);
   const sock = agent.sock;
   agent.sock = null;
   agent.connectionStatus = 'disconnected';
   agent.qrDataUrl = null;
+  const wipe = reason === 'deleted' && !agent.config.fromEnv;
   if (sock) {
-    if (reason === 'deleted') {
-      // logout() needs an open socket; fall back to a plain close.
-      try { await Promise.race([sock.logout(), new Promise(r => setTimeout(r, 5000))]); }
-      catch { try { sock.end(undefined); } catch {} }
-    } else {
-      try { sock.end(undefined); } catch {}
+    if (wipe) {
+      // logout() needs an open socket; whatever happens, fall through to the hard close.
+      try { await Promise.race([sock.logout(), sleep(5000)]); } catch {}
     }
+    closeSocket(sock);
   }
-  if (reason === 'deleted') {
+  if (wipe) {
     try { rmSync(authDir(id), { recursive: true, force: true }); } catch {}
   }
   console.log(`[${id}] Agent u shkarkua (${reason === 'deleted' ? 'llogaria u fshi' : 'llogaria u çaktivizua'})`);
 }
 
+/** Account doc → config. No `teamId` → null: an account is NEVER filed under the env default team. */
+function accountConfig(doc: admin.firestore.QueryDocumentSnapshot): AgentConfig | null {
+  const data = doc.data() || {};
+  const teamId = typeof data.teamId === 'string' ? data.teamId.trim() : '';
+  if (!teamId) return null;
+  return {
+    id: doc.id, teamId,
+    businessId: typeof data.businessId === 'string' && data.businessId ? data.businessId : null,
+    label: data.label || doc.id,
+    assignedToUserId: typeof data.assignedToUserId === 'string' && data.assignedToUserId ? data.assignedToUserId : undefined,
+    enabled: true, fromEnv: false,
+  };
+}
+
+async function startAgent(config: AgentConfig, data?: Record<string, any>): Promise<AgentState> {
+  const agent = createAgentState(config);
+  agent.lastReverseLookupAt = tsMs(data?.lastReverseLookupAt);
+  agent.cacheEvictTimer = setInterval(() => agent.leadPhoneCache.clear(), 6 * 60 * 60 * 1000);
+  // Hourly CHECK; maybeRunDailyLookups itself enforces the 24h gate.
+  agent.lidResyncTimer = setInterval(() => { void maybeRunDailyLookups(agent); }, 60 * 60 * 1000);
+  agents.set(config.id, agent);
+  await loadLidMappings(agent);
+  await loadPendingLidMessages(agent);
+  if (!agent.unloading) connectAgent(agent).catch(e => console.error(`[${config.id}] connectAgent error:`, e));
+  return agent;
+}
+
 /**
  * Bring the in-memory agents in line with `whatsappAccounts`: start every
  * enabled account that is not running, stop every running agent whose account
- * is gone or disabled. Used by the live listener and by POST /reload.
- * Serialised — two snapshots in a row must not race each other.
+ * is gone or disabled, and apply edited fields to the running ones. Used by the
+ * live listener, by POST /reload and at boot. Serialised — two snapshots in a
+ * row must not race each other.
  */
 let reconcileChain: Promise<void> = Promise.resolve();
+const warnedNoTeam = new Set<string>();
 function reconcileAgents(docs: admin.firestore.QueryDocumentSnapshot[]): Promise<{ added: string[]; removed: string[] }> {
   const run = async () => {
     const added: string[] = []; const removed: string[] = [];
@@ -433,30 +643,46 @@ function reconcileAgents(docs: admin.firestore.QueryDocumentSnapshot[]): Promise
     for (const doc of docs) {
       const data = doc.data();
       if (data.enabled !== true) continue;
+      const config = accountConfig(doc);
+      if (!config) {
+        if (!warnedNoTeam.has(doc.id)) { warnedNoTeam.add(doc.id); console.warn(`[VPS] whatsappAccounts/${doc.id} pa teamId — nuk ngarkohet`); }
+        continue;
+      }
+      warnedNoTeam.delete(doc.id);
       enabledIds.add(doc.id);
-      if (agents.has(doc.id)) continue;
-      const config: AgentConfig = {
-        id: doc.id, teamId: data.teamId || DEFAULT_TEAM_ID,
-        label: data.label || doc.id, assignedToUserId: data.assignedToUserId, enabled: true,
-      };
-      const agent = createAgentState(config);
-      agent.cacheEvictTimer = setInterval(() => agent.leadPhoneCache.clear(), 6 * 60 * 60 * 1000);
-      agents.set(doc.id, agent);
-      await loadLidMappings(agent);
-      await loadPendingLidMessages(agent);
-      connectAgent(agent).catch(e => console.error(`[${agent.config.id}] connectAgent error:`, e));
+      const existing = agents.get(doc.id);
+      if (existing) {
+        if (existing.config.teamId === config.teamId && !existing.config.fromEnv) {
+          // Hot fields: applied to the running agent, no reconnect needed.
+          existing.config.label = config.label;
+          existing.config.assignedToUserId = config.assignedToUserId;
+          existing.config.businessId = config.businessId;
+          continue;
+        }
+        // The team moved: every cache (leads, LID queue, conversation keys) is keyed
+        // on it, so restart cleanly. The session is kept — no new QR.
+        await unloadAgent(existing, 'disabled');
+        removed.push(doc.id);
+      }
+      await startAgent(config, data);
       added.push(doc.id);
       console.log(`[VPS] Agent i ri ngarkuar: ${config.id} (${config.label})`);
     }
 
     // The env-based 'default' agent only exists while the collection is empty.
-    const keepEnvDefault = docs.length === 0;
+    const keepEnvDefault = docs.length === 0 && !!DEFAULT_TEAM_ID;
     for (const agent of Array.from(agents.values())) {
       const id = agent.config.id;
       if (enabledIds.has(id)) continue;
-      if (id === 'default' && keepEnvDefault && !knownIds.has('default')) continue;
-      await unloadAgent(agent, knownIds.has(id) ? 'disabled' : 'deleted');
+      if (agent.config.fromEnv && keepEnvDefault) continue;
+      // The env agent is only ever CLOSED, never logged out / wiped (see AgentConfig.fromEnv).
+      await unloadAgent(agent, agent.config.fromEnv || knownIds.has(id) ? 'disabled' : 'deleted');
       removed.push(id);
+    }
+    if (keepEnvDefault && !agents.has('default')) {
+      console.log('[VPS] Asnjë agent në Firestore — duke përdorur default nga env');
+      await startAgent({ id: 'default', teamId: DEFAULT_TEAM_ID, businessId: null, label: 'Default', enabled: true, fromEnv: true });
+      added.push('default');
     }
     return { added, removed };
   };
@@ -466,8 +692,9 @@ function reconcileAgents(docs: admin.firestore.QueryDocumentSnapshot[]): Promise
 }
 
 /**
- * Live mirror of `whatsappAccounts`: a delete / disable / add in Cilësimet takes
- * effect within seconds, without a restart. One listener, reads only on change.
+ * Live mirror of `whatsappAccounts`: a delete / disable / add / edit in
+ * Cilësimet takes effect within seconds, without a restart. One listener, reads
+ * only on change.
  */
 function watchAccounts(): void {
   db.collection('whatsappAccounts').onSnapshot(
@@ -503,12 +730,77 @@ function checkSendRate(agentId: string): boolean {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+/**
+ * The same rules as src/lib/messaging/waPhone.ts `toWaPhone` (copied, not
+ * imported — the VPS builds alone): digits only, `00` stripped, Albanian local
+ * forms → 355, and only 8–15 digits survive (else ''). Never feed it a jid from
+ * @lid / @newsletter / @g.us / status — isPersonJid() + the LID branch keep
+ * those out, a privacy id is not a phone.
+ */
 const normalizePhone = (phone: string): string => {
-  const digits = phone.replace(/[^\d]/g, '');
-  if (/^3550[6-9]/.test(digits)) return '355' + digits.slice(4);
-  if (/^0[6-9]/.test(digits)) return '355' + digits.slice(1);
-  return digits;
+  let digits = String(phone ?? '').replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (/^3550[6-9]/.test(digits)) digits = '355' + digits.slice(4);
+  else if (/^0[6-9]\d{7,8}$/.test(digits)) digits = '355' + digits.slice(1);
+  else if (/^[6-9]\d{8}$/.test(digits)) digits = '355' + digits;
+  return digits.length >= 8 && digits.length <= 15 ? digits : '';
 };
+
+/** `355…:12@s.whatsapp.net` → `355…` (device suffix and server dropped). */
+function jidUser(jid: string): string {
+  return String(jid || '').split('@')[0].split(':')[0];
+}
+/** A privacy id → `<digits>@lid`, or null. Requires the @lid server: bare digits are ambiguous. */
+function canonicalLidJid(v: unknown): string | null {
+  const s = String(v || '');
+  if (!s.endsWith('@lid')) return null;
+  const user = jidUser(s);
+  return /^\d{6,20}$/.test(user) ? `${user}@lid` : null;
+}
+/**
+ * A phone jid → `<8–15 digits>@s.whatsapp.net`, or null. Refuses @lid, groups,
+ * channels, broadcasts and 16+ digit ids — exactly the values that must never
+ * be stored as a LID → phone mapping.
+ */
+function canonicalPhoneJid(v: unknown): string | null {
+  const s = String(v || '').trim();
+  if (!s) return null;
+  const at = s.indexOf('@');
+  const server = at === -1 ? 's.whatsapp.net' : s.slice(at + 1);
+  if (server !== 's.whatsapp.net' && server !== 'c.us') return null;
+  const user = jidUser(s);
+  if (!/^\d{8,15}$/.test(user)) return null;
+  return `${user}@s.whatsapp.net`;
+}
+
+/**
+ * `whatsappMessages` doc id for a WhatsApp message seen by ONE agent. It used to
+ * be the bare WhatsApp id, so when two of our numbers talked to each other (or
+ * two tenants' numbers did) the receiver's inbound row overwrote the sender's
+ * outbound row. `waMessageId` stays a field.
+ */
+function rowId(agentId: string, waId: string): string {
+  return `${agentId}_${waId}`;
+}
+/** The row for (agent, WhatsApp id): the new id first, the legacy bare id only when it is THIS agent's. */
+async function findRowRef(agent: AgentState, waId: string): Promise<{ ref: admin.firestore.DocumentReference; data: Record<string, any> } | null> {
+  const ref = db.collection('whatsappMessages').doc(rowId(agent.config.id, waId));
+  const snap = await ref.get();
+  if (snap.exists) return { ref, data: snap.data() || {} };
+  const legacyRef = db.collection('whatsappMessages').doc(waId);
+  const legacy = await legacyRef.get();
+  if (legacy.exists && legacy.data()?.agentId === agent.config.id) return { ref: legacyRef, data: legacy.data() || {} };
+  return null;
+}
+
+/** Firestore batches cap at 500 ops; chunk at 450 so a big backfill never fails as a whole. */
+async function commitUpdatesInChunks(updates: Array<{ ref: admin.firestore.DocumentReference; data: Record<string, unknown> }>): Promise<void> {
+  for (let i = 0; i < updates.length; i += 450) {
+    const batch = db.batch();
+    for (const u of updates.slice(i, i + 450)) batch.update(u.ref, u.data);
+    await batch.commit();
+  }
+}
 
 /** Constant-time comparison; a length mismatch is simply "not equal". */
 function secretEquals(given: unknown, expected: string): boolean {
@@ -552,10 +844,25 @@ function maskBody(v: unknown): string {
   return WA_LOG_BODIES ? s.slice(0, 80) : `[${s.length} karaktere]`;
 }
 
+/**
+ * Session folders live next to this server (vps/), resolved ABSOLUTELY: a
+ * relative './auth_info_x' followed pm2's cwd, so starting from another
+ * directory (or running dist/server.js) silently opened an empty session and
+ * asked for a new QR. Folder names are unchanged so existing sessions survive;
+ * a session that only exists under the old cwd-relative path is still used.
+ */
+const HERE = dirname(fileURLToPath(import.meta.url));
+const VPS_ROOT = process.env.WA_AUTH_BASE_DIR
+  ? resolvePath(process.env.WA_AUTH_BASE_DIR)
+  : (basename(HERE) === 'dist' ? resolvePath(HERE, '..') : HERE);
 const authDir = (agentId: string) => {
-  // backward compat: if default agent and old auth_info exists, keep using it
-  if (agentId === 'default' && existsSync('./auth_info')) return './auth_info';
-  return `./auth_info_${agentId}`;
+  const safeId = /[\\/]|\.\./.test(agentId) ? agentId.replace(/[^a-zA-Z0-9_-]/g, '_') : agentId;
+  const candidates = agentId === 'default'
+    ? [resolvePath(VPS_ROOT, 'auth_info'), resolvePath(process.cwd(), 'auth_info')] // backward compat: the legacy single-agent folder
+    : [];
+  candidates.push(resolvePath(VPS_ROOT, `auth_info_${safeId}`), resolvePath(process.cwd(), `auth_info_${safeId}`));
+  for (const c of candidates) if (existsSync(c)) return c;
+  return resolvePath(VPS_ROOT, `auth_info_${safeId}`);
 };
 
 // ── Per-agent functions ───────────────────────────────────────────────────────
@@ -583,95 +890,77 @@ async function persistLidMapping(agent: AgentState, lid: string, phoneJid: strin
     const docId = `${agent.config.id}_${lid.replace(/[@.]/g, '_')}`;
     await db.collection('lidMappings').doc(docId).set({
       lid, phoneJid, teamId: agent.config.teamId, agentId: agent.config.id,
-      updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+      updatedAt: nowTs(),
     }, { merge: true });
   } catch (e) { console.error(`[${agent.config.id}] Error persisting LID:`, e); }
 }
 
+/** Rows stored while only the LID was known carry the LID digits in `phone` — move them to the real number. */
 async function backfillLidMessages(agent: AgentState, lidJid: string, phoneJid: string): Promise<void> {
-  const lidPhone = normalizePhone(lidJid.split('@')[0]);
-  const realPhone = normalizePhone(phoneJid.split('@')[0]);
-  if (!lidPhone || !realPhone || lidPhone === realPhone) return;
+  const lidDigits = jidUser(lidJid);
+  const realPhone = normalizePhone(jidUser(phoneJid));
+  if (!lidDigits || !realPhone || lidDigits === realPhone) return;
   try {
-    const snap = await db.collection('whatsappMessages').where('teamId', '==', agent.config.teamId).where('phone', '==', lidPhone).get();
+    const snap = await db.collection('whatsappMessages').where('teamId', '==', agent.config.teamId).where('phone', '==', lidDigits).limit(2000).get();
     if (snap.empty) return;
-    const batch = db.batch(); let count = 0;
-    for (const doc of snap.docs) {
-      batch.update(doc.ref, { phone: realPhone, jid: phoneJid, updatedAt: admin.firestore.Timestamp.fromDate(new Date()) });
-      if (++count >= 500) break;
-    }
-    await batch.commit();
-    console.log(`[${agent.config.id}] Backfill: ${maskPhone(lidPhone)} → ${maskPhone(realPhone)} (${count} msgs)`);
+    const updates = snap.docs
+      .filter(d => !d.data().agentId || d.data().agentId === agent.config.id)
+      .map(d => ({ ref: d.ref, data: { phone: realPhone, jid: phoneJid, isLid: false, updatedAt: nowTs() } as Record<string, unknown> }));
+    await commitUpdatesInChunks(updates);
+    console.log(`[${agent.config.id}] Backfill: ${maskPhone(lidDigits)} → ${maskPhone(realPhone)} (${updates.length} msgs)`);
   } catch (e) { console.error(`[${agent.config.id}] Backfill error:`, e); }
 }
 
-async function registerLidMapping(agent: AgentState, lid: string, phoneJid: string): Promise<void> {
-  if (!lid || !phoneJid || agent.lidToPhoneMap.has(lid)) return;
+/**
+ * Record LID → phone. Every source (senderPn, contacts, history, USync, groups,
+ * Firestore) goes through the same validation: the LID must be a real @lid, the
+ * phone a real 8–15 digit @s.whatsapp.net jid that is neither the LID itself nor
+ * OUR own number. A bad mapping is worse than none — it files a stranger's
+ * messages under someone else's lead.
+ */
+async function registerLidMapping(agent: AgentState, lidRaw: unknown, phoneRaw: unknown): Promise<void> {
+  const lid = canonicalLidJid(lidRaw);
+  const phoneJid = canonicalPhoneJid(phoneRaw);
+  if (!lid || !phoneJid) return;
+  const phoneDigits = jidUser(phoneJid);
+  if (phoneDigits === jidUser(lid)) return;
+  if (agent.connectedPhone && phoneDigits === agent.connectedPhone) return;
+  const previous = agent.lidToPhoneMap.get(lid);
+  if (previous === phoneJid) return;
   agent.lidToPhoneMap.set(lid, phoneJid);
-  console.log(`[${agent.config.id}] LID: ${maskJid(lid)} → ${maskJid(phoneJid)} (${agent.lidToPhoneMap.size} total)`);
-  persistLidMapping(agent, lid, phoneJid);
-  backfillLidMessages(agent, lid, phoneJid);
+  console.log(`[${agent.config.id}] LID: ${maskJid(lid)} → ${maskJid(phoneJid)}${previous ? ` (zëvendëson ${maskJid(previous)})` : ''} (${agent.lidToPhoneMap.size} total)`);
+  void persistLidMapping(agent, lid, phoneJid);
+  void backfillLidMessages(agent, lid, phoneJid);
 
   const queuedDocIds = agent.pendingLidMessages.get(lid);
   if (queuedDocIds?.length) {
-    const phone = normalizePhone(phoneJid.split('@')[0]);
-    const batch = db.batch();
-    for (const docId of queuedDocIds) {
-      batch.update(db.collection('whatsappMessages').doc(docId), {
-        phone, jid: phoneJid, isLid: false, updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
-      });
-    }
-    try { await batch.commit(); agent.pendingLidMessages.delete(lid); }
-    catch (e) { console.error(`[${agent.config.id}] Error updating queued LID docs:`, e); }
+    const phone = normalizePhone(phoneDigits);
+    try {
+      await commitUpdatesInChunks(queuedDocIds.map(docId => ({
+        ref: db.collection('whatsappMessages').doc(docId),
+        data: { phone, jid: phoneJid, isLid: false, updatedAt: nowTs() },
+      })));
+      agent.pendingLidMessages.delete(lid);
+    } catch (e) { console.error(`[${agent.config.id}] Error updating queued LID docs:`, e); }
   }
 }
 
 async function syncContactName(agent: AgentState, jid: string, displayName: string): Promise<void> {
-  const phone = normalizePhone(jid.split('@')[0]);
+  const phone = normalizePhone(jidUser(jid));
   if (!phone || !displayName || agent.syncedContactNames.get(phone) === displayName) return;
   agent.syncedContactNames.set(phone, displayName);
   try {
     const snap = await db.collection('whatsappMessages').where('teamId', '==', agent.config.teamId).where('phone', '==', phone).limit(500).get();
     if (snap.empty) return;
-    const batch = db.batch(); let count = 0;
+    const updates: Array<{ ref: admin.firestore.DocumentReference; data: Record<string, unknown> }> = [];
     for (const doc of snap.docs) {
       const data = doc.data();
       if (!data.leadId && (!data.pushName || data.pushName !== displayName)) {
-        batch.update(doc.ref, { pushName: displayName, leadName: displayName, updatedAt: admin.firestore.Timestamp.fromDate(new Date()) });
-        count++;
+        updates.push({ ref: doc.ref, data: { pushName: displayName, leadName: displayName, updatedAt: nowTs() } });
       }
     }
-    if (count > 0) await batch.commit();
+    if (updates.length) await commitUpdatesInChunks(updates);
   } catch (e) { console.error(`[${agent.config.id}] Contact sync error:`, e); }
-}
-
-async function readBaileysLidMappings(agent: AgentState): Promise<void> {
-  if (!agent.authKeys) return;
-  const dir = authDir(agent.config.id);
-  if (!existsSync(dir)) return;
-  try {
-    const { readdirSync } = await import('fs');
-    const files = readdirSync(dir);
-    const lidMappingFiles = files.filter(f => f.startsWith('lid-mapping-'));
-    if (!lidMappingFiles.length) return;
-
-    const reverseKeys = lidMappingFiles.filter(f => f.includes('_reverse')).map(f => f.replace('lid-mapping-', '').replace('.json', ''));
-    if (reverseKeys.length) {
-      const stored = await agent.authKeys.get('lid-mapping', reverseKeys);
-      for (const [key, pnUser] of Object.entries(stored)) {
-        if (!pnUser || typeof pnUser !== 'string') continue;
-        registerLidMapping(agent, `${key.replace('_reverse', '')}@lid`, `${pnUser}@s.whatsapp.net`);
-      }
-    }
-    const forwardKeys = lidMappingFiles.filter(f => !f.includes('_reverse')).map(f => f.replace('lid-mapping-', '').replace('.json', ''));
-    if (forwardKeys.length) {
-      const stored = await agent.authKeys.get('lid-mapping', forwardKeys);
-      for (const [pnUser, lidUser] of Object.entries(stored)) {
-        if (!lidUser || typeof lidUser !== 'string') continue;
-        registerLidMapping(agent, `${lidUser}@lid`, `${pnUser}@s.whatsapp.net`);
-      }
-    }
-  } catch (e) { console.error(`[${agent.config.id}] Error reading Baileys LID mappings:`, e); }
 }
 
 async function loadLidMappings(agent: AgentState): Promise<void> {
@@ -680,11 +969,15 @@ async function loadLidMappings(agent: AgentState): Promise<void> {
     let snap = await db.collection('lidMappings').where('teamId', '==', agent.config.teamId).where('agentId', '==', agent.config.id).get();
     // Fallback to legacy mappings (no agentId) for backward compatibility
     if (snap.empty) snap = await db.collection('lidMappings').where('teamId', '==', agent.config.teamId).get();
+    let rejected = 0;
     for (const doc of snap.docs) {
-      const { lid, phoneJid } = doc.data();
-      if (lid && phoneJid) agent.lidToPhoneMap.set(lid, phoneJid);
+      const lid = canonicalLidJid(doc.data().lid);
+      const phoneJid = canonicalPhoneJid(doc.data().phoneJid);
+      // Validated on the way IN too: mappings stored before the guard may be lid→lid or 18-digit ids.
+      if (lid && phoneJid && jidUser(lid) !== jidUser(phoneJid)) agent.lidToPhoneMap.set(lid, phoneJid);
+      else rejected++;
     }
-    console.log(`[${agent.config.id}] Loaded ${agent.lidToPhoneMap.size} LID mappings`);
+    console.log(`[${agent.config.id}] Loaded ${agent.lidToPhoneMap.size} LID mappings${rejected ? ` (${rejected} të pavlefshme u injoruan)` : ''}`);
   } catch (e) { console.error(`[${agent.config.id}] Error loading LID mappings:`, e); }
 }
 
@@ -692,25 +985,23 @@ async function loadPendingLidMessages(agent: AgentState): Promise<void> {
   try {
     const snap = await db.collection('whatsappMessages').where('teamId', '==', agent.config.teamId).where('isLid', '==', true).get();
     for (const doc of snap.docs) {
-      const jid: string = doc.data().jid || '';
-      if (jid.endsWith('@lid')) {
-        const queue = agent.pendingLidMessages.get(jid) || [];
-        queue.push(doc.id);
-        agent.pendingLidMessages.set(jid, queue);
-      }
+      const data = doc.data();
+      if (data.agentId && data.agentId !== agent.config.id) continue;
+      const lid = canonicalLidJid(data.lid || data.jid);
+      if (!lid) continue;
+      const queue = agent.pendingLidMessages.get(lid) || [];
+      queue.push(doc.id);
+      agent.pendingLidMessages.set(lid, queue);
     }
     // Resolve any known LIDs immediately
     for (const [lid, docIds] of Array.from(agent.pendingLidMessages.entries())) {
       const phoneJid = agent.lidToPhoneMap.get(lid);
       if (!phoneJid) continue;
-      const phone = normalizePhone(phoneJid.split('@')[0]);
-      const batch = db.batch();
-      for (const docId of docIds) {
-        batch.update(db.collection('whatsappMessages').doc(docId), {
-          phone, jid: phoneJid, isLid: false, updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
-        });
-      }
-      await batch.commit();
+      const phone = normalizePhone(jidUser(phoneJid));
+      await commitUpdatesInChunks(docIds.map(docId => ({
+        ref: db.collection('whatsappMessages').doc(docId),
+        data: { phone, jid: phoneJid, isLid: false, updatedAt: nowTs() },
+      })));
       agent.pendingLidMessages.delete(lid);
       console.log(`[${agent.config.id}] Startup resolved ${docIds.length} LID docs for ${maskJid(lid)}`);
     }
@@ -718,40 +1009,72 @@ async function loadPendingLidMessages(agent: AgentState): Promise<void> {
   } catch (e) { console.error(`[${agent.config.id}] Error loading pending LID messages:`, e); }
 }
 
-async function reverseLookupLeads(agent: AgentState): Promise<void> {
-  if (!agent.sock) return;
+// ── LID discovery (USync) — rationed ──────────────────────────────────────────
+// A USync query per lead every 30 minutes and on every reconnect is a textbook
+// automation fingerprint (ban risk). Now: at most once per 24h per agent, only
+// numbers not already resolved and not looked up in the last week, ≤ 50 per run,
+// in batches of 10 with a pause between them.
+const LOOKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const LOOKUP_FORCE_MIN_INTERVAL_MS = 60 * 60 * 1000;
+const LOOKUP_MAX_PHONES = 50;
+const LOOKUP_BATCH = 10;
+const LOOKUP_REPEAT_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+async function maybeRunDailyLookups(agent: AgentState, force = false): Promise<{ ran: boolean; reason?: string; resolved?: number }> {
+  if (agent.lookupRunning) return { ran: false, reason: 'running' };
+  if (agent.connectionStatus !== 'connected' || !agent.sock) return { ran: false, reason: 'not-connected' };
+  const since = Date.now() - agent.lastReverseLookupAt;
+  if (since < (force ? LOOKUP_FORCE_MIN_INTERVAL_MS : LOOKUP_INTERVAL_MS)) return { ran: false, reason: 'too-soon' };
+  agent.lookupRunning = true;
+  agent.lastReverseLookupAt = Date.now();
+  writeAccountStatus(agent, { lastReverseLookupAt: nowTs() });
+  try {
+    const resolved = await reverseLookupLeads(agent);
+    await resolveFromGroups(agent);
+    return { ran: true, resolved };
+  } finally { agent.lookupRunning = false; }
+}
+
+async function reverseLookupLeads(agent: AgentState): Promise<number> {
+  if (!agent.sock) return 0;
+  let resolved = 0;
   try {
     const { USyncQuery, USyncUser } = await import('baileys');
     const leadsSnap = await db.collection('leads').where('teamId', '==', agent.config.teamId).select('phoneNumber', 'phone', 'name').get();
-    const phones = new Set<string>();
-    for (const doc of leadsSnap.docs) {
-      const d = doc.data();
-      const p = normalizePhone(String(d.phoneNumber || d.phone || ''));
-      if (p && p.length >= 7 && p.length <= 15) phones.add(p);
-    }
-    const phoneArr = Array.from(phones); let resolved = 0;
-    for (let i = 0; i < phoneArr.length; i += 20) {
-      try {
-        const query = new USyncQuery();
-        query.withMode('query').withContext('interactive');
-        for (const phone of phoneArr.slice(i, i + 20)) { const u = new USyncUser(); u.withPhone('+' + phone); query.withUser(u); }
-        query.withLIDProtocol().withContactProtocol();
-        const result = await agent.sock!.executeUSyncQuery(query);
-        for (const item of (result?.list) || []) {
-          const lid = (item as any).lid; const id = (item as any).id;
-          if (lid && id && id !== 'undefined') { registerLidMapping(agent, lid, id); resolved++; }
-        }
-      } catch (e) { console.error(`[${agent.config.id}] USyncQuery batch error:`, e); }
-    }
-    // Refresh lead cache
+    const known = new Set(Array.from(agent.lidToPhoneMap.values()).map(j => jidUser(j)));
+    const cutoff = Date.now() - LOOKUP_REPEAT_AFTER_MS;
+    const phones: string[] = [];
     agent.leadPhoneCache.clear();
     for (const doc of leadsSnap.docs) {
       const d = doc.data();
       const p = normalizePhone(String(d.phoneNumber || d.phone || ''));
-      if (p) agent.leadPhoneCache.set(p, { leadId: doc.id, leadName: d.name || null });
+      if (!p) continue;
+      agent.leadPhoneCache.set(p, { leadId: doc.id, leadName: d.name || null });
+      if (known.has(p) || (agent.lookedUpPhones.get(p) || 0) > cutoff || phones.includes(p)) continue;
+      if (phones.length < LOOKUP_MAX_PHONES) phones.push(p);
     }
-    console.log(`[${agent.config.id}] Reverse lookup: ${resolved} new mappings from ${phones.size} phones`);
+    for (let i = 0; i < phones.length; i += LOOKUP_BATCH) {
+      if (agent.connectionStatus !== 'connected' || !agent.sock) break;
+      const batch = phones.slice(i, i + LOOKUP_BATCH);
+      try {
+        const query = new USyncQuery();
+        query.withMode('query').withContext('interactive');
+        for (const phone of batch) { const u = new USyncUser(); u.withPhone('+' + phone); query.withUser(u); }
+        query.withLIDProtocol().withContactProtocol();
+        const result = await agent.sock.executeUSyncQuery(query);
+        for (const p of batch) agent.lookedUpPhones.set(p, Date.now());
+        for (const item of (result?.list) || []) {
+          const lid = (item as any).lid; const id = (item as any).id;
+          const phoneJid = canonicalPhoneJid(id);
+          if (phoneJid) onWaCache.set(jidUser(phoneJid), { exists: !!(item as any).contact, jid: phoneJid, at: Date.now() });
+          if (lid && phoneJid && !agent.lidToPhoneMap.has(String(lid))) { await registerLidMapping(agent, lid, phoneJid); resolved++; }
+        }
+      } catch (e) { console.error(`[${agent.config.id}] USyncQuery batch error:`, e); }
+      if (i + LOOKUP_BATCH < phones.length) await sleep(4_000 + Math.floor(Math.random() * 3_000));
+    }
+    console.log(`[${agent.config.id}] Reverse lookup: ${resolved} mappings të reja nga ${phones.length} numra (${leadsSnap.size} leads)`);
   } catch (e) { console.error(`[${agent.config.id}] Reverse lookup error:`, e); }
+  return resolved;
 }
 
 async function resolveFromGroups(agent: AgentState): Promise<void> {
@@ -761,15 +1084,15 @@ async function resolveFromGroups(agent: AgentState): Promise<void> {
     let newMappings = 0;
     for (const group of Object.values(groups)) {
       for (const p of group.participants) {
-        if (p.lid && p.id && !p.id.endsWith('@lid')) {
-          const lid = p.lid.endsWith('@lid') ? p.lid : `${p.lid}@lid`;
-          const pjid = p.id.endsWith('@s.whatsapp.net') ? p.id : `${p.id}@s.whatsapp.net`;
-          if (!agent.lidToPhoneMap.has(lid)) { registerLidMapping(agent, lid, pjid); newMappings++; }
+        const anyP = p as any;
+        if (anyP.lid && p.id && !p.id.endsWith('@lid')) {
+          const lid = String(anyP.lid).endsWith('@lid') ? anyP.lid : `${anyP.lid}@lid`;
+          if (!agent.lidToPhoneMap.has(lid)) { await registerLidMapping(agent, lid, p.id); newMappings++; }
         }
-        if ((p as any).phoneNumber && p.id?.endsWith('@lid')) {
-          const pn = (p as any).phoneNumber;
-          const pjid = pn.endsWith('@s.whatsapp.net') ? pn : `${pn}@s.whatsapp.net`;
-          if (!agent.lidToPhoneMap.has(p.id)) { registerLidMapping(agent, p.id, pjid); newMappings++; }
+        if (anyP.phoneNumber && p.id?.endsWith('@lid')) {
+          const pn = String(anyP.phoneNumber);
+          const pjid = pn.includes('@') ? pn : `${pn}@s.whatsapp.net`;
+          if (!agent.lidToPhoneMap.has(p.id)) { await registerLidMapping(agent, p.id, pjid); newMappings++; }
         }
       }
     }
@@ -777,288 +1100,518 @@ async function resolveFromGroups(agent: AgentState): Promise<void> {
   } catch (e) { console.error(`[${agent.config.id}] Group resolution error:`, e); }
 }
 
+// ── Message content ───────────────────────────────────────────────────────────
+
+/** Peel the wrappers WhatsApp puts around real content (disappearing, view-once, captioned documents). */
+function unwrapMessage(m: any, depth = 0): any {
+  if (!m || typeof m !== 'object' || depth > 8) return m;
+  const inner = m.ephemeralMessage?.message
+    || m.viewOnceMessage?.message
+    || m.viewOnceMessageV2?.message
+    || m.viewOnceMessageV2Extension?.message
+    || m.documentWithCaptionMessage?.message;
+  return inner ? unwrapMessage(inner, depth + 1) : m;
+}
+
+/** Keys that carry no user content on their own (key distribution, context metadata). */
+const NON_CONTENT_KEYS = new Set(['senderKeyDistributionMessage', 'messageContextInfo']);
+
+/**
+ * What a message is, for the inbox. Reactions, protocol messages (revoke,
+ * ephemeral settings, history notifications), edits and bare key-distribution
+ * stanzas used to become a `[Media]` row each — they are not messages.
+ */
+function classifyContent(c: any): 'reaction' | 'skip' | 'message' {
+  if (!c || typeof c !== 'object') return 'skip';
+  if (c.reactionMessage) return 'reaction';
+  if (c.protocolMessage || c.editedMessage || c.pollUpdateMessage || c.keepInChatMessage || c.encReactionMessage) return 'skip';
+  const keys = Object.keys(c).filter(k => c[k] != null && !NON_CONTENT_KEYS.has(k));
+  return keys.length ? 'message' : 'skip';
+}
+
+function extractContent(c: any): { text: string; kind: 'text' | 'media' } {
+  const s = (v: unknown) => (typeof v === 'string' && v.trim() ? v : '');
+  if (s(c.conversation)) return { text: c.conversation, kind: 'text' };
+  if (s(c.extendedTextMessage?.text)) return { text: c.extendedTextMessage.text, kind: 'text' };
+  if (c.imageMessage) return { text: s(c.imageMessage.caption) || '[Foto]', kind: 'media' };
+  if (c.videoMessage || c.ptvMessage) return { text: s(c.videoMessage?.caption) || '[Video]', kind: 'media' };
+  if (c.documentMessage) {
+    return { text: s(c.documentMessage.caption) || `[Dokument: ${s(c.documentMessage.fileName) || s(c.documentMessage.title) || 'skedar'}]`, kind: 'media' };
+  }
+  if (c.audioMessage) return { text: '[Audio]', kind: 'media' };
+  if (c.stickerMessage) return { text: '[Stiker]', kind: 'media' };
+  const br = c.buttonsResponseMessage;
+  if (br) return { text: s(br.selectedDisplayText) || s(br.selectedButtonId) || '[Përgjigje]', kind: 'text' };
+  const lr = c.listResponseMessage;
+  if (lr) return { text: s(lr.title) || s(lr.singleSelectReply?.selectedRowId) || s(lr.description) || '[Përgjigje]', kind: 'text' };
+  const tr = c.templateButtonReplyMessage;
+  if (tr) return { text: s(tr.selectedDisplayText) || s(tr.selectedId) || '[Përgjigje]', kind: 'text' };
+  const ir = c.interactiveResponseMessage;
+  if (ir) return { text: s(ir.body?.text) || '[Përgjigje]', kind: 'text' };
+  if (c.locationMessage || c.liveLocationMessage) return { text: '[Vendndodhje]', kind: 'media' };
+  if (c.contactMessage) return { text: `[Kontakt: ${s(c.contactMessage.displayName) || '—'}]`, kind: 'media' };
+  if (c.contactsArrayMessage) return { text: '[Kontakte]', kind: 'media' };
+  if (c.pollCreationMessage || c.pollCreationMessageV2 || c.pollCreationMessageV3) return { text: '[Sondazh]', kind: 'media' };
+  return { text: '[Media]', kind: 'media' };
+}
+
+/** A reaction updates `reactions.me|contact` on the row it reacts to (if we have it) — never a new row. */
+async function applyReaction(agent: AgentState, reaction: any, isFromMe: boolean): Promise<void> {
+  const targetId = reaction?.key?.id;
+  if (!targetId) return;
+  try {
+    const found = await findRowRef(agent, String(targetId));
+    if (!found) return;
+    const emoji = typeof reaction.text === 'string' ? reaction.text : '';
+    await found.ref.update({
+      [`reactions.${isFromMe ? 'me' : 'contact'}`]: emoji ? emoji : admin.firestore.FieldValue.delete(),
+      updatedAt: nowTs(),
+    });
+  } catch (e) { console.warn(`[${agent.config.id}] reaction update dështoi:`, (e as Error)?.message || e); }
+}
+
+/** Baileys `getMessage`: the retry path asks for a message we sent — answer from our own row. */
+async function getStoredMessage(agent: AgentState, key: any): Promise<{ conversation: string } | undefined> {
+  try {
+    if (!key?.id) return undefined;
+    const found = await findRowRef(agent, String(key.id));
+    const text = found?.data?.message;
+    if (found && found.data.direction === 'outbound' && typeof text === 'string' && text) return { conversation: text };
+  } catch { /* fall through */ }
+  return undefined;
+}
+
+/**
+ * Apply a receipt to OUR outbound row. Never downgrades (read → delivered), never
+ * touches an inbound row (a "read-self" receipt is about a message we received),
+ * and lets a late receipt rescue a row the sweeper had marked `no-ack`.
+ */
+async function applyReceipt(agent: AgentState, waId: string, newStatus: 'failed' | 'sent' | 'delivered' | 'read', error?: string): Promise<void> {
+  try {
+    const found = await findRowRef(agent, waId);
+    if (!found || found.data.direction !== 'outbound') return;
+    const current = String(found.data.status || '');
+    if (newStatus === 'failed') {
+      if (current === 'failed' || (STATUS_RANK[current] ?? -1) >= STATUS_RANK.delivered) return;
+      await found.ref.update({ status: 'failed', error: error || 'WhatsApp e refuzoi mesazhin', updatedAt: nowTs() });
+      return;
+    }
+    if (current === 'failed' && found.data.error !== 'no-ack') return;
+    if (current !== 'failed' && (STATUS_RANK[current] ?? -1) >= STATUS_RANK[newStatus]) return;
+    await found.ref.update({
+      status: newStatus,
+      ...(current === 'failed' ? { error: admin.firestore.FieldValue.delete() } : {}),
+      updatedAt: nowTs(),
+    });
+  } catch (e) { console.error(`[${agent.config.id}] Error updating receipt:`, e); }
+}
+
 // ── Connect per agent ─────────────────────────────────────────────────────────
-async function connectAgent(agent: AgentState): Promise<void> {
+
+/** Exponential backoff 5 s → 5 min with ±20 % jitter (a fleet of agents must not reconnect in lockstep). */
+function backoffDelay(attempt: number): number {
+  const base = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(attempt, 10));
+  return Math.round(base * (0.8 + Math.random() * 0.4));
+}
+
+function scheduleReconnect(agent: AgentState, why: string, delayMs?: number): void {
+  if (agent.unloading || TERMINAL_STATUSES.has(agent.connectionStatus)) return;
+  if (agent.reconnectTimer) clearTimeout(agent.reconnectTimer);
+  const delay = delayMs ?? backoffDelay(agent.reconnectAttempts++);
+  console.log(`[${agent.config.id}] Rilidhje pas ${Math.round(delay / 1000)}s (${why})`);
+  agent.reconnectTimer = setTimeout(() => {
+    agent.reconnectTimer = null;
+    connectAgent(agent).catch(e => console.error(`[${agent.config.id}] reconnect error:`, e));
+  }, delay);
+}
+
+let cachedBaileysVersion: { v: [number, number, number]; at: number } | null = null;
+async function baileysVersion(agentId: string): Promise<[number, number, number]> {
+  if (cachedBaileysVersion && Date.now() - cachedBaileysVersion.at < 6 * 60 * 60 * 1000) return cachedBaileysVersion.v;
+  try {
+    const r = await Promise.race([fetchLatestBaileysVersion(), sleep(8_000).then(() => null)]);
+    if (r?.version) { cachedBaileysVersion = { v: r.version as [number, number, number], at: Date.now() }; return cachedBaileysVersion.v; }
+  } catch (e) { console.warn(`[${agentId}] fetchLatestBaileysVersion dështoi, duke përdorur version fallback:`, e); }
+  return cachedBaileysVersion?.v || [2, 3000, 1015901307];
+}
+
+/**
+ * Open the agent's socket. Concurrent callers (boot, reconcile, /sync, a reconnect
+ * timer, an explicit QR request) JOIN the in-flight attempt — two of them used to
+ * open two sockets for one number, which WhatsApp answers with 440 on both.
+ */
+function connectAgent(agent: AgentState): Promise<void> {
+  if (agent.connecting) return agent.connecting;
+  const p: Promise<void> = doConnect(agent).finally(() => { if (agent.connecting === p) agent.connecting = null; });
+  agent.connecting = p;
+  return p;
+}
+
+async function doConnect(agent: AgentState): Promise<void> {
+  const id = agent.config.id;
+  if (agent.unloading) return;
   if (agent.reconnectTimer) { clearTimeout(agent.reconnectTimer); agent.reconnectTimer = null; }
+  if (agent.sock) teardownSocket(agent); // never two sockets for one number
   agent.connectionStatus = 'connecting';
-  console.log(`[${agent.config.id}] Duke u lidhur...`);
+  agent.qrDataUrl = null;
+  agent.sawQr = false;
+  console.log(`[${id}] Duke u lidhur...`);
+  try {
+    const dir = authDir(id);
+    const { state, saveCreds } = await useMultiFileAuthState(dir);
+    const version = await baileysVersion(id);
+    if (agent.unloading) return;
+    if (agent.sock) teardownSocket(agent);
+    const sock = makeWASocket({
+      version, auth: state,
+      logger: pino({ level: BAILEYS_LOG_LEVEL }),
+      browser: ['Business CRM', 'Chrome', '1.0.0'],
+      printQRInTerminal: false,
+      shouldSyncHistoryMessage: () => true,
+      // A CRM companion must not flip the phone's presence to "online" (and kill
+      // its push notifications) every time the VPS reconnects.
+      markOnlineOnConnect: false,
+      // Retry bookkeeping across reconnects + the message body for retry requests;
+      // without these a recipient that failed to decrypt gets "Waiting for this message".
+      msgRetryCounterCache: agent.msgRetryCache,
+      getMessage: (key) => getStoredMessage(agent, key),
+    });
+    agent.sock = sock;
+    agent.authCreds = state.creds;
+    attachSocketHandlers(agent, sock, saveCreds, dir);
+  } catch (e) {
+    console.error(`[${id}] connectAgent dështoi:`, e);
+    agent.connectionStatus = 'disconnected';
+    scheduleReconnect(agent, 'connect-error');
+  }
+}
 
-  const dir = authDir(agent.config.id);
-  const { state, saveCreds } = await useMultiFileAuthState(dir);
-  let version: [number, number, number] = [2, 3000, 1015901307];
-  try { const v = await fetchLatestBaileysVersion(); version = v.version; } catch (e) { console.warn(`[${agent.config.id}] fetchLatestBaileysVersion dështoi, duke përdorur version fallback:`, e); }
-  agent.authKeys = state.keys as any;
+/** Explicit "show me a QR / reconnect" (the user is looking): leaves a terminal state, at most once a minute. */
+function requestFreshConnection(agent: AgentState): boolean {
+  if (agent.unloading || agent.connecting || agent.sock) return false;
+  if (!TERMINAL_STATUSES.has(agent.connectionStatus) && agent.connectionStatus !== 'disconnected') return false;
+  if (Date.now() - agent.lastExplicitStartAt < 60_000) return false;
+  agent.lastExplicitStartAt = Date.now();
+  if (agent.reconnectTimer) { clearTimeout(agent.reconnectTimer); agent.reconnectTimer = null; }
+  agent.reconnectAttempts = 0;
+  agent.connectionStatus = 'connecting';
+  console.log(`[${agent.config.id}] Rilidhje e kërkuar nga përdoruesi`);
+  connectAgent(agent).catch(e => console.error(`[${agent.config.id}] connectAgent error:`, e));
+  return true;
+}
 
-  agent.sock = makeWASocket({
-    version, auth: state,
-    logger: pino({ level: BAILEYS_LOG_LEVEL }),
-    browser: ['Business CRM', 'Chrome', '1.0.0'],
-    printQRInTerminal: false,
-    shouldSyncHistoryMessage: () => true,
+/**
+ * Closed socket → what next, by DisconnectReason:
+ *   loggedOut (401)        → wipe the session, stop (`logged_out`); a new QR only on request
+ *   connectionReplaced(440)→ stop (`replaced`) — reconnecting just kicks the other session, forever
+ *   forbidden (403)        → stop (`banned`)
+ *   badSession (500)       → wipe, stop (`bad_session`)
+ *   restartRequired (515)  → reconnect immediately (normal right after pairing)
+ *   unscanned QR timed out → stop (`qr_timeout`)
+ *   anything else          → exponential backoff 5 s → 5 min
+ */
+function onSocketClosed(agent: AgentState, sock: ReturnType<typeof makeWASocket>, error: unknown, dir: string): void {
+  if (agent.sock !== sock) return; // a socket we already replaced or tore down
+  agent.sock = null;
+  detachSocket(sock);
+  agent.qrDataUrl = null;
+  // Nobody is going to ack a message on a closed socket.
+  rejectAckWaiters(agent, -1);
+  const code: number | null = (error as Boom)?.output?.statusCode ?? null;
+  const name = (code != null && DISCONNECT_NAMES[code]) || (error as Error)?.message?.slice(0, 80) || 'unknown';
+  agent.lastDisconnect = { code, name, at: new Date().toISOString() };
+  const registered = !!agent.authCreds?.registered;
+
+  let next: ConnectionStatus = 'disconnected';
+  let action: 'stop' | 'wipe-stop' | 'now' | 'backoff' = 'backoff';
+  if (code === DisconnectReason.loggedOut) { next = 'logged_out'; action = 'wipe-stop'; }
+  else if (code === DisconnectReason.connectionReplaced) { next = 'replaced'; action = 'stop'; }
+  else if (code === DisconnectReason.forbidden) { next = 'banned'; action = 'stop'; }
+  else if (code === DisconnectReason.badSession) { next = 'bad_session'; action = 'wipe-stop'; }
+  else if (code === DisconnectReason.restartRequired) { next = 'connecting'; action = 'now'; }
+  else if (!registered && agent.sawQr && code === DisconnectReason.timedOut) { next = 'qr_timeout'; action = 'stop'; }
+
+  agent.connectionStatus = next;
+  console.log(`[${agent.config.id}] Lidhja u ndërpre (${code} ${name}) → ${next}`);
+  if (action === 'wipe-stop') {
+    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    agent.connectedPhone = null;
+  }
+  // Cilësimet reads this so "Lidhur" reflects the socket, and the cron alerts
+  // staff from connectionStatus + lastDisconnectReason.
+  writeAccountStatus(agent, {
+    connectionStatus: next,
+    lastDisconnectedAt: nowTs(),
+    lastDisconnectReason: { code, name },
+    ...(action === 'wipe-stop' ? { connectedPhone: null } : {}),
   });
+  if (agent.unloading) return; // account deleted/disabled — never reconnect
+  if (action === 'now') scheduleReconnect(agent, name, 0);
+  else if (action === 'backoff') scheduleReconnect(agent, name);
+}
 
-  agent.sock.ev.on('creds.update', saveCreds);
+function onSocketOpen(agent: AgentState, sock: ReturnType<typeof makeWASocket>): void {
+  if (agent.sock !== sock) return;
+  agent.connectionStatus = 'connected'; agent.qrDataUrl = null;
+  agent.reconnectAttempts = 0;
+  agent.lastConnectedAt = new Date();
+  console.log(`[${agent.config.id}] ✅ I lidhur!`);
+  const myPhone = normalizePhone(jidUser(sock.user?.id || ''));
+  if (myPhone) agent.connectedPhone = myPhone;
+  writeAccountStatus(agent, {
+    connectionStatus: 'connected',
+    lastConnectedAt: nowTs(),
+    ...(myPhone ? { connectedPhone: myPhone } : {}),
+  });
+  // Rationed (24h gate inside) — a reconnect no longer triggers a USync burst.
+  setTimeout(() => { if (agent.sock === sock) void maybeRunDailyLookups(agent); }, 30_000);
+}
 
-  agent.sock.ev.on('connection.update', async (update) => {
+function attachSocketHandlers(agent: AgentState, sock: ReturnType<typeof makeWASocket>, saveCreds: () => Promise<void>, dir: string): void {
+  const live = () => agent.sock === sock && !agent.unloading;
+
+  sock.ev.on('creds.update', () => { if (live()) saveCreds().catch(e => console.error(`[${agent.config.id}] saveCreds:`, e)); });
+
+  sock.ev.on('connection.update', async (update) => {
+    if (!live()) return;
     const { connection, lastDisconnect, qr } = update;
     if (qr) {
-      agent.qrDataUrl = await QRCode.toDataURL(qr);
+      agent.sawQr = true;
+      try { agent.qrDataUrl = await QRCode.toDataURL(qr); } catch {}
+      if (!live()) return;
       agent.connectionStatus = 'qr_ready';
-      console.log(`[${agent.config.id}] QR gati → http://your-vps-ip:${PORT}/qr/${agent.config.id}`);
+      console.log(`[${agent.config.id}] QR gati → /qr/${agent.config.id}`);
     }
-    if (connection === 'close') {
-      agent.connectionStatus = 'disconnected'; agent.qrDataUrl = null;
-      // Nobody is going to ack a message on a closed socket.
-      for (const resolve of agent.ackWaiters.values()) resolve(-1);
-      agent.ackWaiters.clear();
-      const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      const isLoggedOut = code === DisconnectReason.loggedOut;
-      console.log(`[${agent.config.id}] Lidhja u ndërpre (${code})`);
-      // Cilësimet reads this so "Lidhur" reflects the socket, not a phone number
-      // stamped once at the first successful scan.
-      db.collection('whatsappAccounts').doc(agent.config.id).update({
-        connectionStatus: 'disconnected',
-        lastDisconnectedAt: admin.firestore.Timestamp.fromDate(new Date()),
-        ...(isLoggedOut ? { connectedPhone: null } : {}),
-      }).catch(() => {});
-      if (agent.unloading) return; // account deleted/disabled — never reconnect
-      if (isLoggedOut) {
-        try { rmSync(dir, { recursive: true, force: true }); } catch {}
-        console.log(`[${agent.config.id}] Sesion u fshi — QR i ri në 3s...`);
-        agent.reconnectTimer = setTimeout(() => connectAgent(agent).catch(e => console.error(`[${agent.config.id}] reconnect error:`, e)), 3000);
-        return;
-      }
-      agent.reconnectTimer = setTimeout(() => connectAgent(agent).catch(e => console.error(`[${agent.config.id}] reconnect error:`, e)), 5000);
-    }
-    if (connection === 'open') {
-      agent.connectionStatus = 'connected'; agent.qrDataUrl = null;
-      console.log(`[${agent.config.id}] ✅ I lidhur!`);
-      // Save connected phone to Firestore for UI display
-      try {
-        const rawId = (agent.sock as any)?.user?.id?.split(':')[0]?.split('@')[0] || '';
-        const myPhone = normalizePhone(rawId);
-        if (myPhone) {
-          agent.connectedPhone = myPhone;
-          await db.collection('whatsappAccounts').doc(agent.config.id).update({ connectedPhone: myPhone, connectionStatus: 'connected', lastConnectedAt: admin.firestore.Timestamp.fromDate(new Date()) }).catch(() => {});
-        }
-      } catch {}
-      setTimeout(() => readBaileysLidMappings(agent), 3000);
-      setTimeout(() => reverseLookupLeads(agent), 8000);
-      setTimeout(() => resolveFromGroups(agent), 20000);
-      if (agent.lidResyncTimer) clearInterval(agent.lidResyncTimer);
-      agent.lidResyncTimer = setInterval(async () => {
-        if (agent.connectionStatus === 'connected' && agent.sock) {
-          await reverseLookupLeads(agent); await resolveFromGroups(agent);
-        }
-      }, 30 * 60 * 1000);
-    }
+    if (connection === 'close') onSocketClosed(agent, sock, lastDisconnect?.error, dir);
+    if (connection === 'open') onSocketOpen(agent, sock);
   });
 
-  (agent.sock.ev as any).on('lid-mapping.update', ({ lid, pn }: { lid: string; pn: string }) => { registerLidMapping(agent, lid, pn); });
+  // The SERVER ack of a message we sent. On 6.7.24 Baileys handles this frame only
+  // for errors, so messages.update never reports SERVER_ACK — the first status we
+  // used to see was the PHONE's delivery receipt, and a phone that is off kept a
+  // message "pending" all night. This frame is WhatsApp saying "accepted".
+  (sock.ws as any).on(SERVER_ACK_FRAME, (node: any) => {
+    if (!live()) return;
+    const id = node?.attrs?.id;
+    if (!id || !agent.outstanding.has(id)) return; // only ids /send handed to this socket
+    agent.outstanding.delete(id);
+    const err = node?.attrs?.error;
+    agent.ackWaiters.get(id)?.(err ? 0 : 2);
+    void applyReceipt(agent, id, err ? 'failed' : 'sent', err ? `server-ack-error-${err}` : undefined);
+  });
 
-  agent.sock.ev.on('contacts.upsert', (contacts) => {
+  sock.ev.on('contacts.upsert', (contacts) => {
+    if (!live()) return;
     for (const c of contacts) {
       const lid = (c as any).lid as string | undefined;
-      if (lid && c.id) registerLidMapping(agent, lid, c.id);
+      if (lid && c.id) void registerLidMapping(agent, lid, c.id);
       const name = (c as any).notify || (c as any).name || null;
-      if (name && c.id?.endsWith('@s.whatsapp.net')) syncContactName(agent, c.id, name);
+      if (name && c.id?.endsWith('@s.whatsapp.net')) void syncContactName(agent, c.id, name);
     }
   });
 
-  agent.sock.ev.on('contacts.update', (updates) => {
+  sock.ev.on('contacts.update', (updates) => {
+    if (!live()) return;
     for (const u of updates) {
       const lid = (u as any).lid as string | undefined;
-      if (lid && u.id) registerLidMapping(agent, lid, u.id);
+      if (lid && u.id) void registerLidMapping(agent, lid, u.id);
       const name = (u as any).notify || (u as any).name || null;
-      if (name && u.id?.endsWith('@s.whatsapp.net')) syncContactName(agent, u.id, name);
+      if (name && u.id?.endsWith('@s.whatsapp.net')) void syncContactName(agent, u.id, name);
     }
   });
 
-  agent.sock.ev.on('messaging-history.set', (data: any) => {
+  // History sync: harvest LID ↔ phone pairs only. Its messages are NOT written —
+  // a replay must never resurrect rows or flip read state.
+  sock.ev.on('messaging-history.set', (data: any) => {
+    if (!live()) return;
     for (const m of (data.lidPnMappings || data.phoneNumberToLidMappings || [])) {
       const lid = m.lid || m.lidJid; const pn = m.pn || m.pnJid;
-      if (lid && pn) registerLidMapping(agent, lid, pn);
+      if (lid && pn) void registerLidMapping(agent, lid, pn);
     }
     for (const c of (data.contacts || [])) {
       const lid = (c as any).lid as string | undefined; const pn = c.id || (c as any).phoneNumber;
-      if (lid && pn) registerLidMapping(agent, lid, pn);
+      if (lid && pn) void registerLidMapping(agent, lid, pn);
       const name = (c as any).notify || (c as any).name || null;
-      if (name && c.id?.endsWith('@s.whatsapp.net')) syncContactName(agent, c.id, name);
+      if (name && c.id?.endsWith('@s.whatsapp.net')) void syncContactName(agent, c.id, name);
     }
     for (const ch of (data.chats || [])) {
       const lid = (ch as any).lid || (ch as any).lidJid; const pn = ch.id || (ch as any).pnJid;
-      if (lid && pn && !pn.endsWith('@g.us')) registerLidMapping(agent, lid, pn);
+      if (lid && pn) void registerLidMapping(agent, lid, pn);
     }
   });
 
-  agent.sock.ev.on('messages.upsert', async ({ messages, type }) => {
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (!live()) return;
     for (const msg of messages) {
-      if (!msg.message) continue;
-      const isFromMe = !!msg.key.fromMe;
-
-      // Process 'notify' (live) messages for both directions.
-      // Also process recent inbound 'append' messages — these are messages that arrived
-      // while the VPS was briefly offline and are replayed on reconnect.
-      if (type !== 'notify') {
-        if (type !== 'append') continue;
-        if (isFromMe) continue;
-        const msgTs = Number(msg.messageTimestamp) * 1000;
-        if (Date.now() - msgTs > 24 * 60 * 60 * 1000) continue;
-      }
-
-      const rawJid = msg.key.remoteJid || '';
-      // Only PEOPLE become contacts. Groups (@g.us), WhatsApp Channels (@newsletter)
-      // and status posts (@broadcast) carry an 18-digit id, not a phone number — a
-      // political news channel used to be minted as a CRM lead per post.
-      if (!isPersonJid(rawJid)) continue;
-
-      let resolvedJid = rawJid; let isLid = false;
-      if (rawJid.endsWith('@lid')) {
-        const phoneJid = agent.lidToPhoneMap.get(rawJid);
-        if (phoneJid) { resolvedJid = phoneJid; } else { isLid = true; }
-      }
-
-      const phone = normalizePhone(resolvedJid.split('@')[0]);
-      if (!phone || !isPlausiblePhone(phone)) continue;
-
-      const body = msg.message.conversation || msg.message.extendedTextMessage?.text || '[Media]';
-      const ts = new Date(Number(msg.messageTimestamp) * 1000);
-      const waMessageId = msg.key.id || null;
-      const pushName = (msg as any).pushName || null;
-      const docId = waMessageId || db.collection('whatsappMessages').doc().id;
-
-      if (isFromMe && waMessageId) {
-        const existing = await db.collection('whatsappMessages').doc(docId).get();
-        if (existing.exists) continue;
-      }
-
-      const { leadId: autoLeadId, leadName: autoLeadName } = await lookupLeadByPhone(agent, phone);
-      try {
-        await db.collection('whatsappMessages').doc(docId).set({
-          phone, jid: resolvedJid,
-          direction: isFromMe ? 'outbound' : 'inbound',
-          message: body, waMessageId,
-          leadId: autoLeadId, leadName: autoLeadName || pushName, pushName,
-          teamId: agent.config.teamId,
-          agentId: agent.config.id,
-          channelPhone: agent.connectedPhone || agent.config.id,
-          status: isFromMe ? 'sent' : 'received',
-          channel: 'baileys', isLid,
-          createdAt: admin.firestore.Timestamp.fromDate(ts),
-          updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
-        }, { merge: true });
-
-        // Track last inbound for 24h-window awareness (baileys side).
-        if (!isFromMe && agent.config.teamId) {
-          try {
-            const convId = `${agent.config.teamId}_${phone}`;
-            await db.collection('whatsappConversations').doc(convId).set({
-              teamId: agent.config.teamId,
-              phone,
-              lastInboundAt: admin.firestore.Timestamp.fromDate(ts),
-              channel: 'baileys',
-              updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
-            }, { merge: true });
-          } catch (e) { /* non-critical */ }
-        }
-
-        if (isLid) {
-          const queue = agent.pendingLidMessages.get(rawJid) || [];
-          queue.push(docId);
-          agent.pendingLidMessages.set(rawJid, queue);
-        } else {
-          console.log(`[${agent.config.id}] ${isFromMe ? '→' : '←'} ${maskPhone(phone)}: ${maskBody(body)}`);
-        }
-
-        // Hand the event to the CRM's shared inbound handler (identity → conversation →
-        // notification → auto-reply). The row above is already durable, so this is
-        // fire-and-forget with retries; a LID-only jid is skipped until its phone is known.
-        // fromMe = the staff answered from the PHONE — the cheapest "replied" signal we have.
-        if (!isLid) {
-          const m = msg.message as any;
-          const kind = m.reactionMessage ? 'reaction'
-            : m.protocolMessage ? 'system'
-            : (m.conversation || m.extendedTextMessage?.text) ? 'text'
-            : 'media';
-          void postWaEvent({
-            channel: 'baileys',
-            direction: isFromMe ? 'outbound' : 'inbound',
-            teamId: agent.config.teamId,
-            agentId: agent.config.id,
-            metaPhoneNumberId: null,
-            channelPhone: agent.connectedPhone || agent.config.id,
-            waMessageId: docId,
-            phone,
-            jid: resolvedJid,
-            isLid: false,
-            text: body,
-            kind,
-            pushName,
-            isAutoReply: false,
-            timestamp: ts.toISOString(),
-          });
-        }
-      } catch (e) { console.error(`[${agent.config.id}] Error saving message:`, e); }
+      try { await handleUpsertMessage(agent, msg, type); }
+      catch (e) { console.error(`[${agent.config.id}] Error saving message:`, e); }
     }
   });
 
   // Receipts: 0 ERROR, 1 PENDING, 2 SERVER_ACK, 3 DELIVERY_ACK, 4 READ, 5 PLAYED.
-  // Status 2 is the first proof WhatsApp accepted the message — /send waits for it.
-  agent.sock.ev.on('messages.update', async (updates) => {
+  sock.ev.on('messages.update', async (updates) => {
+    if (!live()) return;
     for (const update of updates) {
       const waMessageId = update.key?.id; if (!waMessageId) continue;
       const code = (update.update as any)?.status;
       if (typeof code !== 'number') continue;
+      const newStatus = RECEIPT_STATUS[code]; if (!newStatus) continue; // 1 = PENDING is not a receipt
+      agent.outstanding.delete(waMessageId);
       agent.ackWaiters.get(waMessageId)?.(code);
-      const newStatus = RECEIPT_STATUS[code]; if (!newStatus) continue;
-      try {
-        // Our rows use the WhatsApp id as the document id (one read, no index);
-        // fall back to the query for rows that predate that convention.
-        const direct = db.collection('whatsappMessages').doc(waMessageId);
-        const directSnap = await direct.get();
-        const ref = directSnap.exists
-          ? direct
-          : (await db.collection('whatsappMessages').where('waMessageId', '==', waMessageId).limit(1).get()).docs[0]?.ref;
-        if (!ref) continue;
-        const current = directSnap.exists ? directSnap.data()?.status : undefined;
-        // Receipts can arrive out of order; never downgrade read → delivered → sent.
-        const rank: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3 };
-        if (newStatus !== 'failed' && current && (rank[current] ?? -1) > rank[newStatus]) continue;
-        await ref.update({ status: newStatus, updatedAt: admin.firestore.Timestamp.fromDate(new Date()) });
-      } catch (e) { console.error(`[${agent.config.id}] Error updating receipt:`, e); }
+      await applyReceipt(agent, waMessageId, newStatus, code === 0 ? 'WhatsApp e refuzoi mesazhin' : undefined);
     }
   });
 }
 
-// ── Agent loading from Firestore ──────────────────────────────────────────────
-async function loadAgents(): Promise<void> {
-  try {
-    const snap = await db.collection('whatsappAccounts').where('enabled', '==', true).get();
-    for (const doc of snap.docs) {
-      const data = doc.data();
-      const config: AgentConfig = {
-        id: doc.id,
-        teamId: data.teamId || DEFAULT_TEAM_ID,
-        label: data.label || doc.id,
-        assignedToUserId: data.assignedToUserId,
-        enabled: true,
-      };
-      const agent = createAgentState(config);
-      agent.cacheEvictTimer = setInterval(() => agent.leadPhoneCache.clear(), 6 * 60 * 60 * 1000);
-      agents.set(doc.id, agent);
-      console.log(`[VPS] Agent ngarkuar: ${config.id} (${config.label})`);
-    }
-  } catch (e) { console.error('[VPS] Error loading agents:', e); }
+/**
+ * One upserted message → one `whatsappMessages` row (created, never overwritten)
+ * → the CRM's inbound handler.
+ */
+async function handleUpsertMessage(agent: AgentState, msg: any, type: string): Promise<void> {
+  if (!msg?.message) return;
+  const isFromMe = !!msg.key?.fromMe;
 
-  // Backward compat: if no agents in Firestore, use env TEAM_ID as default
-  if (agents.size === 0) {
-    console.log('[VPS] Asnjë agent në Firestore — duke përdorur default nga env');
-    const config: AgentConfig = { id: 'default', teamId: DEFAULT_TEAM_ID, label: 'Default', enabled: true };
-    const agent = createAgentState(config);
-    agent.cacheEvictTimer = setInterval(() => agent.leadPhoneCache.clear(), 6 * 60 * 60 * 1000);
-    agents.set('default', agent);
+  // Process 'notify' (live) messages for both directions.
+  // Also process recent inbound 'append' messages — these are messages that arrived
+  // while the VPS was briefly offline and are replayed on reconnect. Rows are
+  // created with create(), so a replay of a message we already have is a no-op
+  // (it never re-marks anything unread).
+  if (type !== 'notify') {
+    if (type !== 'append') return;
+    if (isFromMe) return;
+    const msgTs = Number(msg.messageTimestamp) * 1000;
+    if (Date.now() - msgTs > 24 * 60 * 60 * 1000) return;
   }
+
+  const rawJid: string = msg.key.remoteJid || '';
+  // Only PEOPLE become contacts. Groups (@g.us), WhatsApp Channels (@newsletter)
+  // and status posts (@broadcast) carry an 18-digit id, not a phone number — a
+  // political news channel used to be minted as a CRM lead per post.
+  if (!isPersonJid(rawJid)) return;
+
+  const content = unwrapMessage(msg.message);
+  const cls = classifyContent(content);
+  if (cls === 'reaction') { await applyReaction(agent, content.reactionMessage, isFromMe); return; }
+  if (cls === 'skip') return;
+
+  // ── Who is this? ──
+  // Baileys 6.7.24 exposes the phone behind a LID chat on the key itself
+  // (`senderPn` = stanza attr sender_pn). The old resolver listened for the 7.x
+  // 'lid-mapping.update' event and read 7.x key files — both dead on 6.7.24, so
+  // LID senders stayed unresolved and never reached the CRM. senderPn is only
+  // trusted for messages FROM the contact: on a fromMe stanza it is our number.
+  const key = msg.key as any;
+  let resolvedJid = rawJid; let isLid = false; let lidJid: string | null = null;
+  if (rawJid.endsWith('@lid')) {
+    lidJid = canonicalLidJid(rawJid);
+    if (!lidJid) return;
+    let phoneJid = agent.lidToPhoneMap.get(lidJid) || null;
+    if (!phoneJid && !isFromMe) {
+      const pn = canonicalPhoneJid(key.senderPn) || canonicalPhoneJid(key.participantPn);
+      if (pn) { await registerLidMapping(agent, lidJid, pn); phoneJid = agent.lidToPhoneMap.get(lidJid) || null; }
+    }
+    if (phoneJid) resolvedJid = phoneJid; else isLid = true;
+  } else if (!isFromMe && key.senderLid) {
+    void registerLidMapping(agent, key.senderLid, rawJid);
+  }
+
+  // An unresolved LID row keeps the LID digits in `phone` (one thread per LID in
+  // the inbox, backfilled to the real number once the mapping is learnt) — the
+  // LID is NOT run through normalizePhone, it is not a phone.
+  const phone = isLid ? jidUser(lidJid!) : normalizePhone(jidUser(resolvedJid));
+  if (!phone) return;
+
+  const { text: body, kind } = extractContent(content);
+  const ts = new Date(Number(msg.messageTimestamp) * 1000 || Date.now());
+  const waId: string | null = msg.key.id || null;
+  // pushName on a fromMe stanza is OUR profile name, not the contact's.
+  const pushName = !isFromMe ? (msg.pushName || null) : null;
+  const docId = waId ? rowId(agent.config.id, waId) : db.collection('whatsappMessages').doc().id;
+
+  // A message older than this process may already have a row under the legacy bare id.
+  if (waId && ts.getTime() < BOOT_AT_MS) {
+    const legacy = await db.collection('whatsappMessages').doc(waId).get();
+    if (legacy.exists && legacy.data()?.agentId === agent.config.id) return;
+  }
+
+  const { leadId: autoLeadId, leadName: autoLeadName } = isLid
+    ? { leadId: null, leadName: null }
+    : await lookupLeadByPhone(agent, phone);
+  try {
+    await db.collection('whatsappMessages').doc(docId).create({
+      phone, jid: resolvedJid,
+      direction: isFromMe ? 'outbound' : 'inbound',
+      message: body, waMessageId: waId, kind,
+      leadId: autoLeadId, leadName: autoLeadName || pushName, pushName,
+      teamId: agent.config.teamId,
+      agentId: agent.config.id,
+      channelPhone: agent.connectedPhone || agent.config.id,
+      status: isFromMe ? 'sent' : 'received',
+      channel: 'baileys', isLid,
+      ...(lidJid ? { lid: lidJid } : {}),
+      createdAt: admin.firestore.Timestamp.fromDate(ts),
+      updatedAt: nowTs(),
+    });
+  } catch (e: any) {
+    // ALREADY_EXISTS: our own /send echo, or a redelivery/replay — the row is there, leave it alone.
+    if (e?.code === 6 || /already exists/i.test(String(e?.message))) return;
+    throw e;
+  }
+
+  // Track last inbound for 24h-window awareness (baileys side).
+  if (!isFromMe && !isLid && agent.config.teamId) {
+    try {
+      const convId = `${agent.config.teamId}_${phone}`;
+      await db.collection('whatsappConversations').doc(convId).set({
+        teamId: agent.config.teamId,
+        phone,
+        lastInboundAt: admin.firestore.Timestamp.fromDate(ts),
+        channel: 'baileys',
+        updatedAt: nowTs(),
+      }, { merge: true });
+    } catch { /* non-critical */ }
+  }
+
+  if (isLid) {
+    const queue = agent.pendingLidMessages.get(lidJid!) || [];
+    queue.push(docId);
+    agent.pendingLidMessages.set(lidJid!, queue);
+    console.log(`[${agent.config.id}] ${isFromMe ? '→' : '←'} ${maskJid(lidJid)} (LID pa numër): ${maskBody(body)}`);
+  } else {
+    console.log(`[${agent.config.id}] ${isFromMe ? '→' : '←'} ${maskPhone(phone)}: ${maskBody(body)}`);
+  }
+
+  // Hand the event to the CRM's shared inbound handler (identity → conversation →
+  // notification → auto-reply). The row above is already durable; delivery is
+  // durable too (outbox). fromMe = the staff answered from the PHONE — the
+  // cheapest "replied" signal we have. A still-unresolved LID is forwarded with
+  // phone '' + `lid`, so the CRM is at least told something arrived.
+  void postWaEvent({
+    channel: 'baileys',
+    direction: isFromMe ? 'outbound' : 'inbound',
+    teamId: agent.config.teamId,
+    agentId: agent.config.id,
+    metaPhoneNumberId: null,
+    channelPhone: agent.connectedPhone || agent.config.id,
+    // == the whatsappMessages document id (the contract of api/_waInbound.ts).
+    waMessageId: docId,
+    messageDocId: docId,
+    docId,
+    waId,
+    phone: isLid ? '' : phone,
+    jid: resolvedJid,
+    isLid,
+    // Bare LID (no @lid), as the api expects.
+    lid: lidJid ? jidUser(lidJid) : null,
+    text: body,
+    kind,
+    pushName,
+    isAutoReply: false,
+    timestamp: ts.toISOString(),
+  }, docId);
 }
+
+// ── Agent lookup ──────────────────────────────────────────────────────────────
 
 /**
  * Loose lookup for the legacy single-agent routes (/qr, /sync redirects): any
@@ -1103,6 +1656,252 @@ function resolveSendAgent(agentId: string | undefined, teamId: string | undefine
     : { ok: false, status: 404, error: 'Ky ekip nuk ka asnjë agent WhatsApp të konfiguruar' };
 }
 
+// ── Outbound: existence check, queue, idempotency ─────────────────────────────
+
+/**
+ * "Is this number on WhatsApp?" — per phone, cached 24h both ways. On 6.7.24 a
+ * send to a number without WhatsApp never gets a receipt, so without this check
+ * the row stayed `pending` forever. exists: null = unknown (timeout/error) → send anyway.
+ */
+const onWaCache = new Map<string, { exists: boolean; jid: string | null; at: number }>();
+async function checkOnWhatsApp(agent: AgentState, phone: string, timeoutMs: number): Promise<{ exists: boolean | null; jid: string | null }> {
+  const hit = onWaCache.get(phone);
+  if (hit && Date.now() - hit.at < ON_WA_TTL_MS) return hit;
+  const unknown = { exists: null, jid: null };
+  if (!agent.sock || timeoutMs < 300) return unknown;
+  try {
+    const res = await Promise.race([agent.sock.onWhatsApp(`${phone}@s.whatsapp.net`), sleep(timeoutMs).then(() => 'timeout' as const)]);
+    if (res === 'timeout' || !Array.isArray(res)) return unknown;
+    const row = res.find((r) => r && r.exists);
+    const entry = row
+      ? { exists: true, jid: canonicalPhoneJid(String(row.jid)) || `${phone}@s.whatsapp.net`, at: Date.now() }
+      : { exists: false, jid: null, at: Date.now() };
+    if (row?.lid && entry.jid) void registerLidMapping(agent, String(row.lid), entry.jid);
+    onWaCache.set(phone, entry);
+    return entry;
+  } catch (e) {
+    console.warn(`[${agent.config.id}] onWhatsApp(${maskPhone(phone)}) dështoi:`, (e as Error)?.message || e);
+    return unknown;
+  }
+}
+
+/**
+ * Serialise one agent's sends: each runs alone, at least SEND_GAP_MS (+ jitter)
+ * after the previous one actually went out. Returns the task's result.
+ */
+function enqueueSend<T>(agent: AgentState, docId: string, task: () => Promise<T>): Promise<T> {
+  agent.queuedDocIds.add(docId);
+  const run = async () => {
+    try {
+      const gap = SEND_GAP_MS + Math.floor(Math.random() * SEND_GAP_JITTER_MS);
+      await sleep(agent.lastSentAt + gap - Date.now());
+      return await task();
+    } finally {
+      agent.queuedDocIds.delete(docId);
+    }
+  };
+  const p = agent.sendChain.then(run, run);
+  agent.sendChain = p.catch(() => undefined);
+  return p;
+}
+/** Estimated wait before a send enqueued now would start (for the inline-vs-queued decision). */
+function estimatedQueueWaitMs(agent: AgentState): number {
+  const ahead = agent.queuedDocIds.size;
+  const sinceLast = Date.now() - agent.lastSentAt;
+  const first = Math.max(0, SEND_GAP_MS + SEND_GAP_JITTER_MS / 2 - sinceLast);
+  return ahead === 0 ? first : first + ahead * (SEND_GAP_MS + SEND_GAP_JITTER_MS / 2 + 300);
+}
+
+/**
+ * Write the stanza and wait for the ack. Codes: ≥2 acked, 0 rejected,
+ * -1 socket closed / not connected, -2 no ack in time, -3 sendMessage threw.
+ */
+async function transmit(agent: AgentState, waId: string, jid: string, message: string, ackWaitMs: () => number): Promise<{ code: number; error?: string }> {
+  const sock = agent.sock;
+  if (!sock || agent.connectionStatus !== 'connected') return { code: -1, error: 'WhatsApp jo i lidhur' };
+  const ack = new Promise<number>((resolve) => { agent.ackWaiters.set(waId, resolve); });
+  agent.outstanding.set(waId, Date.now());
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await sock.sendMessage(jid, { text: message }, { messageId: waId });
+    agent.lastSentAt = Date.now();
+    const code = await Promise.race([
+      ack,
+      new Promise<number>((resolve) => { timer = setTimeout(() => resolve(-2), Math.max(300, ackWaitMs())); }),
+    ]);
+    return { code };
+  } catch (err: unknown) {
+    agent.lastSentAt = Date.now();
+    agent.outstanding.delete(waId);
+    return { code: -3, error: err instanceof Error ? err.message : 'Dërgimi dështoi' };
+  } finally {
+    if (timer) clearTimeout(timer);
+    agent.ackWaiters.delete(waId);
+  }
+}
+
+function failureText(code: number, error?: string): string {
+  if (code === 0) return 'WhatsApp e refuzoi mesazhin';
+  if (code === -1) return error || 'Lidhja u ndërpre para konfirmimit';
+  return error || 'Dërgimi dështoi';
+}
+
+interface SendOutcome { httpStatus: number; body: Record<string, unknown>; attempted: boolean }
+interface SendInput {
+  message: string; cleanPhone: string; jid: string;
+  leadId: string | null; leadName: string | null;
+  isAutoReply: boolean; sentByUid: string | null;
+  idempotencyKey: string | null;
+  automated?: boolean; automationKind?: string; source?: string;
+}
+
+async function performSend(agent: AgentState, input: SendInput, started: number): Promise<SendOutcome> {
+  const base = { agentId: agent.config.id, teamId: agent.config.teamId };
+  const remaining = () => REQUEST_BUDGET_MS - (Date.now() - started);
+
+  // Defence-in-depth rate limit: max 30 sends/min per RESOLVED agent (VPS-side
+  // guard in addition to the per-user limit on Vercel). Keyed on the agent that
+  // will actually send, so a teamId-only call cannot bypass it.
+  if (!checkSendRate(agent.config.id)) {
+    return { httpStatus: 429, attempted: false, body: { ok: false, error: 'Limiti i dërgimeve nga ky agent u arrit. Provoni pas pak.', ...base } };
+  }
+
+  let jid = input.jid;
+  // Honest status. Baileys' sendMessage() resolves as soon as the stanza is
+  // written to the socket — it says nothing about WhatsApp accepting it. The row
+  // therefore starts as `pending` and becomes `sent` only on the server ack. The
+  // id is generated HERE so the row exists before the receipt can arrive. The row
+  // belongs to the AGENT's team, unconditionally — the body cannot relabel it.
+  const waId = generateMessageIDV2(agent.sock?.user?.id);
+  const docId = rowId(agent.config.id, waId);
+  const ref = db.collection('whatsappMessages').doc(docId);
+  const row: Record<string, unknown> = {
+    phone: input.cleanPhone, jid, direction: 'outbound', message: input.message,
+    leadId: input.leadId, leadName: input.leadName, waMessageId: waId,
+    teamId: agent.config.teamId, agentId: agent.config.id, channelPhone: agent.connectedPhone || agent.config.id,
+    status: 'pending', channel: 'baileys',
+    isAutoReply: input.isAutoReply,
+    sentByUid: input.sentByUid,
+    idempotencyKey: input.idempotencyKey,
+    ...(typeof input.automated === 'boolean' ? { automated: input.automated } : {}),
+    ...(input.automationKind ? { automationKind: input.automationKind } : {}),
+    ...(input.source ? { source: input.source } : {}),
+    createdAt: nowTs(), updatedAt: nowTs(),
+  };
+
+  if (jid.endsWith('@s.whatsapp.net')) {
+    const wa = await checkOnWhatsApp(agent, jidUser(jid), Math.min(ON_WA_TIMEOUT_MS, remaining() - 3_000));
+    if (wa.exists === false) {
+      await ref.create({ ...row, status: 'failed', error: 'not-on-whatsapp' }).catch(() => {});
+      console.warn(`[${agent.config.id}] ✗ ${maskPhone(input.cleanPhone)}: nuk është në WhatsApp`);
+      return { httpStatus: 422, attempted: true, body: { ok: false, success: false, error: 'not-on-whatsapp', id: docId, waMessageId: waId, status: 'failed', ...base } };
+    }
+    if (wa.jid && wa.jid !== jid) { jid = wa.jid; row.jid = jid; }
+  }
+
+  await ref.create(row);
+
+  const ackBudget = () => Math.min(SEND_ACK_TIMEOUT_MS, remaining() - 300);
+  const wait = estimatedQueueWaitMs(agent);
+  if (wait > QUEUE_INLINE_MAX_MS || remaining() - wait < 2_500) {
+    // Too long to hold the HTTP request: answer now, send in order in the background.
+    void enqueueSend(agent, docId, () => transmit(agent, waId, jid, input.message, () => BACKGROUND_ACK_WAIT_MS))
+      .then(async (r) => {
+        if (r.code >= 2 || r.code === -2) return; // acked, or the receipt handlers finish it
+        await ref.update({ status: 'failed', error: failureText(r.code, r.error), updatedAt: nowTs() }).catch(() => {});
+        console.warn(`[${agent.config.id}] ✗ (radhë) ${maskPhone(input.cleanPhone)}: ${failureText(r.code, r.error)}`);
+      })
+      .catch((e) => console.error(`[${agent.config.id}] queued send error:`, e));
+    console.log(`[${agent.config.id}] ⏳ ${maskPhone(input.cleanPhone)}: në radhë (~${Math.round(wait / 1000)}s)`);
+    return { httpStatus: 200, attempted: true, body: { ok: true, success: true, status: 'queued', id: docId, waMessageId: waId, ...base } };
+  }
+
+  const r = await enqueueSend(agent, docId, () => transmit(agent, waId, jid, input.message, ackBudget));
+  if (r.code === 0 || r.code === -1 || r.code === -3) {
+    const error = failureText(r.code, r.error);
+    await ref.update({ status: 'failed', error, updatedAt: nowTs() }).catch(() => {});
+    console.warn(`[${agent.config.id}] ✗ ${maskPhone(input.cleanPhone)}: ${error}`);
+    return { httpStatus: r.code === -3 ? 500 : 502, attempted: true, body: { ok: false, success: false, error, id: docId, waMessageId: waId, status: 'failed', ...base } };
+  }
+  const status = r.code >= 2 ? 'sent' : 'pending';
+  if (status === 'pending') console.warn(`[${agent.config.id}] ? ${maskPhone(input.cleanPhone)}: pa ack brenda afatit — mbetet pending`);
+  else console.log(`[${agent.config.id}] → ${maskPhone(input.cleanPhone)}: ${maskBody(input.message)}${input.isAutoReply ? ' (auto-reply)' : ''}`);
+  // teamId is returned so the caller (api/whatsapp.ts) can key the conversation
+  // even when it did not know the agent's team.
+  return { httpStatus: 200, attempted: true, body: { ok: true, success: true, id: docId, waMessageId: waId, status, ...base } };
+}
+
+/**
+ * Idempotency: the same `idempotencyKey` (per agent, or per team when no agent
+ * is named) within 24h never sends twice. In-process: the first request's
+ * promise is shared (set synchronously, before any await). Across restarts /
+ * instances: a row carrying the key wins. A request that never reached the
+ * socket (validation, not connected, rate limit) is not remembered — retrying it
+ * is exactly what the key is for.
+ */
+const idemCache = new Map<string, { at: number; promise: Promise<SendOutcome> }>();
+function outcomeForExistingRow(id: string, d: Record<string, any>): SendOutcome {
+  const base = { id, waMessageId: d.waMessageId || null, agentId: d.agentId || null, teamId: d.teamId || null, status: d.status || null, idempotent: true };
+  if (d.status === 'failed') {
+    if (d.error === 'not-on-whatsapp') return { httpStatus: 422, attempted: true, body: { ok: false, success: false, error: 'not-on-whatsapp', ...base } };
+    return { httpStatus: 502, attempted: true, body: { ok: false, success: false, error: d.error || 'Dërgimi dështoi', ...base } };
+  }
+  return { httpStatus: 200, attempted: true, body: { ok: true, success: true, ...base } };
+}
+async function findIdempotentRow(key: string, agentId: string | undefined, teamId: string | undefined): Promise<SendOutcome | null> {
+  const snap = await db.collection('whatsappMessages').where('idempotencyKey', '==', key).limit(10).get();
+  for (const doc of snap.docs) {
+    const d = doc.data();
+    if (agentId ? d.agentId !== agentId : d.teamId !== teamId) continue;
+    if (Date.now() - tsMs(d.createdAt) > IDEMPOTENCY_TTL_MS) continue;
+    return outcomeForExistingRow(doc.id, d);
+  }
+  return null;
+}
+
+// ── Stale `pending` sweeper ───────────────────────────────────────────────────
+// A row nobody acked within 10 min is `failed` / `no-ack` (a late receipt still
+// upgrades it, see applyReceipt). Two equality filters (no composite index) and a
+// cap; the createdAt window is applied in code because no (status, createdAt)
+// index exists for whatsappMessages.
+async function sweepStalePending(): Promise<void> {
+  try {
+    const snap = await db.collection('whatsappMessages').where('channel', '==', 'baileys').where('status', '==', 'pending').limit(300).get();
+    if (snap.empty) return;
+    const now = Date.now();
+    const queued = new Set<string>();
+    for (const a of agents.values()) for (const id of a.queuedDocIds) queued.add(id);
+    const updates = snap.docs
+      .filter((d) => {
+        const created = tsMs(d.data().createdAt);
+        return created > 0 && created < now - PENDING_STALE_MS && created > now - 30 * 24 * 60 * 60 * 1000 && !queued.has(d.id);
+      })
+      .map((d) => ({ ref: d.ref, data: { status: 'failed', error: 'no-ack', updatedAt: nowTs() } as Record<string, unknown> }));
+    if (!updates.length) return;
+    await commitUpdatesInChunks(updates);
+    console.warn(`[WA] ${updates.length} mesazhe pending > 10 min → failed (no-ack)`);
+  } catch (e) { console.error('[WA] sweepStalePending dështoi:', e); }
+}
+
+/** Hourly housekeeping of the in-memory caches (24h TTLs, outstanding ids). */
+function pruneWaCaches(): void {
+  const now = Date.now();
+  for (const [k, v] of onWaCache) if (now - v.at > ON_WA_TTL_MS) onWaCache.delete(k);
+  for (const [k, v] of idemCache) if (now - v.at > IDEMPOTENCY_TTL_MS) idemCache.delete(k);
+  for (const a of agents.values()) {
+    for (const [id, at] of a.outstanding) if (now - at > 60 * 60 * 1000) a.outstanding.delete(id);
+    for (const [p, at] of a.lookedUpPhones) if (now - at > LOOKUP_REPEAT_AFTER_MS) a.lookedUpPhones.delete(p);
+  }
+}
+
+function startWaMaintenance(): void {
+  setInterval(() => { void sweepStalePending(); }, 5 * 60 * 1000);
+  setInterval(() => { void drainWaInboundOutbox(); }, 60 * 1000);
+  setInterval(() => { void refreshOutboxCounts(); }, 5 * 60 * 1000);
+  setInterval(pruneWaCaches, 60 * 60 * 1000).unref?.();
+  setTimeout(() => { void sweepStalePending(); void drainWaInboundOutbox(); void refreshOutboxCounts(); }, 30_000);
+}
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 // Public health/info root — confirms server is alive without exposing secrets.
@@ -1119,31 +1918,43 @@ app.get('/', (_req, res) => {
 app.get('/status', requireApiKey, (_req, res) => {
   const statuses: Record<string, any> = {};
   for (const [id, a] of agents) {
+    const connected = a.connectionStatus === 'connected' && !!a.sock;
     statuses[id] = {
-      label: a.config.label, status: a.connectionStatus, teamId: a.config.teamId, assignedToUserId: a.config.assignedToUserId,
-      connectedPhone: a.connectionStatus === 'connected' ? a.connectedPhone : null,
+      id, label: a.config.label,
+      // `status` is what api/whatsapp.ts relays; `connectionStatus` is the same value, explicit.
+      status: a.connectionStatus, connectionStatus: a.connectionStatus, connected,
+      teamId: a.config.teamId, businessId: a.config.businessId, assignedToUserId: a.config.assignedToUserId,
+      connectedPhone: connected ? a.connectedPhone : null,
+      lastDisconnectReason: a.lastDisconnect,
+      lastConnectedAt: a.lastConnectedAt ? a.lastConnectedAt.toISOString() : null,
+      reconnectAttempts: a.reconnectAttempts,
+      outboxPending: outboxPendingByAgent.get(id) || 0,
+      queuedSends: a.queuedDocIds.size,
       lidMappings: a.lidToPhoneMap.size, pendingLids: a.pendingLidMessages.size,
     };
   }
-  res.json({ agents: statuses });
+  res.json({ agents: statuses, outbox: { inFlight: outboxInFlight.size } });
 });
 
 app.get('/agents', requireApiKey, (_req, res) => {
   res.json({ agents: Array.from(agents.values()).map(a => ({ id: a.config.id, label: a.config.label, teamId: a.config.teamId, assignedToUserId: a.config.assignedToUserId, status: a.connectionStatus })) });
 });
 
-// QR data JSON (used by FivoCRM UI via Vercel proxy)
+// QR data JSON (used by FivoCRM UI via Vercel proxy). Opening it IS the explicit
+// request that restarts an agent stopped in a terminal state (logged out, QR
+// expired, replaced …) — the only way a new QR is generated after a logout.
 app.get('/qr-data/:agentId', requireApiKey, (req: any, res: any) => {
   const agent = agents.get(req.params.agentId);
   if (!agent) { res.status(404).json({ error: 'Agent nuk u gjet' }); return; }
+  const restarted = requestFreshConnection(agent);
   res.json({
     agentId: agent.config.id,
     label: agent.config.label,
     status: agent.connectionStatus,
     qrDataUrl: agent.qrDataUrl || null,
-    connectedPhone: agent.connectionStatus === 'connected'
-      ? ((agent.sock as any)?.user?.id?.split(':')[0] || null)
-      : null,
+    connectedPhone: agent.connectionStatus === 'connected' ? (agent.connectedPhone || null) : null,
+    lastDisconnectReason: agent.lastDisconnect,
+    restarted,
   });
 });
 
@@ -1163,6 +1974,7 @@ app.post('/reload', requireApiKey, async (_req: any, res: any) => {
 app.get('/qr/:agentId', requireApiKey, (req: any, res: any) => {
   const agent = agents.get(req.params.agentId);
   if (!agent) return res.status(404).send('<html><body style="font-family:sans-serif;padding:40px"><h2>Agent nuk u gjet</h2></body></html>');
+  requestFreshConnection(agent);
   // `label` comes from a Firestore document any tenant admin can edit — escape it.
   const label = escapeHtml(agent.config.label);
   res.setHeader('Content-Security-Policy', "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'");
@@ -1184,25 +1996,31 @@ app.get('/qr', requireApiKey, (_req, res) => {
   res.redirect(`/qr/${agent.config.id}`);
 });
 
-// Sync per agent
+// Sync per agent. It used to end() the socket and connect a second time, even
+// while connected or mid-connect — two sockets for one number. Now: connected →
+// run the (rationed) LID lookups on the existing socket; connecting → refuse;
+// stopped/disconnected → one guarded connect.
 app.post('/sync/:agentId', requireApiKey, async (req, res) => {
   const agent = agents.get(req.params.agentId);
   if (!agent) { res.status(404).json({ error: 'Agent nuk u gjet' }); return; }
-  if (!agent.sock) { res.status(503).json({ error: 'WhatsApp jo i inicializuar' }); return; }
   if (agent.isSyncing) { res.status(409).json({ error: 'Sync tashmë në progres' }); return; }
-  agent.isSyncing = true;
   const before = agent.lidToPhoneMap.size;
-  try {
-    agent.sock.end(undefined);
-    await new Promise(r => setTimeout(r, 2000));
-    await connectAgent(agent);
-    await new Promise(r => setTimeout(r, 12000));
-    await reverseLookupLeads(agent);
-    await resolveFromGroups(agent);
-    res.json({ success: true, status: agent.connectionStatus, lidMappings: agent.lidToPhoneMap.size, newMappings: agent.lidToPhoneMap.size - before });
-  } catch (err: unknown) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Sync dështoi' });
-  } finally { agent.isSyncing = false; }
+  if (agent.connectionStatus === 'connected' && agent.sock) {
+    agent.isSyncing = true;
+    try {
+      const r = await maybeRunDailyLookups(agent, true);
+      res.json({ success: true, status: agent.connectionStatus, lookup: r, lidMappings: agent.lidToPhoneMap.size, newMappings: agent.lidToPhoneMap.size - before });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Sync dështoi' });
+    } finally { agent.isSyncing = false; }
+    return;
+  }
+  if (agent.connecting || agent.connectionStatus === 'connecting' || agent.connectionStatus === 'qr_ready') {
+    res.status(409).json({ error: 'Agenti po lidhet tashmë', status: agent.connectionStatus });
+    return;
+  }
+  const restarted = requestFreshConnection(agent);
+  res.json({ success: restarted, status: agent.connectionStatus, lidMappings: agent.lidToPhoneMap.size });
 });
 
 // Backward compat /sync
@@ -1211,100 +2029,88 @@ app.post('/sync', requireApiKey, async (req, res) => {
   res.redirect(307, `/sync/${agent.config.id}`);
 });
 
-// Send message
+/**
+ * Send a text message.
+ *
+ * Body: { to, message, agentId?, teamId?, jid?, leadId?, leadName?, isAutoReply?,
+ *         sentByUid?, idempotencyKey?, automated?, automationKind?, source? }
+ * Answers (all JSON, `id` = the whatsappMessages doc id `${agentId}_${waMessageId}`):
+ *   200 { ok, success, id, waMessageId, status: 'sent'|'pending'|'queued', agentId, teamId[, idempotent] }
+ *   422 { ok:false, error:'not-on-whatsapp', id, status:'failed' }
+ *   400/404/429/503 before anything was sent; 502/500 = the send failed (row `failed`).
+ */
 app.post('/send', requireApiKey, async (req, res) => {
-  const { to, message, leadId, leadName, teamId: rawTeamId, jid: rawJidFromBody, agentId: rawAgentId, isAutoReply, sentByUid } = (req.body || {}) as {
-    to: string; message: string; leadId?: string; leadName?: string;
-    teamId?: string | null; jid?: string; agentId?: string | null;
-    /** Auto-reply echo (from api/_waInbound.ts) — must never count as a staff answer. */
-    isAutoReply?: boolean;
-    /** The staff uid that pressed send (api/whatsapp.ts); null for automation. */
-    sentByUid?: string | null;
-  };
+  const started = Date.now();
+  const b = (req.body || {}) as Record<string, any>;
+  const { to, message } = b;
   // Callers send `null` for "unknown"; treat anything but a non-empty string as absent.
-  const agentId = typeof rawAgentId === 'string' && rawAgentId ? rawAgentId : undefined;
-  const teamId = typeof rawTeamId === 'string' && rawTeamId ? rawTeamId : undefined;
+  const str = (v: unknown, max = 200) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
+  const agentId = str(b.agentId);
+  const teamId = str(b.teamId);
 
   if (!to || !message || typeof to !== 'string' || typeof message !== 'string') {
     res.status(400).json({ error: 'Fushat "to" dhe "message" janë të detyrueshme' }); return;
   }
-
-  // Tenant-safe resolution — never a foreign tenant's number, never a relabelled row.
-  const resolved = resolveSendAgent(agentId, teamId);
-  if (!resolved.ok || !resolved.agent) {
-    res.status(resolved.status || 500).json({ error: resolved.error || 'Agenti nuk u zgjidh', agentId: agentId || null, teamId: teamId || null });
-    return;
-  }
-  const agent: AgentState = resolved.agent;
-
-  // Defence-in-depth rate limit: max 30 sends/min per RESOLVED agent (VPS-side
-  // guard in addition to the per-user limit on Vercel). Keyed on the agent that
-  // will actually send, so a teamId-only call cannot bypass it.
-  if (!checkSendRate(agent.config.id)) {
-    res.status(429).json({ error: 'Limiti i dërgimeve nga ky agent u arrit. Provoni pas pak.', agentId: agent.config.id });
-    return;
-  }
+  const idempotencyKey = str(b.idempotencyKey) ?? null;
 
   const cleanPhone = normalizePhone(String(to));
-  const isValidJid = rawJidFromBody && (rawJidFromBody.endsWith('@s.whatsapp.net') || rawJidFromBody.endsWith('@lid'));
-  const jid = isValidJid ? rawJidFromBody : `${cleanPhone}@s.whatsapp.net`;
-  if (!isValidJid && (cleanPhone.length < 7 || cleanPhone.length > 15)) {
-    res.status(400).json({ error: 'Numri i telefonit është i pavlefshëm' }); return;
-  }
+  const rawJid = typeof b.jid === 'string' ? b.jid : '';
+  const bodyJid = rawJid.endsWith('@lid') ? canonicalLidJid(rawJid) : (rawJid ? canonicalPhoneJid(rawJid) : null);
+  const jid = bodyJid || (cleanPhone ? `${cleanPhone}@s.whatsapp.net` : '');
+  if (!jid) { res.status(400).json({ error: 'Numri i telefonit është i pavlefshëm' }); return; }
 
-  // Honest status. Baileys' sendMessage() resolves as soon as the stanza is
-  // written to the socket — it says nothing about WhatsApp accepting it. The row
-  // therefore starts as `pending` and becomes `sent` only on the server ack
-  // (messages.update status 2). The id is generated HERE so the row exists before
-  // the receipt can arrive (the ack used to race the write and hit a missing doc).
-  // The row belongs to the AGENT's team, unconditionally — the body cannot relabel it
-  // (resolveSendAgent already rejected a teamId that disagrees with the agent).
-  const resolvedTeamId = agent.config.teamId;
-  const waMessageId = generateMessageIDV2((agent.sock as any)?.user?.id);
-  const ref = db.collection('whatsappMessages').doc(waMessageId);
-  const now = () => admin.firestore.Timestamp.fromDate(new Date());
-  await ref.set({
-    phone: cleanPhone, jid, direction: 'outbound', message,
-    leadId: leadId || null, leadName: leadName || null, waMessageId,
-    teamId: resolvedTeamId, agentId: agent.config.id, channelPhone: agent.connectedPhone || agent.config.id,
-    status: 'pending', channel: 'baileys',
-    isAutoReply: !!isAutoReply,
-    sentByUid: typeof sentByUid === 'string' && sentByUid ? sentByUid : null,
-    createdAt: now(), updatedAt: now(),
-  });
+  const input: SendInput = {
+    message, cleanPhone: cleanPhone || (jid.endsWith('@s.whatsapp.net') ? jidUser(jid) : ''), jid,
+    leadId: str(b.leadId) ?? null, leadName: str(b.leadName) ?? null,
+    // Auto-reply echo (from api/_waInbound.ts) — must never count as a staff answer.
+    isAutoReply: b.isAutoReply === true,
+    // The staff uid that pressed send (api/whatsapp.ts); null for automation.
+    sentByUid: str(b.sentByUid) ?? null,
+    idempotencyKey,
+    automated: typeof b.automated === 'boolean' ? b.automated : undefined,
+    automationKind: str(b.automationKind, 64),
+    source: str(b.source, 64),
+  };
 
-  const ack = new Promise<number>((resolve) => { agent.ackWaiters.set(waMessageId, resolve); });
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  try {
-    await agent.sock.sendMessage(jid, { text: message }, { messageId: waMessageId });
-    const code = await Promise.race([
-      ack,
-      new Promise<number>((resolve) => { timer = setTimeout(() => resolve(-2), SEND_ACK_TIMEOUT_MS); }),
-    ]);
-    // -1 = socket closed before the ack, -2 = timed out, 0 = WhatsApp rejected it.
-    if (code === 0 || code === -1) {
-      const error = code === 0 ? 'WhatsApp e refuzoi mesazhin' : 'Lidhja u ndërpre para konfirmimit';
-      await ref.update({ status: 'failed', error, updatedAt: now() }).catch(() => {});
-      console.warn(`[${agent.config.id}] ✗ ${maskPhone(cleanPhone)}: ${error}`);
-      res.status(502).json({ error, id: waMessageId, agentId: agent.config.id, teamId: resolvedTeamId });
-      return;
+  const resolveAndSend = async (): Promise<SendOutcome> => {
+    // Tenant-safe resolution — never a foreign tenant's number, never a relabelled row.
+    const resolved = resolveSendAgent(agentId, teamId);
+    if (!resolved.ok || !resolved.agent) {
+      return { httpStatus: resolved.status || 500, attempted: false, body: { ok: false, error: resolved.error || 'Agenti nuk u zgjidh', agentId: agentId || null, teamId: teamId || null } };
     }
-    const status = code >= 2 ? 'sent' : 'pending';
-    if (status === 'pending') console.warn(`[${agent.config.id}] ? ${maskPhone(cleanPhone)}: pa ack pas ${SEND_ACK_TIMEOUT_MS}ms — mbetet pending`);
-    else console.log(`[${agent.config.id}] → ${maskPhone(cleanPhone)}: ${maskBody(message)}${isAutoReply ? ' (auto-reply)' : ''}`);
-    // teamId is returned so the caller (api/whatsapp.ts) can key the conversation
-    // even when it did not know the agent's team.
-    res.json({ success: true, id: waMessageId, status, agentId: agent.config.id, teamId: resolvedTeamId });
-  } catch (err: unknown) {
-    const error = err instanceof Error ? err.message : 'Dërgimi dështoi';
-    await ref.update({ status: 'failed', error, updatedAt: now() }).catch(() => {});
-    console.error(`[${agent.config.id}] ✗ ${maskPhone(cleanPhone)}: ${error}`);
-    res.status(500).json({ error, id: waMessageId });
-  } finally {
-    if (timer) clearTimeout(timer);
-    agent.ackWaiters.delete(waMessageId);
+    return performSend(resolved.agent, input, started);
+  };
+  const failOutcome = (err: unknown): SendOutcome => {
+    console.error(`[send] ✗ ${maskPhone(cleanPhone)}:`, err);
+    return { httpStatus: 500, attempted: false, body: { ok: false, error: err instanceof Error ? err.message : 'Dërgimi dështoi' } };
+  };
+
+  if (!idempotencyKey) {
+    let out: SendOutcome;
+    try { out = await resolveAndSend(); } catch (err) { out = failOutcome(err); }
+    res.status(out.httpStatus).json(out.body);
+    return;
   }
+
+  const mapKey = `${agentId || ''}|${teamId || ''}|${idempotencyKey}`;
+  const hit = idemCache.get(mapKey);
+  if (hit && Date.now() - hit.at < IDEMPOTENCY_TTL_MS) {
+    const out = await hit.promise;
+    res.status(out.httpStatus).json({ ...out.body, idempotent: true });
+    return;
+  }
+  // Registered synchronously (no await since the get) — a concurrent duplicate joins this promise.
+  let settle!: (o: SendOutcome) => void;
+  idemCache.set(mapKey, { at: Date.now(), promise: new Promise<SendOutcome>((r) => { settle = r; }) });
+  let out: SendOutcome;
+  try {
+    out = (await findIdempotentRow(idempotencyKey, agentId, teamId)) ?? await resolveAndSend();
+  } catch (err) { out = failOutcome(err); }
+  if (!out.attempted) idemCache.delete(mapKey);
+  settle(out);
+  res.status(out.httpStatus).json(out.body);
 });
+
 
 // ── File upload (chat / comment attachments) ─────────────────────────────────
 // POST /upload  (multipart: file, teamId, folder)  — auth via Firebase ID token.
@@ -1572,10 +2378,14 @@ async function triggerCronJob(job: string, params?: Record<string, string>): Pro
 
 // ── Inbound WhatsApp → CRM handler (POST /api/wa-inbound) ──────────────────────
 // Same authorised channel as triggerCronJob (CRM_BASE_URL + Bearer CRON_SECRET).
-// The whatsappMessages row is already written before this is called, so the
-// event is fire-and-forget: 3 attempts with 1s/3s/9s back-off, 20s timeout each,
-// and a loud log on the final failure. A retried POST re-runs idempotent upserts
-// on the CRM side, so a duplicate delivery is harmless.
+// The whatsappMessages row is already written before this is called. Delivery
+// is DURABLE: one immediate attempt (55 s timeout — the function may run 60 s;
+// the old 20 s abort killed slow-but-successful runs and retried them), and on a
+// network error / timeout / 5xx / 429 the payload goes to the Firestore outbox
+// `waInboundOutbox/{agentId_msgId}` (server-only: Admin SDK, no client rules),
+// retried every minute with backoff for up to 24 h, then parked in
+// `waInboundOutboxDead`. Every attempt carries `Idempotency-Key: <agentId>_<msgId>`
+// so the CRM can dedupe a delivery that succeeded but whose answer was lost.
 interface WaEventPayload {
   channel: 'baileys' | 'meta';
   direction: 'inbound' | 'outbound';
@@ -1583,17 +2393,34 @@ interface WaEventPayload {
   agentId: string | null;
   metaPhoneNumberId: string | null;
   channelPhone: string;
+  /** == the `whatsappMessages` document id (`${agentId}_${waId}`), as api/_waInbound.ts expects. */
   waMessageId: string;
+  /** The row the api updates (it tries messageDocId → `${agentId}_${waMessageId}` → bare id). */
+  messageDocId?: string;
+  /** Same as messageDocId (kept for readers of the earlier shape). */
+  docId?: string;
+  /** The raw WhatsApp message id. */
+  waId?: string | null;
+  /** '' when only the LID is known (then `lid` — bare digits, no @lid — is set and isLid is true). */
   phone: string;
   jid: string;
   isLid: boolean;
+  lid?: string | null;
   text: string;
   kind: 'text' | 'media' | 'reaction' | 'system';
   pushName: string | null;
   isAutoReply: boolean;
   timestamp: string;
 }
-const WA_EVENT_RETRY_DELAYS_MS = [1_000, 3_000, 9_000];
+const WA_INBOUND_TIMEOUT_MS = 55_000;
+const OUTBOX = 'waInboundOutbox';
+const OUTBOX_DEAD = 'waInboundOutboxDead';
+const OUTBOX_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const OUTBOX_BATCH = 25;
+/** Idempotency keys with an attempt in flight — never two concurrent deliveries of one event. */
+const outboxInFlight = new Set<string>();
+const outboxPendingByAgent = new Map<string, number>();
+let outboxDraining = false;
 
 /** Person-to-person jids only: `@s.whatsapp.net` (phone) or `@lid` (privacy id). */
 function isPersonJid(jid: string): boolean {
@@ -1606,33 +2433,113 @@ function isPlausiblePhone(digits: string): boolean {
   return d.length >= 8 && d.length <= 15;
 }
 
-async function postWaEvent(event: WaEventPayload): Promise<void> {
-  if (!CRM_BASE_URL || !CRON_SECRET) return;
-  const label = `${event.direction} ${maskPhone(event.phone)} ${event.waMessageId}`;
-  let lastErr = '';
-  for (let attempt = 0; attempt < WA_EVENT_RETRY_DELAYS_MS.length; attempt++) {
-    try {
-      const ctrl = new AbortController();
-      const to = setTimeout(() => ctrl.abort(), 20_000);
-      const res = await fetch(`${CRM_BASE_URL}/api/wa-inbound`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${CRON_SECRET}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(event),
-        signal: ctrl.signal,
-      });
-      clearTimeout(to);
-      if (res.ok) return;
-      // 4xx = the payload is wrong, retrying cannot fix it; 5xx/timeouts are retried.
-      const text = await res.text().catch(() => '');
-      lastErr = `HTTP ${res.status} ${text.slice(0, 200)}`;
-      if (res.status >= 400 && res.status < 500) break;
-    } catch (err) {
-      lastErr = (err as Error)?.message || String(err);
-    }
-    await new Promise(r => setTimeout(r, WA_EVENT_RETRY_DELAYS_MS[attempt]));
+const outboxDocId = (key: string) => key.replace(/\//g, '_').slice(0, 700);
+
+/** 'ok' = delivered, 'rejected' = 4xx (the payload is wrong, retrying cannot fix it), 'retry' = try again later. */
+async function deliverWaEvent(event: WaEventPayload, key: string): Promise<{ result: 'ok' | 'rejected' | 'retry'; error?: string }> {
+  try {
+    const res = await fetch(`${CRM_BASE_URL}/api/wa-inbound`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${CRON_SECRET}`, 'Content-Type': 'application/json', 'Idempotency-Key': key },
+      body: JSON.stringify(event),
+      signal: AbortSignal.timeout(WA_INBOUND_TIMEOUT_MS),
+    });
+    if (res.ok) return { result: 'ok' };
+    const text = await res.text().catch(() => '');
+    const error = `HTTP ${res.status} ${text.slice(0, 200)}`;
+    if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) return { result: 'rejected', error };
+    return { result: 'retry', error };
+  } catch (err) {
+    return { result: 'retry', error: (err as Error)?.message || String(err) };
   }
-  console.error(`[WA→CRM] wa-inbound "${label}" dështoi pas ${WA_EVENT_RETRY_DELAYS_MS.length} provave: ${lastErr}`);
 }
+
+async function moveToDead(ref: admin.firestore.DocumentReference, data: Record<string, any>, why: string): Promise<void> {
+  await db.collection(OUTBOX_DEAD).doc(ref.id).set({ ...data, deadReason: why, deadAt: nowTs() }).catch(() => {});
+  await ref.delete().catch(() => {});
+  const a = String(data.agentId || '');
+  if (a) outboxPendingByAgent.set(a, Math.max(0, (outboxPendingByAgent.get(a) || 1) - 1));
+}
+
+async function postWaEvent(event: WaEventPayload, key: string): Promise<void> {
+  if (!CRM_BASE_URL || !CRON_SECRET) return;
+  if (outboxInFlight.has(key)) return;
+  outboxInFlight.add(key);
+  const label = `${event.direction} ${event.phone ? maskPhone(event.phone) : maskJid(event.jid)} ${event.waMessageId}`;
+  try {
+    const r = await deliverWaEvent(event, key);
+    if (r.result === 'ok') return;
+    if (r.result === 'rejected') { console.error(`[WA→CRM] wa-inbound "${label}" u refuzua: ${r.error}`); return; }
+    try {
+      await db.collection(OUTBOX).doc(outboxDocId(key)).set({
+        key, agentId: event.agentId || null, teamId: event.teamId, payload: event,
+        attempts: 1, lastError: r.error || null,
+        createdAt: nowTs(),
+        nextAttemptAt: admin.firestore.Timestamp.fromMillis(Date.now() + 120_000), // the api re-admits a failed claim after 2 min
+      });
+      if (event.agentId) outboxPendingByAgent.set(event.agentId, (outboxPendingByAgent.get(event.agentId) || 0) + 1);
+      console.warn(`[WA→CRM] wa-inbound "${label}" dështoi (${r.error}) — në outbox`);
+    } catch (e) {
+      console.error(`[WA→CRM] wa-inbound "${label}" dështoi DHE outbox-i nuk u shkrua:`, e);
+    }
+  } finally {
+    outboxInFlight.delete(key);
+  }
+}
+
+/** Every minute: retry due outbox rows (one drain at a time, rows in flight skipped). */
+async function drainWaInboundOutbox(): Promise<void> {
+  if (!CRM_BASE_URL || !CRON_SECRET || outboxDraining) return;
+  outboxDraining = true;
+  try {
+    const snap = await db.collection(OUTBOX)
+      .where('nextAttemptAt', '<=', admin.firestore.Timestamp.now())
+      .orderBy('nextAttemptAt').limit(OUTBOX_BATCH).get();
+    for (const doc of snap.docs) {
+      const data = doc.data();
+      const key = String(data.key || doc.id);
+      if (outboxInFlight.has(key)) continue;
+      if (Date.now() - tsMs(data.createdAt) > OUTBOX_MAX_AGE_MS) {
+        console.error(`[WA→CRM] outbox ${doc.id}: hoqa dorë pas 24 orësh (${data.attempts} prova, ${data.lastError || '—'})`);
+        await moveToDead(doc.ref, data, 'expired');
+        continue;
+      }
+      outboxInFlight.add(key);
+      try {
+        const r = await deliverWaEvent(data.payload as WaEventPayload, key);
+        if (r.result === 'ok') {
+          await doc.ref.delete();
+          const a = String(data.agentId || '');
+          if (a) outboxPendingByAgent.set(a, Math.max(0, (outboxPendingByAgent.get(a) || 1) - 1));
+        } else if (r.result === 'rejected') {
+          console.error(`[WA→CRM] outbox ${doc.id} u refuzua: ${r.error}`);
+          await moveToDead(doc.ref, data, `rejected: ${r.error || ''}`.slice(0, 300));
+        } else {
+          const attempts = Number(data.attempts || 0) + 1;
+          const delay = Math.min(60 * 60_000, 60_000 * 2 ** Math.min(attempts - 1, 6));
+          await doc.ref.update({ attempts, lastError: r.error || null, nextAttemptAt: admin.firestore.Timestamp.fromMillis(Date.now() + delay) });
+        }
+      } finally {
+        outboxInFlight.delete(key);
+      }
+    }
+  } catch (e) {
+    console.error('[WA→CRM] outbox drain dështoi:', e);
+  } finally {
+    outboxDraining = false;
+  }
+}
+
+/** /status shows the outbox backlog per agent — an aggregate count, one read per 1000 rows. */
+async function refreshOutboxCounts(): Promise<void> {
+  for (const id of agents.keys()) {
+    try {
+      const c = await db.collection(OUTBOX).where('agentId', '==', id).count().get();
+      outboxPendingByAgent.set(id, c.data().count);
+    } catch { /* keep the previous estimate */ }
+  }
+}
+
 
 function scheduleDailyUtc(hour: number, minute: number, fn: () => void): void {
   const DAY = 24 * 60 * 60 * 1000;
@@ -1871,19 +2778,21 @@ app.listen(PORT, async () => {
   console.log(`\n[VPS Server] ✅ Aktiv në port ${PORT}`);
   console.log(`[VPS Server]  → Status:  http://localhost:${PORT}/status`);
   console.log(`[VPS Server]  → Agents:  http://localhost:${PORT}/agents`);
-  console.log(`[VPS Server]  → QR:      http://localhost:${PORT}/qr/{agentId}\n`);
+  console.log(`[VPS Server]  → QR:      http://localhost:${PORT}/qr/{agentId}`);
+  console.log(`[VPS Server]  → Sesionet: ${VPS_ROOT}\n`);
 
   startCronSchedulers();
 
-  await loadAgents();
-
-  for (const agent of agents.values()) {
-    await loadLidMappings(agent);
-    await loadPendingLidMessages(agent);
-    connectAgent(agent).catch(e => console.error(`[${agent.config.id}] connectAgent error:`, e));
-  }
+  // The first load goes through the same reconciler as the live listener, so the
+  // env-default rules (only while the collection is empty, never wiped) and the
+  // "no teamId → not loaded" rule are one code path.
+  try {
+    const snap = await db.collection('whatsappAccounts').get();
+    await reconcileAgents(snap.docs);
+  } catch (e) { console.error('[VPS] Error loading agents:', e); }
 
   // From here on Firestore drives the agent set: a deleted or disabled account
   // is unloaded within seconds instead of living on until the next restart.
   watchAccounts();
+  startWaMaintenance();
 });

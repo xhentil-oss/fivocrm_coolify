@@ -102,3 +102,69 @@ export function isDefaultFollowUpConfig(cfg: FollowUpConfig): boolean {
     && cfg.leadCadenceDays.length === d.leadCadenceDays.length
     && cfg.leadCadenceDays.every((v, i) => v === d.leadCadenceDays[i]);
 }
+
+// ── Business hours (the WhatsApp response SLA counts only working minutes) ───
+
+/** Mon–Fri 09:00–18:00 Europe/Tirane — no tenant setting exists yet. */
+export const DEFAULT_BUSINESS_HOURS = Object.freeze({
+  timeZone: 'Europe/Tirane',
+  startHour: 9,
+  endHour: 18,
+  /** ISO-ish weekday numbers, 0 = Sunday … 6 = Saturday. */
+  days: [1, 2, 3, 4, 5] as readonly number[],
+});
+
+export type BusinessHours = {
+  timeZone: string;
+  startHour: number;
+  endHour: number;
+  days: readonly number[];
+};
+
+const WEEKDAY_INDEX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+function zonedClock(ms: number, timeZone: string): { weekday: number; minuteOfDay: number } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone, hourCycle: 'h23', weekday: 'short', hour: '2-digit', minute: '2-digit',
+  }).formatToParts(new Date(ms));
+  const get = (t: string) => parts.find((p) => p.type === t)?.value || '';
+  return {
+    weekday: WEEKDAY_INDEX[get('weekday')] ?? 0,
+    minuteOfDay: (Number(get('hour')) % 24) * 60 + Number(get('minute')),
+  };
+}
+
+/**
+ * Working minutes between two instants (Mon–Fri 09:00–18:00 in the zone by
+ * default). A message that arrives Friday 17:50 has used 10 SLA minutes by
+ * Monday 09:00, not 3 days' worth — the old wall-clock count paged managers
+ * every weekend night.
+ *
+ * Walks window boundaries (one or two steps per day, capped at 400 steps ≈ 6
+ * months), never minute by minute. The jump to the next 09:00 is computed in
+ * local minutes, so the two DST nights a year can shift that one jump by an
+ * hour; the next step reads the clock again and corrects itself.
+ */
+export function businessMinutesBetween(startMs: number, endMs: number, hours: BusinessHours = DEFAULT_BUSINESS_HOURS): number {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return 0;
+  const open = Math.max(0, Math.min(24, hours.startHour)) * 60;
+  const close = Math.max(0, Math.min(24, hours.endHour)) * 60;
+  if (close <= open || !hours.days.length) return 0;
+  const MIN = 60_000;
+  let t = startMs;
+  let total = 0;
+  for (let i = 0; i < 400 && t < endMs; i++) {
+    const { weekday, minuteOfDay } = zonedClock(t, hours.timeZone);
+    const workday = hours.days.includes(weekday);
+    if (workday && minuteOfDay >= open && minuteOfDay < close) {
+      const until = Math.min(endMs, t + (close - minuteOfDay) * MIN);
+      total += (until - t) / MIN;
+      t = until;
+    } else if (workday && minuteOfDay < open) {
+      t += (open - minuteOfDay) * MIN;
+    } else {
+      t += (24 * 60 - minuteOfDay + open) * MIN;
+    }
+  }
+  return Math.floor(total);
+}

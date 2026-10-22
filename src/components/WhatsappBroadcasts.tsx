@@ -42,6 +42,11 @@ const STATUS_BADGE: Record<string, string> = {
 const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   const { user } = useAuth();
   const permissions = usePermissions();
+  // Creating / pausing a campaign rule is Admin/Manager work (permission flags —
+  // Owner / SuperAdmin carry other role strings). "Dërgo tani" fires the manual
+  // cron run, which the server allows to Admin/Owner only.
+  const canManage = !!(permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin);
+  const canRunNow = !!(permissions.isAdmin || permissions.isOwner || permissions.isSuperAdmin);
   const settings = useTeamSettingsData();
   const { toast } = useToast();
 
@@ -92,6 +97,10 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   const [hasDomain, setHasDomain] = useState(false);
   const [scheduledAt, setScheduledAt] = useState('');
   const [busy, setBusy] = useState(false);
+  // A new evergreen rule is created PAUSED unless the user explicitly switches it
+  // on — same as the CRM automation recipes; a rule that starts messaging people
+  // the moment it is saved is the worst default.
+  const [activateNow, setActivateNow] = useState(false);
 
   // Union of all tags across leads + customers (normalized) for the picker.
   const allTags = useMemo(() => {
@@ -185,6 +194,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     setName(''); setTemplateId(''); setStatuses([]); setSelectedTags([]); setSelectedCategories([]);
     setAssignedTo(''); setSource(''); setHasDomain(false); setScheduledAt('');
     setConditions({}); setVariants([]); setLandingUrl(''); setUtmCampaign(''); setTrigger('manual');
+    setActivateNow(false);
   };
 
   // Firestore rejects `undefined`, so every optional condition is stripped rather
@@ -252,8 +262,10 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     if (!validate()) return;
     setBusy(true);
     try {
-      await mutation.create(buildPayload('active') as any);
-      toast({ title: 'Automatizimi u aktivizua', description: `Kontrollon segmentin çdo ditë (max ${conditions.dailyCap} dërgime/ekzekutim).` });
+      await mutation.create(buildPayload(activateNow ? 'active' : 'paused') as any);
+      toast(activateNow
+        ? { title: 'Automatizimi u aktivizua', description: `Kontrollon segmentin çdo ditë (max ${conditions.dailyCap} dërgime/ekzekutim).` }
+        : { title: 'Automatizimi u ruajt i pauzuar', description: 'Aktivizoje me ▶ te lista kur të jesh gati.' });
       resetForm();
     } catch (err: any) {
       toast({ title: 'Gabim', description: err?.message || 'Aktivizimi dështoi.', variant: 'destructive' });
@@ -355,7 +367,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
                   setTrigger('dormant');
                   // An evergreen rule without these two would blast the whole list
                   // on its first run — seed the guardrails with sane defaults.
-                  setConditions((c) => ({ ...c, lastContactMinDays: c.lastContactMinDays ?? 30, dailyCap: c.dailyCap ?? 20 }));
+                  setConditions((c) => ({ ...c, lastContactMinDays: c.lastContactMinDays ?? 30, dailyCap: c.dailyCap ?? 20, requireContacted: c.requireContacted ?? undefined }));
                 }}
                 className={`flex-1 text-xs px-3 py-2 rounded-md border text-left ${trigger === 'dormant' ? 'bg-[#25D366]/10 border-[#25D366]' : 'border-border hover:bg-muted'}`}>
                 <span className="font-medium flex items-center gap-1.5"><Repeat className="w-3.5 h-3.5" /> Automatizim</span>
@@ -670,8 +682,9 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
                 </div>
               ))}
               <p className="text-[10px] text-muted-foreground">
-                Fushat: <code>{'{{name}}'}</code> <code>{'{{company}}'}</code> <code>{'{{notes}}'}</code>{' '}
-                <code>{'{{service}}'}</code> <code>{'{{link}}'}</code>. Pa <code>{'{{link}}'}</code>, linku shtohet në fund.
+                Fushat: <code>{'{{name}}'}</code> (emri i parë) <code>{'{{fullName}}'}</code> (emri i plotë) <code>{'{{company}}'}</code>{' '}
+                <code>{'{{notes}}'}</code> (rreshti i parë i shënimeve) <code>{'{{service}}'}</code> <code>{'{{link}}'}</code>.
+                Një fushë e panjohur del bosh. Pa <code>{'{{link}}'}</code>, linku shtohet në fund.
               </p>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -727,12 +740,24 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
               )}
             </div>
 
+            <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+              <Clock className="w-3 h-3 shrink-0" />
+              Dërgohet vetëm 09:00–20:00 (ora e Tiranës){trigger === 'dormant' ? ' — automatizimi kontrollon një herë në ditë, në 10:00' : ''}.
+            </p>
+            {trigger === 'dormant' && canManage && (
+              <label className="flex items-center gap-2 text-xs cursor-pointer justify-end">
+                <input type="checkbox" checked={activateNow} onChange={(e) => setActivateNow(e.target.checked)}
+                  className="rounded border-border accent-[#25D366]" />
+                <span>Aktivizoje menjëherë <span className="text-muted-foreground">(përndryshe ruhet i pauzuar)</span></span>
+              </label>
+            )}
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={saveDraft} disabled={busy}>Ruaj draft</Button>
               {trigger === 'dormant' ? (
-                permissions.isAdmin && (
+                canManage && (
                   <Button size="sm" className="bg-[#25D366] hover:bg-[#1da851] text-white" onClick={activateAutomation} disabled={busy}>
-                    {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Repeat className="w-3.5 h-3.5 mr-1" />} Aktivizo automatizimin
+                    {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Repeat className="w-3.5 h-3.5 mr-1" />}
+                    {activateNow ? 'Krijo dhe aktivizo' : 'Krijo automatizimin (i pauzuar)'}
                   </Button>
                 )
               ) : (
@@ -740,7 +765,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
                   <Button variant="outline" size="sm" onClick={() => queue(false)} disabled={busy}>
                     <Clock className="w-3.5 h-3.5 mr-1" /> Vendos në radhë
                   </Button>
-                  {permissions.isAdmin && (
+                  {canRunNow && (
                     <Button size="sm" className="bg-[#25D366] hover:bg-[#1da851] text-white" onClick={() => queue(true)} disabled={busy}>
                       {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Send className="w-3.5 h-3.5 mr-1" />} Dërgo tani
                     </Button>
@@ -756,6 +781,15 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
             {(broadcasts || []).length === 0 && <p className="text-[11px] text-muted-foreground">Asnjë fushatë ende.</p>}
             {(broadcasts || []).map((b) => {
               const isRule = b.trigger === 'dormant';
+              // Why the last run skipped people (stored by the cron, never shown before).
+              const blockedLast = Object.entries(b.lastRunBlocked || {})
+                .filter(([, n]) => Number(n) > 0)
+                .sort((x, y) => Number(y[1]) - Number(x[1]));
+              const failed = Object.entries(b.failedPhones || {});
+              const failedErrors = failed
+                .map(([phone, f]) => `${phone}: ${f?.error || 'gabim'}${(f?.count || 0) > 1 ? ` (×${f?.count})` : ''}`)
+                .slice(0, 8)
+                .join('\n');
               return (
                 <div key={b.id} className="flex items-center justify-between gap-3 border border-border rounded-lg px-3 py-2">
                   <div className="min-w-0">
@@ -770,12 +804,27 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
                       {isRule && b.conditions?.lastContactMinDays != null && ` · >${b.conditions.lastContactMinDays}d pa kontakt`}
                     </p>
                     {b.error && <p className="text-[10px] text-destructive truncate">{b.error}</p>}
+                    {failed.length > 0 && (
+                      <p className="text-[10px] text-destructive" title={failedErrors}>
+                        {failed.length} dështuan — kalo miun për arsyet
+                      </p>
+                    )}
+                    {blockedLast.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        <span className="text-[10px] text-muted-foreground">Ekzekutimi i fundit:</span>
+                        {blockedLast.map(([reason, n]) => (
+                          <span key={reason} className="text-[10px] px-1.5 py-px rounded-full bg-muted text-muted-foreground">
+                            {Number(n)} {WA_BLOCK_LABELS[reason as WaBlockReason] || reason}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${STATUS_BADGE[b.status] || ''}`}>
                       {b.status}
                     </span>
-                    {isRule && permissions.isAdmin && (
+                    {isRule && canManage && (b.status === 'active' || b.status === 'paused') && (
                       <button onClick={() => toggleRule(b)} title={b.status === 'active' ? 'Pauzo' : 'Aktivizo'}
                         aria-label={b.status === 'active' ? 'Pauzo automatizimin' : 'Aktivizo automatizimin'}
                         className="text-muted-foreground hover:text-foreground">

@@ -1,9 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminAuth, adminDb, Timestamp } from './_firebaseAdmin.js';
 import { checkPersistentRateLimit } from './_rateLimit.js';
-import { activeMembership } from './_callerIdentity.js';
+import { activeMembership, businessIdOfTeam } from './_callerIdentity.js';
 import { getTeamConfig } from './_tenantConfig.js';
-import { markConversationAnswered } from './_waInbound.js';
+import { markConversationAnswered, verifyContactRefs } from './_waInbound.js';
+import { toWaPhone, sameWaPhone } from './_waPhone.js';
 
 /**
  * Send a WhatsApp media message via Meta Cloud API.
@@ -15,8 +16,10 @@ import { markConversationAnswered } from './_waInbound.js';
  *   mediaMime,           // e.g. 'image/jpeg', 'application/pdf'
  *   filename?,           // required for documents
  *   caption?,            // optional caption (image / video / document only)
- *   leadId?, leadName?, channelPhone?
+ *   leadId?, customerId?, leadName?, channelPhone?
  * }
+ *
+ * `leadId` / `customerId` are verified against the team's business before use.
  *
  * Flow:
  *  1. Fetch the file from mediaUrl.
@@ -25,17 +28,10 @@ import { markConversationAnswered } from './_waInbound.js';
  *  4. Persist the outbound message in `whatsappMessages`.
  */
 
-function normalizePhone(raw: string): string {
-  const digits = (raw || '').replace(/[^\d]/g, '');
-  if (/^3550[6-9]/.test(digits)) return '355' + digits.slice(4);
-  if (/^0[6-9]/.test(digits)) return '355' + digits.slice(1);
-  if (/^[6-9]\d{8}$/.test(digits)) return '355' + digits;
-  return digits;
-}
-
 function validatePhoneStrict(raw: string): string | null {
   if (!raw || typeof raw !== 'string') return null;
-  const n = normalizePhone(raw);
+  const n = toWaPhone(raw);
+  if (!n) return null;
   if (!/^\d+$/.test(n) || n.length < 8 || n.length > 15) return null;
   if (n.startsWith('355')) {
     if (!/^3556[6-9]\d{7}$/.test(n) && !/^3557\d{7,8}$/.test(n)) return null;
@@ -111,7 +107,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     mediaMime,
     filename,
     caption,
-    leadId,
+    leadId: bodyLeadId,
+    customerId: bodyCustomerId,
     leadName,
     channelPhone,
   } = req.body || {};
@@ -146,6 +143,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (typeof teamId !== 'string' || !(await activeMembership(uid, { teamId }))) {
     return res.status(403).json({ error: 'Forbidden: nuk jeni anëtar i këtij ekipi' });
   }
+  // Body ids are claims: the lead / customer must be in THIS team's business.
+  const businessId = await businessIdOfTeam(teamId);
+  const refs = await verifyContactRefs({ leadId: bodyLeadId, customerId: bodyCustomerId, businessId, teamId });
+  if (!refs.ok) return res.status(refs.status).json({ error: refs.error });
+  const { leadId, customerId } = refs;
   // Media-URL host allowlist is platform-only (see platformMediaHosts) — checked
   // before any tenant config is read so a tenant setting can never widen it.
   if (!isAllowedMediaUrl(mediaUrl)) {
@@ -164,9 +166,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (settings.metaChannels && Array.isArray(settings.metaChannels) && settings.metaChannels.length > 0) {
     let ch = settings.metaChannels[0];
     if (channelPhone) {
-      const found = settings.metaChannels.find(
-        (c: any) => normalizePhone(c.phone) === normalizePhone(channelPhone),
-      );
+      const found = settings.metaChannels.find((c: any) => sameWaPhone(c?.phone, channelPhone));
       if (found) ch = found;
     }
     accessToken = ch.accessToken;
@@ -284,11 +284,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       message: summary,
       waMessageId,
       leadId: leadId || null,
-      leadName: leadName || null,
+      customerId: customerId || null,
+      leadName: (typeof leadName === 'string' && leadName ? leadName.slice(0, 200) : null) || refs.leadName,
       teamId,
+      businessId,
       status: 'sent',
       channel: 'meta',
-      channelPhone: normalizePhone(senderPhone),
+      channelPhone: toWaPhone(senderPhone),
       metaPhoneNumberId: phoneNumberId,
       isLid: false,
       mediaType,
@@ -303,7 +305,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
     // A staff reply closes the "awaiting reply" window. Best-effort.
-    await markConversationAnswered({ teamId, phone: cleanPhone, byUid: uid, source: 'app', leadId: leadId || null }).catch(() => {});
+    await markConversationAnswered({ teamId, phone: cleanPhone, byUid: uid, source: 'app', leadId, customerId }).catch(() => {});
 
     console.log(`[meta-send-media] → ${cleanPhone} (${mediaType}, ${ab.byteLength}B)`);
     return res.status(200).json({ success: true, id: docId, metaMediaId });

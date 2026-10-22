@@ -9,7 +9,7 @@ import { Switch } from '../ui/switch';
 import { Textarea } from '../ui/textarea';
 import { Badge } from '../ui/badge';
 import { useCollection } from '../../hooks/useFirestore';
-import { saveTeamSettings, type TeamSettings } from '../../hooks/useTeamSettings';
+import { saveTeamSettings, metaWhatsappConfigured, type TeamSettings } from '../../hooks/useTeamSettings';
 import { useToast } from '../../hooks/use-toast';
 import { FOLLOW_UP_LIMITS, normalizeCadenceDays, resolveFollowUpConfig } from '../../lib/crm/followUpConfig';
 import { resolvePlaybooks } from '../../lib/crm/playbooks';
@@ -68,8 +68,14 @@ function previewTokens(text: string): string {
     (SAMPLE_CONTACT as Record<string, string>)[key] ?? '');
 }
 
-/** Read the draft from the stored settings, applying the documented defaults. */
-function draftFrom(s: TeamSettings | null): Draft {
+/**
+ * Read the draft from the stored settings, applying the documented defaults.
+ * `inferredInvoiceChannel`: when the team never chose an invoice channel, the
+ * form proposes the one it actually HAS (the resolver's default is Meta, which a
+ * Baileys-only tenant cannot send with). Left out for the "stored" snapshot, so
+ * the proposal shows as an unsaved change until the owner saves it.
+ */
+function draftFrom(s: TeamSettings | null, inferredInvoiceChannel?: 'meta' | 'baileys'): Draft {
   const cfg = resolveFollowUpConfig(s);
   const invoiceWa = resolveInvoiceWaConfig(s);
   return {
@@ -103,7 +109,7 @@ function draftFrom(s: TeamSettings | null): Draft {
     waOverdueChannelPhoneNumberId: s?.waOverdueChannelPhoneNumberId || '',
     // Invoice WhatsApp reminders — same resolver the cron reads with.
     waInvoiceSources: invoiceWa.sources,
-    waInvoiceChannel: invoiceWa.channel,
+    waInvoiceChannel: !s?.waInvoiceChannel && inferredInvoiceChannel ? inferredInvoiceChannel : invoiceWa.channel,
     waInvoiceAgentId: invoiceWa.agentId,
     waInvoiceText: s?.waInvoiceText ?? '',
     waInvoicePreDueDays: invoiceWa.preDueDays,
@@ -245,19 +251,26 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
   const { data: waAccounts } = useCollection<WhatsAppAccount>('whatsappAccounts');
   const baileysAgents = (waAccounts || []).filter((a) => a.enabled);
   const channels = settings?.metaChannels || [];
-  const [draft, setDraft] = useState<Draft>(() => draftFrom(settings));
+  // Which WhatsApp channels this team can actually send with.
+  const metaAvailable = metaWhatsappConfigured(settings);
+  const baileysAvailable = !!settings?.whatsappEnabled && baileysAgents.length > 0;
+  const anyWaChannel = metaAvailable || baileysAvailable;
+  const inferredInvoiceChannel: 'meta' | 'baileys' | undefined = baileysAvailable ? 'baileys' : metaAvailable ? 'meta' : undefined;
+  const [draft, setDraft] = useState<Draft>(() => draftFrom(settings, inferredInvoiceChannel));
   const [saving, setSaving] = useState<SectionId | null>(null);
   const [touched, setTouched] = useState<Set<keyof TeamSettings>>(new Set());
 
   // Follow the document for keys the user has NOT touched (another admin may save).
   useEffect(() => {
-    const fresh = draftFrom(settings);
+    const fresh = draftFrom(settings, inferredInvoiceChannel);
     setDraft((prev) => {
       const next: Draft = { ...fresh };
       touched.forEach((k) => { (next as Record<string, unknown>)[k] = prev[k]; });
       return next;
     });
-  }, [settings]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [settings, inferredInvoiceChannel]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The team whose settings are DISPLAYED changed → drop unsaved edits of the old one.
+  useEffect(() => { setTouched(new Set()); }, [teamId]);
 
   const set = <K extends keyof TeamSettings>(key: K, value: TeamSettings[K]) => {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -369,7 +382,10 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
 
       {/* 2 · Përgjigje automatike WhatsApp */}
       <SectionCard icon={<MessageSquareReply className="w-5 h-5 text-[#25D366]" />} title="Përgjigje automatike WhatsApp"
-        description="Të vetmet mesazhe që dërgohen pa njeri: përshëndetja e kontaktit të parë dhe mesazhi jashtë orarit. Tokenët: {{firstName}} {{name}} {{company}}." {...sectionProps('autoReply')}>
+        description="Të vetmet mesazhe që dërgohen pa njeri: përshëndetja e kontaktit të parë dhe mesazhi jashtë orarit. Tokenët: {{firstName}} (emri i parë), {{name}} (emri i plotë), {{company}}; një token i panjohur del bosh." {...sectionProps('autoReply')}>
+        <p className="text-[11px] text-muted-foreground bg-muted/60 rounded-md px-3 py-2">
+          Arsyeja pse një mesazh hyrës NUK mori përgjigje automatike (brenda orarit, u dërgua së fundmi, kontakti ka refuzuar…) nuk ruhet ende për t’u shfaqur këtu — vendimi merret dhe logohet vetëm në server.
+        </p>
         <ToggleRow label="Përshëndetje për kontaktin e parë" checked={!!draft.waGreetingEnabled} onChange={(v) => set('waGreetingEnabled', v)} disabled={ro}
           hint="Dërgohet një herë kur na shkruan një numër pa histori." />
         <Textarea rows={2} value={draft.waGreetingText || ''} onChange={(e) => set('waGreetingText', e.target.value)} disabled={ro || !draft.waGreetingEnabled}
@@ -443,12 +459,18 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
 
       {/* 4 · Rikujtues automatikë (moved from WhatsappAutomation.tsx, same keys) */}
       <SectionCard icon={<Zap className="w-5 h-5 text-[#25D366]" />} title="Rikujtues automatikë WhatsApp"
-        description="Template-e Meta që dërgohen nga cron-i: në datën e rikontaktit, pas X ditësh heshtjeje dhe për fatura të vonuara." {...sectionProps('reminders')}>
-        <ToggleRow label="Follow-up automatik me template" checked={!!draft.waFollowUpEnabled} onChange={(v) => set('waFollowUpEnabled', v)} disabled={ro}
+        description="Mesazhe që dërgohen nga cron-i: në datën e rikontaktit, pas X ditësh heshtjeje dhe për fatura të vonuara. Kërkojnë një kanal WhatsApp (Meta ose Baileys)." {...sectionProps('reminders')}>
+        {!anyWaChannel && (
+          <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-md px-3 py-2">
+            Asnjë kanal WhatsApp i gatshëm (Meta me numër, ose Baileys me një agjent). Rikujtuesit nuk mund të dërgojnë derisa të konfigurohet njëri te{' '}
+            <Link to="/app/settings?tab=integrations" className="underline font-medium">Integrimet →</Link>
+          </p>
+        )}
+        <ToggleRow label="Follow-up automatik me template" checked={!!draft.waFollowUpEnabled} onChange={(v) => set('waFollowUpEnabled', v)} disabled={ro || (!anyWaChannel && !draft.waFollowUpEnabled)}
           hint="Kur një lead arrin datën e rikontaktit, dërgohet template-i i zgjedhur (përveç njoftimit te agjenti)." />
         {templateBlock('waFollowUpTemplateId', 'waFollowUpChannelPhoneNumberId', ro || !draft.waFollowUpEnabled)}
         <div className="border-t border-border" />
-        <ToggleRow label="Rikujtues për lead në pritje" checked={!!draft.waAutoReminderEnabled} onChange={(v) => set('waAutoReminderEnabled', v)} disabled={ro}
+        <ToggleRow label="Rikujtues për lead në pritje" checked={!!draft.waAutoReminderEnabled} onChange={(v) => set('waAutoReminderEnabled', v)} disabled={ro || (!anyWaChannel && !draft.waAutoReminderEnabled)}
           hint="Lead në statuset e zgjedhura, pa komunikim prej X ditësh → template automatik." />
         <div className="flex flex-wrap items-end gap-4">
           <NumberField label="Pas" value={draft.waAutoReminderDays} onChange={(v) => set('waAutoReminderDays', v)} min={1} max={90} suffix="ditësh pa komunikim" disabled={ro || !draft.waAutoReminderEnabled} />
@@ -495,9 +517,20 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
               <div className="space-y-1.5">
                 <Label className="text-xs">Kanali</Label>
                 <NativeSelect value={draft.waInvoiceChannel || 'meta'} onChange={(e) => set('waInvoiceChannel', e.target.value as 'meta' | 'baileys')} disabled={off}>
-                  <option value="meta">Meta (template i aprovuar)</option>
-                  <option value="baileys">Baileys (tekst i lirë, numri i ekipit)</option>
+                  <option value="meta">Meta (template i aprovuar){metaAvailable ? '' : ' — s’është konfiguruar'}</option>
+                  <option value="baileys">Baileys (tekst i lirë, numri i ekipit){baileysAvailable ? '' : ' — s’ka agjent'}</option>
                 </NativeSelect>
+                {!settings?.waInvoiceChannel && inferredInvoiceChannel && (
+                  <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                    U propozua kanali që keni ({inferredInvoiceChannel === 'baileys' ? 'Baileys' : 'Meta'}) — ruaj që cron-i ta përdorë.
+                  </p>
+                )}
+                {draft.waInvoiceChannel === 'meta' && !metaAvailable && (
+                  <p className="text-[11px] text-destructive">Meta nuk është konfiguruar — kujtesat do bllokohen (“kanali WhatsApp mungon”).</p>
+                )}
+                {draft.waInvoiceChannel === 'baileys' && !baileysAvailable && (
+                  <p className="text-[11px] text-destructive">Baileys nuk ka agjent aktiv — kujtesat do bllokohen.</p>
+                )}
               </div>
             </div>
             {draft.waInvoiceChannel === 'baileys' ? (
@@ -516,8 +549,9 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
                   <Textarea rows={4} value={draft.waInvoiceText || ''} onChange={(e) => set('waInvoiceText', e.target.value)} disabled={off}
                     placeholder={DEFAULT_INVOICE_WA_TEXT} className="text-sm" />
                   <p className="text-[11px] text-muted-foreground">
-                    Token-e: {'{{firstName}} {{name}} {{company}} {{invoiceNumber}} {{amount}} {{currency}} {{dueDate}} {{dueText}} {{daysLate}} {{link}} {{whmcsLink}}'}.
-                    Bosh = teksti standard. Pa {'{{link}}'} linku i pagesës shtohet vetë në fund.
+                    Token-e të faturës: {'{{firstName}} {{name}} {{company}} {{invoiceNumber}} {{amount}} {{currency}} {{dueDate}} {{dueText}} {{daysLate}} {{link}} {{whmcsLink}}'}
+                    ({'{{name}}'} = emri i plotë i klientit, {'{{company}}'} = kompania juaj, {'{{amount}}'} = mbetja për t’u paguar).
+                    Bosh = teksti standard. Një token i panjohur del bosh; pa {'{{link}}'} linku i pagesës shtohet vetë në fund.
                   </p>
                   <div className="rounded-md bg-muted/60 p-3 text-xs whitespace-pre-wrap">{sample}</div>
                 </div>
@@ -525,7 +559,7 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
             ) : (
               <>
                 {templateBlock('waOverdueTemplateId', 'waOverdueChannelPhoneNumberId', off)}
-                <p className="text-[11px] text-muted-foreground">Meta dërgon vetëm template të aprovuar (kategori Utility). Parametrat e template-it mund t’i lidhësh me: name, firstName, invoiceNumber, amount, currency, dueDate, dueText, daysLate, link, whmcsLink.</p>
+                <p className="text-[11px] text-muted-foreground">Meta dërgon vetëm template të aprovuar (kategori Utility). Parametrat {'{{1}}, {{2}}…'} e template-it i lidh te WhatsApp → Template-t me fushat e faturës: Nr. fature, Shuma, Mbetja, Monedha, Afati, Ditë vonesë, Emri i klientit, Kompania jonë, Linku i pagesës.</p>
               </>
             )}
             <p className="text-[11px] text-muted-foreground">

@@ -39,6 +39,7 @@ import EmailComposerDialog, { useContactEmailAvailable, type EmailTarget } from 
 import { useFollowUpActions, targetFromCustomer } from '../hooks/useFollowUpActions';
 import { dueState, daysSinceContact, touchContactPatch } from '../lib/crm/followUp';
 import { Bell, CheckCircle2, ExternalLink } from 'lucide-react';
+import WaOptOutControl from '../components/WaOptOutControl';
 import { projectTaskProgress } from '../lib/projectProgress';
 import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service, FollowUpType, Subscription, Domain, TimeEntry, Expense, TeamMember } from '../types';
 
@@ -417,6 +418,7 @@ const Customer360View: React.FC = () => {
             {customer.phone && (
               <span className="flex items-center gap-1"><Phone className="w-3.5 h-3.5" />{customer.phone}</span>
             )}
+            <WaOptOutControl kind="customer" id={customer.id} optedOut={!!customer.waOptOut} />
             {(() => { const d = daysSinceContact(customer); return (
               <span className={`text-xs ${d === null || d > 30 ? 'text-warning' : ''}`}>
                 {d === null ? 'Pa kontakt të regjistruar' : d === 0 ? 'Kontaktuar sot' : `Kontakti i fundit ${d} ditë më parë`}
@@ -492,6 +494,7 @@ const Customer360View: React.FC = () => {
         <WhatsAppChatPanel
           phone={customer.phone}
           leadName={customer.name}
+          customerId={customer.id}
           onClose={() => setWaOpen(false)}
           onSent={(e) => void followUp.logContact(targetFromCustomer(customer), 'whatsapp', e.body, { countsAsFollowUp: true })}
         />
