@@ -1,15 +1,31 @@
 // Shared pieces of the task detail panel (extracted verbatim from
 // TaskDetailPanel — no behaviour change).
 //
-// ── Redesign (Aug 2026, Claude Design "Detyrat e Krijuara" + "Detyra e Krijuar
+// ── Redesign (Oct 2026, Claude Design "Task Sheet") ──────────────────────────
+// LAYOUT CONTRACT (from `Task Sheet.dc.html`, MedRise design system — tokens
+// mapped onto the app's own navy/cyan palette and DM Sans):
+//   · a sticky translucent header (status pill · title that fades in on scroll
+//     · "⋯" menu [Dupliko / Kopjo lidhjen / Fshi] · close);
+//   · the body is a column of GROUPED CARDS with an eyebrow label above each
+//     (Detajet / Koha / Organizimi / Përshkrimi / Aktiviteti): every row is
+//     `[30px icon tile] [label] [value] [chevron]`, min-height 52px, divider
+//     indented to the label (58px), and a tap expands the row INLINE into
+//     40px pill options (one open row at a time);
+//   · priority is a 4-segment control; labels live inline in the tag row;
+//   · a dark pill toast at the top; a bottom bar "Ndryshuar nga X · date" +
+//     Ruaj; a centred two-button delete confirmation.
+// The parents still position the panel (side panel on desktop, bottom sheet on
+// mobile) — the panel only brings the content. The sections below the design's
+// scope (approval, time, subtasks, attachments, chat, comments) keep their
+// behaviour and render as the same kind of card.
+//
+// ── Previous redesign (Aug 2026, "Detyrat e Krijuara" + "Detyra e Krijuar
 // Mobile") ─────────────────────────────────────────────────────────────────────
-// The panel owns its own overlay: a centered 660px dialog on desktop, a bottom
-// sheet on mobile. Status is a pill dropdown; the project and the assignee are
-// picked through searchable pickers (anchored dropdown on desktop, full-screen
-// sheet on mobile); dates/recurrence/priority are one-tap chips. Both mounts
-// (TasksView, ProjectDetailView) render the SAME component with no wrapper.
+// Status is a pill dropdown; the project and the assignee are searchable; the
+// dates/recurrence/priority are one-tap chips. Both mounts (TasksView,
+// ProjectDetailView) render the SAME component with no wrapper.
 import React from 'react';
-import { Search } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { hasLiveSeriesSibling } from '../../../lib/recurringUtils';
 import type { Task } from '../../../types';
 
@@ -31,12 +47,108 @@ export const chipCls = (on: boolean) =>
     on ? 'border-foreground bg-foreground text-background' : 'border-border bg-background text-muted-foreground hover:border-primary'
   }`;
 
-/** Label-grid row of the meta section (per the design). */
-export const rowCls = 'grid grid-cols-[92px_1fr] items-center gap-2.5 border-b border-border/60 py-2 sm:grid-cols-[118px_1fr]';
-export const rowLabelCls = 'text-[12.5px] font-semibold text-muted-foreground';
-
 /** Section heading inside the scrollable body. */
 export const sectionTitleCls = 'text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground';
+
+// ── Task Sheet primitives ──────────────────────────────────────────────────────
+
+/** Eyebrow above a card group ("DETAJET", "KOHA", …). */
+export const eyebrowCls = 'px-4 text-[12px] font-bold uppercase tracking-[0.08em] text-muted-foreground';
+
+/** Grouped card: white surface, hairline border, 18px radius, xs shadow. */
+export const cardCls = 'overflow-hidden rounded-[18px] border border-border bg-card shadow-[0_1px_2px_rgba(12,27,51,0.06)]';
+
+/** The indented hairline between two rows of a card (starts at the label). */
+export const RowDivider: React.FC = () => <div className="ml-[58px] h-px bg-border" />;
+
+/** 40px pill option (the design's inline choices). Selected = filled primary. */
+export const pillCls = (on: boolean) =>
+  `inline-flex h-10 items-center rounded-full border px-4 text-[14px] font-semibold transition-colors disabled:cursor-default ${
+    on ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-foreground hover:border-primary/60'
+  }`;
+
+/** Rounded time/date input that sits next to the pills (mono digits). */
+export const pillInputCls = 'h-10 rounded-full border border-border bg-muted px-3.5 font-mono text-[14px] text-foreground outline-none focus:ring-2 focus:ring-primary/30';
+
+/** Padding of the area that opens under a row (aligned with the label). */
+export const rowBodyCls = 'flex flex-wrap gap-2 px-4 pb-3.5 pl-[58px] pt-0.5';
+
+export type TileTone = 'brand' | 'danger' | 'warning' | 'info' | 'neutral';
+const TILE_TONES: Record<TileTone, string> = {
+  brand: 'bg-primary/10 text-primary',
+  danger: 'bg-red-500/10 text-red-600 dark:text-red-400',
+  warning: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+  info: 'bg-sky-500/10 text-sky-600 dark:text-sky-400',
+  neutral: 'bg-muted text-muted-foreground',
+};
+
+/** 30px icon tile at the start of a row. */
+export const IconTile: React.FC<{ tone?: TileTone; className?: string; children: React.ReactNode }> = ({ tone = 'brand', className = '', children }) => (
+  <span className={`flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg ${TILE_TONES[tone]} ${className}`}>
+    {children}
+  </span>
+);
+
+/**
+ * One row of a card: `[tile] [label] [value] [chevron]`, 52px tall. When `onToggle`
+ * is given the row is a button and the chevron rotates while `open`; the caller
+ * renders what opens underneath (`rowBodyCls`). `static` rows keep the grid
+ * but no chevron.
+ */
+export const SheetRow: React.FC<{
+  tile: React.ReactNode;
+  label: React.ReactNode;
+  value?: React.ReactNode;
+  /** Class of the value cell (colour/weight per state). */
+  valueClassName?: string;
+  open?: boolean;
+  onToggle?: () => void;
+  disabled?: boolean;
+  chevron?: boolean;
+  title?: string;
+}> = ({ tile, label, value, valueClassName = 'text-[15px] text-foreground/80', open = false, onToggle, disabled, chevron = true, title }) => {
+  const grid = `grid w-full items-center gap-3 px-4 py-[11px] text-left min-h-[52px] ${chevron ? 'grid-cols-[30px_1fr_auto_16px]' : 'grid-cols-[30px_1fr_auto]'}`;
+  const inner = (
+    <>
+      {tile}
+      <span className="min-w-0 truncate text-[16px] font-semibold text-foreground">{label}</span>
+      <span className={`min-w-0 max-w-[55%] truncate text-right ${valueClassName}`}>{value}</span>
+      {chevron && (
+        <ChevronRight
+          className={`h-4 w-4 text-muted-foreground/70 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
+          strokeWidth={2.4}
+        />
+      )}
+    </>
+  );
+  if (!onToggle) return <div className={grid} title={title}>{inner}</div>;
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-expanded={open}
+      title={title}
+      onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      className={`${grid} bg-transparent transition-colors hover:bg-muted/40 disabled:cursor-default disabled:hover:bg-transparent`}
+    >
+      {inner}
+    </button>
+  );
+};
+
+/** Human day label for the sheet values: "Sot", "Nesër", "Dje", else "22 Tet". */
+export const dayLabel = (d: Date, now: Date = new Date()) => {
+  const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
+  const tom = new Date(now); tom.setDate(now.getDate() + 1);
+  const yes = new Date(now); yes.setDate(now.getDate() - 1);
+  if (same(d, now)) return 'Sot';
+  if (same(d, tom)) return 'Nesër';
+  if (same(d, yes)) return 'Dje';
+  return formatDateCompact(d);
+};
+
+/** "Sot, 17:00" / "22 Tet, 09:30" — the value cell of a dated row. */
+export const dayTimeLabel = (d: Date) => `${dayLabel(d)}, ${timeStr(d)}`;
 
 /** Safe date parser for Firestore Timestamps / Date / string / undefined
  *  (falls back to NOW — only for fields that always have a value, like startDate). */
@@ -99,48 +211,3 @@ export const reopenPatchFor = (t: Task, pool: Task[] | undefined | null): Partia
   const rearm = !!t.isRecurring && !hasLiveSeriesSibling(t, pool);
   return { completedAt: null, ...(rearm ? { nextCycleCreated: false } : {}) };
 };
-
-/** Searchable picker body — anchored dropdown on sm+, full-screen bottom sheet
- * on mobile (the two design variants share this one implementation). */
-export const PickerPanel: React.FC<{
-  title: string;
-  searchPlaceholder: string;
-  query: string;
-  onQuery: (v: string) => void;
-  onClose: () => void;
-  children: React.ReactNode;
-}> = ({ title, searchPlaceholder, query, onQuery, onClose, children }) => (
-  <div
-    className="max-sm:fixed max-sm:inset-0 max-sm:z-[70] max-sm:flex max-sm:flex-col max-sm:justify-end max-sm:bg-[#0C1B33]/50 sm:absolute sm:left-0 sm:top-[calc(100%+6px)] sm:z-40"
-    onClick={(e) => { e.stopPropagation(); onClose(); }}
-  >
-    <div
-      className="flex flex-col bg-background max-sm:h-[78dvh] max-sm:rounded-t-[22px] max-sm:shadow-[0_-12px_40px_rgba(4,12,30,.4)] sm:w-[330px] sm:overflow-hidden sm:rounded-[14px] sm:border sm:shadow-[0_14px_36px_rgba(12,27,51,.22)]"
-      onClick={(e) => e.stopPropagation()}
-    >
-      <div className="flex justify-center pb-0.5 pt-2 sm:hidden">
-        <span className="h-[5px] w-[38px] rounded-full bg-border" />
-      </div>
-      <div className="flex items-center gap-2 px-4 pb-1.5 pt-1 sm:hidden">
-        <span className="flex-1 text-[14.5px] font-extrabold text-foreground">{title}</span>
-        <button type="button" onClick={onClose} className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-muted text-xs text-muted-foreground">✕</button>
-      </div>
-      <div className="px-3 pb-2 pt-2.5">
-        <div className="flex items-center gap-2 rounded-full border bg-muted/50 px-3.5 py-2">
-          <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <input
-            autoFocus
-            value={query}
-            onChange={(e) => onQuery(e.target.value)}
-            placeholder={searchPlaceholder}
-            className="w-full min-w-[40px] bg-transparent text-[13px] font-semibold text-foreground outline-none placeholder:text-muted-foreground/60"
-          />
-          {query && (
-            <button type="button" onClick={() => onQuery('')} className="shrink-0 text-[11px] text-muted-foreground">✕</button>
-          )}
-        </div>
-      </div>
-      <div className="flex flex-1 flex-col gap-px overflow-y-auto px-2 pb-3 sm:max-h-[258px]">{children}</div>
-    </div>
-  </div>
-);

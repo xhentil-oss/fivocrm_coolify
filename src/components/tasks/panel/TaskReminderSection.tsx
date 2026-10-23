@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bell, BellOff } from 'lucide-react';
+import { Bell } from 'lucide-react';
 import { useAuth } from '../../../contexts/AuthContext';
 import { Calendar } from '../../ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover';
@@ -11,7 +11,7 @@ import {
   parseTaskDate,
 } from '../../../lib/taskReminders';
 import type { Task } from '../../../types';
-import { chipCls, formatDateCompact, rowCls, rowLabelCls, timeStr } from './panelShared';
+import { IconTile, SheetRow, formatDateCompact, pillCls, pillInputCls, rowBodyCls, timeStr } from './panelShared';
 
 interface TaskReminderSectionProps {
   task: Task;
@@ -19,10 +19,12 @@ interface TaskReminderSectionProps {
   /** The panel's local deadline (fallback anchor for a custom time). */
   endDate: Date | null;
   onUpdate: (id: string, data: any) => Promise<any>;
+  open: boolean;
+  onToggle: () => void;
 }
 
-/** "Kujtesë" row — "Më kujto" (Asana/Salesforce-style reminder). */
-const TaskReminderSection: React.FC<TaskReminderSectionProps> = ({ task, readOnly, endDate, onUpdate }) => {
+/** "Kujtesë" row (Koha card) — "Më kujto" (Asana/Salesforce-style reminder). */
+const TaskReminderSection: React.FC<TaskReminderSectionProps> = ({ task, readOnly, endDate, onUpdate, open, onToggle }) => {
   const { user } = useAuth();
   // Presets resolve against the deadline; a custom moment is absolute. All
   // writes go through setReminderPatch so the three fields never disagree.
@@ -37,10 +39,10 @@ const TaskReminderSection: React.FC<TaskReminderSectionProps> = ({ task, readOnl
     ({ ...p, reminderSetByUserId: p.reminderAt ? (user?.uid ?? null) : null });
   // A preset is RELATIVE to the deadline, so it resolves against the TASK's
   // stored deadline — never the panel's local state. No deadline → no reminder
-  // (setReminderPatch returns the clear patch), and the chips are hidden.
+  // (setReminderPatch returns the clear patch), and the presets are hidden.
   const hasDeadline = !!parseTaskDate(task.endDate);
   const handleReminderPreset = async (minutes: number) => {
-    // Tapping the active preset clears it (chips toggle, like labels).
+    // Tapping the active preset clears it (pills toggle, like labels).
     if (reminderPreset?.minutes === minutes) { await onUpdate(task.id, clearReminderPatch()); return; }
     if (!hasDeadline) return;
     await onUpdate(task.id, setByMe(setReminderPatch(task, { offsetMinutes: minutes })));
@@ -60,56 +62,61 @@ const TaskReminderSection: React.FC<TaskReminderSectionProps> = ({ task, readOnl
     await onUpdate(task.id, setByMe(setReminderPatch(task, { at })));
   };
 
+  const valueText = reminderAt
+    ? (reminderPreset ? reminderPreset.label : describeReminder(task))
+    : 'Asnjë';
+
   return (
-    <div className={rowCls}>
-      <span className={rowLabelCls}>Kujtesë</span>
-      <div className="flex flex-wrap items-center gap-1.5">
-        {/* Presets are "X before the deadline" — meaningless without one. */}
-        {!readOnly && !hasDeadline && !reminderAt && (
-          <span className="text-[11.5px] text-muted-foreground">Vendos një afat për kujtesat relative, ose zgjidh një datë.</span>
-        )}
-        {hasDeadline && REMINDER_PRESETS.map(p => (
-          <button
-            key={p.key}
-            type="button"
-            disabled={readOnly}
-            onClick={() => handleReminderPreset(p.minutes)}
-            className={chipCls(reminderPreset?.key === p.key)}
-            title={p.minutes === 0 ? 'Njoftim në momentin e afatit' : `Njoftim ${p.label.toLowerCase()} afatit`}
-          >
-            {p.label}
-          </button>
-        ))}
-        <Popover>
-          <PopoverTrigger asChild>
-            <button type="button" disabled={readOnly} className={chipCls(reminderIsCustom)} title="Zgjidh datën dhe orën e kujtesës">
-              📅 {reminderIsCustom && reminderAt ? formatDateCompact(reminderAt) : 'Tjetër…'}
+    <>
+      <SheetRow
+        tile={<IconTile tone="warning"><Bell className="h-[17px] w-[17px]" strokeWidth={2} /></IconTile>}
+        label="Kujtesë"
+        value={valueText}
+        valueClassName={`text-[15px] ${reminderAt ? (task.reminderSentAt ? 'text-muted-foreground line-through' : 'text-foreground/80') : 'text-muted-foreground'}`}
+        title={reminderAt ? describeReminder(task) : undefined}
+        open={open}
+        disabled={readOnly}
+        onToggle={onToggle}
+      />
+      {open && !readOnly && (
+        <div className={rowBodyCls} onClick={(e) => e.stopPropagation()}>
+          <button type="button" onClick={handleReminderClear} className={pillCls(!reminderAt)}>Asnjë</button>
+          {/* Presets are "X before the deadline" — meaningless without one. */}
+          {hasDeadline && REMINDER_PRESETS.map(p => (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => handleReminderPreset(p.minutes)}
+              className={pillCls(reminderPreset?.key === p.key)}
+              title={p.minutes === 0 ? 'Njoftim në momentin e afatit' : `Njoftim ${p.label.toLowerCase()} afatit`}
+            >
+              {p.label}
             </button>
-          </PopoverTrigger>
-          <PopoverContent className="w-auto p-0" align="start">
-            <Calendar mode="single" selected={reminderAt ?? undefined} onSelect={handleReminderCustomDate} />
-          </PopoverContent>
-        </Popover>
-        {!readOnly && reminderAt && (
-          <input
-            type="time"
-            value={timeStr(reminderAt)}
-            onChange={handleReminderCustomTime}
-            className="h-7 rounded border border-border/50 bg-muted/40 px-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-            title="Ora e kujtesës"
-          />
-        )}
-        {reminderAt && (
-          <span className={`inline-flex items-center gap-1 text-[11.5px] ${task.reminderSentAt ? 'text-muted-foreground' : 'text-primary'}`}>
-            {task.reminderSentAt ? <BellOff className="h-3 w-3" /> : <Bell className="h-3 w-3" />}
-            {describeReminder(task)}
-          </span>
-        )}
-        {reminderAt && !readOnly && (
-          <button type="button" onClick={handleReminderClear} className="text-xs font-bold text-muted-foreground hover:text-foreground" title="Hiq kujtesën">✕</button>
-        )}
-      </div>
-    </div>
+          ))}
+          <Popover>
+            <PopoverTrigger asChild>
+              <button type="button" className={pillCls(reminderIsCustom)} title="Zgjidh datën dhe orën e kujtesës">
+                📅 {reminderIsCustom && reminderAt ? formatDateCompact(reminderAt) : 'Tjetër…'}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar mode="single" selected={reminderAt ?? undefined} onSelect={handleReminderCustomDate} />
+            </PopoverContent>
+          </Popover>
+          {reminderAt && (
+            <input type="time" value={timeStr(reminderAt)} onChange={handleReminderCustomTime} className={pillInputCls} title="Ora e kujtesës" aria-label="Ora e kujtesës" />
+          )}
+          {!hasDeadline && !reminderAt && (
+            <div className="w-full text-[13px] text-muted-foreground">Vendos një afat për kujtesat relative, ose zgjidh një datë.</div>
+          )}
+          {reminderAt && (
+            <div className={`w-full text-[13px] ${task.reminderSentAt ? 'text-muted-foreground' : 'text-primary'}`}>
+              {task.reminderSentAt ? 'U dërgua · ' : ''}{describeReminder(task)}
+            </div>
+          )}
+        </div>
+      )}
+    </>
   );
 };
 

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Users } from 'lucide-react';
 import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useCollection, useMutation } from '../hooks/useFirestore';
@@ -7,12 +7,12 @@ import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceC
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Badge } from './ui/badge';
-import { ScrollArea } from './ui/scroll-area';
+import { taskDeepLink } from '../lib/deepLinks';
 import { type MentionCandidate } from './comments/CommentEditor';
 import { toast } from '../hooks/use-toast';
 import { taskCompletedNotifications } from '../lib/taskNotifications';
 import type { Task, TaskComment } from '../types';
-import { formatDateCompact, reopenPatchFor } from './tasks/panel/panelShared';
+import { RowDivider, cardCls, dayLabel, eyebrowCls, reopenPatchFor } from './tasks/panel/panelShared';
 import { useTaskPanelDates } from './tasks/panel/useTaskPanelDates';
 import TaskPanelHeader from './tasks/panel/TaskPanelHeader';
 import TaskPeopleRows from './tasks/panel/TaskPeopleRows';
@@ -20,7 +20,7 @@ import { TaskDueDateRow, TaskStartDateRow } from './tasks/panel/TaskDatesSection
 import TaskReminderSection from './tasks/panel/TaskReminderSection';
 import TaskRecurrenceSection from './tasks/panel/TaskRecurrenceSection';
 import TaskDependenciesSection from './tasks/panel/TaskDependenciesSection';
-import TaskPriorityLabelRows from './tasks/panel/TaskPriorityLabelRows';
+import { TaskPriorityRow, TaskLabelsRow } from './tasks/panel/TaskPriorityLabelRows';
 import TaskActivityTab from './tasks/panel/TaskActivityTab';
 import TaskDescriptionSection from './tasks/panel/TaskDescriptionSection';
 import TaskTimeTrackingSection from './tasks/panel/TaskTimeTrackingSection';
@@ -35,8 +35,9 @@ import { shouldMarkAssigneeSeen } from '../lib/taskReceipts';
 import { markAssigneeSeen } from '../lib/taskReceiptWrites';
 
 // The panel is composed from the sections in src/components/tasks/panel/ (the
-// design notes live in panelShared.tsx). Both mounts (TasksView,
-// ProjectDetailView) render THIS component with these exact props.
+// LAYOUT CONTRACT of the Oct 2026 "Task Sheet" design lives in panelShared.tsx).
+// All three mounts (TasksView, MyTasksView, ProjectDetailView) render THIS
+// component with these exact props.
 
 interface TaskDetailPanelProps {
   task: Task;
@@ -249,13 +250,44 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     setIsEditingTitle(false);
   };
 
-  // ── Redesign state: pill dropdowns + searchable pickers ──
+  // ── Sheet state: status menu, "⋯" menu, ONE open row at a time ──
   const [statusOpen, setStatusOpen] = useState(false);
-  const [assignOpen, setAssignOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [assignOpen, setAssignOpenRaw] = useState(false);
   const [assignQuery, setAssignQuery] = useState('');
-  const [projectOpen, setProjectOpen] = useState(false);
+  const [projectOpen, setProjectOpenRaw] = useState(false);
   const [projectQuery, setProjectQuery] = useState('');
-  const closePickers = () => { setStatusOpen(false); setAssignOpen(false); setProjectOpen(false); };
+  // The Koha/Organizimi/Aktiviteti rows that open inline (design: a tap on a
+  // row expands it under itself and folds whichever row was open).
+  type SheetRowKey = 'due' | 'start' | 'remind' | 'repeat' | 'block' | 'hist';
+  const [openRow, setOpenRow] = useState<SheetRowKey | null>(null);
+  const toggleRow = (k: SheetRowKey) => {
+    setOpenRow(prev => (prev === k ? null : k));
+    setProjectOpenRaw(false); setAssignOpenRaw(false); setStatusOpen(false); setMenuOpen(false);
+  };
+  // The people rows keep their own open flags (they also drive the queries);
+  // opening one folds every other row.
+  const setProjectOpen: React.Dispatch<React.SetStateAction<boolean>> = (v) => { setOpenRow(null); setAssignOpenRaw(false); setProjectOpenRaw(v); };
+  const setAssignOpen: React.Dispatch<React.SetStateAction<boolean>> = (v) => { setOpenRow(null); setProjectOpenRaw(false); setAssignOpenRaw(v); };
+  const closePickers = () => { setStatusOpen(false); setAssignOpenRaw(false); setProjectOpenRaw(false); setMenuOpen(false); };
+
+  // Header: the big title scrolls away → the header shows it + its hairline.
+  const [scrolled, setScrolled] = useState(false);
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const v = e.currentTarget.scrollTop > 40;
+    setScrolled(prev => (prev === v ? prev : v));
+  }, []);
+
+  // In-sheet toast ("Detyra u krijua", "Lidhja u kopjua", …) — a dark pill at
+  // the top of the sheet, gone after 2.4 s.
+  const [flash, setFlash] = useState<{ text: string; on: boolean }>({ text: '', on: false });
+  const flashTimer = useRef<number | null>(null);
+  const showFlash = useCallback((text: string) => {
+    if (flashTimer.current) window.clearTimeout(flashTimer.current);
+    setFlash({ text, on: true });
+    flashTimer.current = window.setTimeout(() => setFlash(f => ({ ...f, on: false })), 2400);
+  }, []);
+  useEffect(() => () => { if (flashTimer.current) window.clearTimeout(flashTimer.current); }, []);
 
   // Status change — the completeTask flow (recurring next-cycle, blockers) is the
   // same one the old header select ran; both status dropdowns call this.
@@ -325,23 +357,91 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const creatorLabel = (task as any).createdByUserId
     ? ((task as any).createdByUserId === user?.uid ? 'ti' : getUserDisplayName((task as any).createdByUserId))
     : '';
-  const subtitleText = [
-    currentProject?.name || 'Pa projekt',
-    createdLabel ? `krijuar ${createdLabel}${creatorLabel ? ` nga ${creatorLabel}` : ''}` : null,
-  ].filter(Boolean).join(' · ');
+  // "Krijuar sot 14:43 nga ti" — the line under the title (the project has
+  // its own row in the Detajet card).
+  const subtitleText = createdLabel
+    ? `Krijuar ${createdLabel}${creatorLabel ? ` nga ${creatorLabel}` : ''}`
+    : (currentProject?.name || '');
 
-  const footerSummary = `${assigneeName.split(' ')[0]} · ${endDate ? formatDateCompact(endDate) : 'pa afat'}${task.isRecurring ? ' · përsëritet' : ''}`;
+  // Footer: "Ndryshuar · 22 Tet" (the document carries no updater id) — until
+  // the first edit it reads "Krijuar nga …".
+  const updatedDate = (() => {
+    const raw: any = (task as any).updatedAt;
+    if (!raw) return null;
+    const d = raw instanceof Date ? raw : raw?.toDate?.() ? raw.toDate() : new Date(raw);
+    return isNaN(d.getTime()) ? null : d;
+  })();
+  const wasEdited = !!updatedDate && !!createdDate && updatedDate.getTime() - createdDate.getTime() > 60_000;
+  const footerSummary = wasEdited && updatedDate
+    ? `Ndryshuar · ${dayLabel(updatedDate)}`
+    : createdDate
+      ? `Krijuar${creatorLabel ? ` nga ${creatorLabel}` : ''} · ${dayLabel(createdDate)}`
+      : `${assigneeName.split(' ')[0]}${endDate ? ` · ${dayLabel(endDate)}` : ''}`;
 
-  // "Ruaj ndryshimet" — commits any in-progress title/description edit and closes.
-  // Every other field already saved on tap (chips/pickers write straight through).
+  // Typed drafts (title/description) are the only fields that do not save on
+  // tap — the footer's Ruaj commits them; everything else already saved.
+  const cleanedDraftDesc = descriptionText === '<p></p>' ? '' : descriptionText;
+  const dirty = (titleText.trim() !== '' && titleText.trim() !== task.title)
+    || (isEditingDescription && cleanedDraftDesc !== (task.description || ''));
+
+  // "Ruaj" — commits any in-progress title/description edit and closes.
   const handleFooterSave = async () => {
     const patch: any = {};
     if (titleText.trim() && titleText.trim() !== task.title) patch.title = titleText.trim();
-    const cleanedDesc = descriptionText === '<p></p>' ? '' : descriptionText;
-    if (isEditingDescription && cleanedDesc !== (task.description || '')) patch.description = cleanedDesc;
+    if (isEditingDescription && cleanedDraftDesc !== (task.description || '')) patch.description = cleanedDraftDesc;
     if (Object.keys(patch).length > 0) await onUpdate(task.id, patch);
     onClose();
   };
+
+  // "⋯" → Kopjo lidhjen: the same deep link the notifications carry.
+  const handleCopyLink = async () => {
+    setMenuOpen(false);
+    const url = `${window.location.origin}${taskDeepLink(task.id, task.projectId)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      showFlash('Lidhja u kopjua');
+    } catch {
+      toast({ title: 'Lidhja nuk u kopjua', description: url });
+    }
+  };
+
+  // "⋯" → Dupliko detyrën: a fresh Todo with the same plan (title, dates,
+  // people, labels, blockers, description) and NONE of the history — no
+  // recurrence/series, reminder, receipts, approval round or billed value.
+  const handleDuplicate = async () => {
+    setMenuOpen(false);
+    try {
+      const copy: any = {
+        title: `${task.title} (kopje)`,
+        description: task.description || undefined,
+        status: 'Todo',
+        priority: task.priority,
+        projectId: task.projectId || undefined,
+        customerId: task.customerId || undefined,
+        assignedToUserId: task.assignedToUserId || undefined,
+        startDate: task.startDate || undefined,
+        endDate: task.endDate || undefined,
+        labels: (task as any).labels?.length ? [...(task as any).labels] : undefined,
+        section: task.section || undefined,
+        estimatedHours: task.estimatedHours,
+        dependsOn: task.dependsOn?.length ? [...task.dependsOn] : undefined,
+        serviceLabel: task.serviceLabel,
+        serviceId: task.serviceId,
+        dueNotificationSent: false,
+      };
+      await taskMutation.create(copy);
+      showFlash('Detyra u duplikua');
+    } catch (err: any) {
+      console.error('[Tasks] duplikimi dështoi:', err);
+      toast({ title: 'Detyra nuk u duplikua', description: err?.message, variant: 'destructive' });
+    }
+  };
+
+  // The design flashes "Detyra u krijua" when the sheet opens on a brand-new task.
+  useEffect(() => {
+    if (justCreated) { const t = window.setTimeout(() => showFlash('Detyra u krijua'), 300); return () => window.clearTimeout(t); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id]);
 
   // Delete: manager rank or owning the task (creator/assignee) — the rules
   // accept any member's delete, so the UI must not offer more than the role is
@@ -353,180 +453,247 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   return (
     <>
     {/* The parents position the panel (side panel on desktop, bottom sheet on
-        mobile) — the panel only brings the design's content. */}
+        mobile) — the panel only brings the design's content. Header and footer
+        are sticky INSIDE the scroller so their blur shows the cards beneath. */}
       <div
-        className="flex h-full min-h-0 flex-col overflow-hidden bg-background"
+        className="relative flex h-full min-h-0 flex-col overflow-hidden bg-muted/40"
         onClick={closePickers}
       >
-        <TaskPanelHeader
-          task={task}
-          readOnly={readOnly}
-          statusOpen={statusOpen}
-          onToggleStatus={() => { setAssignOpen(false); setProjectOpen(false); setStatusOpen(v => !v); }}
-          onPickStatus={(s) => { setStatusOpen(false); changeStatus(s); }}
-          justCreated={justCreated}
-          activeWorkersCount={activeWorkers.length}
-          onExpand={onExpand}
-          isExpanded={isExpanded}
-          onClose={onClose}
-        />
-
-        {/* Scrollable Content */}
-        <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-4 p-4 sm:space-y-5 sm:px-6 sm:py-5">
-          {/* Title + created info */}
-          <div>
-            <input
-              ref={titleInputRef}
-              value={titleText}
-              disabled={readOnly}
-              onChange={(e) => setTitleText(e.target.value)}
-              onBlur={handleSaveTitle}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                if (e.key === 'Escape') setTitleText(task.title);
-              }}
-              className="w-full border-none bg-transparent text-[21px] font-extrabold tracking-tight text-foreground outline-none disabled:opacity-100 sm:text-[23px]"
-            />
-            <div className="mt-0.5 text-xs text-muted-foreground">{subtitleText}</div>
-          </div>
-
-          {/* Meta rows — label grid per the design */}
-          <div className="flex flex-col">
-            <TaskPeopleRows
-              task={task}
-              readOnly={readOnly}
-              projects={projects}
-              projectsLoading={projectsLoading}
-              allTasks={allTasks}
-              subtasks={subtasks}
-              teamMembers={teamMembers}
-              getUserDisplayName={getUserDisplayName}
-              onUpdate={onUpdate}
-              projectOpen={projectOpen}
-              setProjectOpen={setProjectOpen}
-              projectQuery={projectQuery}
-              setProjectQuery={setProjectQuery}
-              assignOpen={assignOpen}
-              setAssignOpen={setAssignOpen}
-              assignQuery={assignQuery}
-              setAssignQuery={setAssignQuery}
-              closeStatus={() => setStatusOpen(false)}
-            />
-
-            <TaskDueDateRow
-              readOnly={readOnly}
-              endDate={endDate}
-              onDateChange={handleEndDateChange}
-              onTimeChange={handleEndTimeChange}
-            />
-
-            <TaskReminderSection task={task} readOnly={readOnly} endDate={endDate} onUpdate={onUpdate} />
-
-            <TaskStartDateRow
-              readOnly={readOnly}
-              startDate={startDate}
-              onDateChange={handleStartDateChange}
-              onTimeChange={handleStartTimeChange}
-            />
-
-            <TaskRecurrenceSection task={task} readOnly={readOnly} allTasks={allTasks} onUpdate={onUpdate} />
-
-            <TaskDependenciesSection task={task} readOnly={readOnly} allTasks={allTasks} onUpdate={onUpdate} />
-
-            <TaskPriorityLabelRows task={task} readOnly={readOnly} labelSuggestions={labelSuggestions} onUpdate={onUpdate} />
-          </div>
-
-          {/* Client approval (portal-visible tasks) — Prano / Kërko ndryshime in the portal */}
-          {!isGuestMode && (
-            <TaskClientApprovalSection
-              task={task}
-              readOnly={readOnly}
-              onUpdate={onUpdate}
-              getUserDisplayName={getUserDisplayName}
-              onComplete={() => changeStatus('Done')}
-            />
-          )}
-
-          {/* Activity history (audit trail) */}
-          <TaskActivityTab taskId={task.id} getUserDisplayName={getUserDisplayName} />
-
-          {/* Description - Rich Text Editor */}
-          <TaskDescriptionSection
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain" onScroll={handleScroll}>
+          <TaskPanelHeader
             task={task}
             readOnly={readOnly}
-            isEditing={isEditingDescription}
-            setIsEditing={setIsEditingDescription}
-            draft={descriptionText}
-            setDraft={setDescriptionText}
-            onUpdate={onUpdate}
+            statusOpen={statusOpen}
+            onToggleStatus={() => { setAssignOpenRaw(false); setProjectOpenRaw(false); setMenuOpen(false); setStatusOpen(v => !v); }}
+            onPickStatus={(s) => { setStatusOpen(false); changeStatus(s); }}
+            scrolled={scrolled}
+            activeWorkersCount={activeWorkers.length}
+            onExpand={onExpand}
+            isExpanded={isExpanded}
+            onClose={onClose}
+            menuOpen={menuOpen}
+            onToggleMenu={() => { setStatusOpen(false); setMenuOpen(v => !v); }}
+            canDuplicate={!readOnly}
+            onDuplicate={handleDuplicate}
+            onCopyLink={handleCopyLink}
+            canDelete={canDeleteThis}
+            onRequestDelete={() => { setMenuOpen(false); setDeleteConfirm(true); }}
           />
 
-          {/* Collaborators */}
-          {taskCollaborators && taskCollaborators.length > 0 && (
-            <div className="pt-4 border-t">
-              <h4 className="text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground mb-2">Bashkëpunëtorët</h4>
-              <div className="flex flex-wrap gap-2">
-                {taskCollaborators.map(collab => (
-                  <Badge key={collab.id} variant="secondary" className="text-xs">
-                    <Users className="w-3 h-3 mr-1" />
-                    {getUserDisplayName(collab.userId)}
-                  </Badge>
-                ))}
+          <div className="flex flex-col gap-6 px-4 pb-6 pt-4">
+            {/* Title + created info */}
+            <div className="flex flex-col gap-1.5 px-1">
+              <input
+                ref={titleInputRef}
+                value={titleText}
+                disabled={readOnly}
+                onChange={(e) => setTitleText(e.target.value)}
+                onBlur={handleSaveTitle}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                  if (e.key === 'Escape') setTitleText(task.title);
+                }}
+                aria-label="Titulli i detyrës"
+                className="w-full border-none bg-transparent text-[28px] font-bold leading-[1.1] tracking-[-0.02em] text-foreground outline-none disabled:opacity-100 sm:text-[30px]"
+              />
+              {subtitleText && <div className="text-[14px] text-muted-foreground">{subtitleText}</div>}
+            </div>
+
+            {/* DETAJET — Projekti · Caktuar te */}
+            <div className="flex flex-col gap-2">
+              <div className={eyebrowCls}>Detajet</div>
+              <div className={cardCls}>
+                <TaskPeopleRows
+                  task={task}
+                  readOnly={readOnly}
+                  projects={projects}
+                  projectsLoading={projectsLoading}
+                  allTasks={allTasks}
+                  subtasks={subtasks}
+                  teamMembers={teamMembers}
+                  getUserDisplayName={getUserDisplayName}
+                  onUpdate={onUpdate}
+                  projectOpen={projectOpen}
+                  setProjectOpen={setProjectOpen}
+                  projectQuery={projectQuery}
+                  setProjectQuery={setProjectQuery}
+                  assignOpen={assignOpen}
+                  setAssignOpen={setAssignOpen}
+                  assignQuery={assignQuery}
+                  setAssignQuery={setAssignQuery}
+                  closeStatus={() => { setStatusOpen(false); setMenuOpen(false); }}
+                />
               </div>
             </div>
-          )}
 
-          {/* Time Tracking - with live timer + entry log */}
-          <TaskTimeTrackingSection task={task} allActiveTimeEntries={allActiveTimeEntries} />
+            {/* KOHA — Afati · Fillimi · Kujtesë · Përsëritje */}
+            <div className="flex flex-col gap-2">
+              <div className={eyebrowCls}>Koha</div>
+              <div className={cardCls}>
+                <TaskDueDateRow
+                  readOnly={readOnly}
+                  endDate={endDate}
+                  onDateChange={handleEndDateChange}
+                  onTimeChange={handleEndTimeChange}
+                  open={openRow === 'due'}
+                  onToggle={() => toggleRow('due')}
+                />
+                <RowDivider />
+                <TaskStartDateRow
+                  readOnly={readOnly}
+                  startDate={startDate}
+                  onDateChange={handleStartDateChange}
+                  onTimeChange={handleStartTimeChange}
+                  open={openRow === 'start'}
+                  onToggle={() => toggleRow('start')}
+                />
+                <RowDivider />
+                <TaskReminderSection
+                  task={task}
+                  readOnly={readOnly}
+                  endDate={endDate}
+                  onUpdate={onUpdate}
+                  open={openRow === 'remind'}
+                  onToggle={() => toggleRow('remind')}
+                />
+                {(task.isRecurring || !readOnly) && <RowDivider />}
+                <TaskRecurrenceSection
+                  task={task}
+                  readOnly={readOnly}
+                  allTasks={allTasks}
+                  onUpdate={onUpdate}
+                  open={openRow === 'repeat'}
+                  onToggle={() => toggleRow('repeat')}
+                />
+              </div>
+            </div>
 
-          {/* Subtasks */}
-          {!task.parentTaskId && (
-            <TaskSubtasksSection
+            {/* ORGANIZIMI — Prioriteti · Bllokohet nga · Etiketat */}
+            <div className="flex flex-col gap-2">
+              <div className={eyebrowCls}>Organizimi</div>
+              <div className={cardCls}>
+                <TaskPriorityRow task={task} readOnly={readOnly} onUpdate={onUpdate} />
+                {(!readOnly || (task.dependsOn && task.dependsOn.length > 0)) && <RowDivider />}
+                <TaskDependenciesSection
+                  task={task}
+                  readOnly={readOnly}
+                  allTasks={allTasks}
+                  onUpdate={onUpdate}
+                  open={openRow === 'block'}
+                  onToggle={() => toggleRow('block')}
+                />
+                <RowDivider />
+                <TaskLabelsRow task={task} readOnly={readOnly} labelSuggestions={labelSuggestions} onUpdate={onUpdate} />
+              </div>
+            </div>
+
+            {/* PËRSHKRIMI */}
+            <TaskDescriptionSection
               task={task}
               readOnly={readOnly}
-              subtasks={subtasks}
-              allTasks={allTasks}
-              projects={projects}
-              teamMembers={teamMembers}
-              getUserDisplayName={getUserDisplayName}
-              onSelectSubtask={onSelectSubtask}
+              isEditing={isEditingDescription}
+              setIsEditing={setIsEditingDescription}
+              draft={descriptionText}
+              setDraft={setDescriptionText}
+              onUpdate={onUpdate}
             />
-          )}
 
-          {/* Attachments */}
-          <TaskAttachmentsSection task={task} readOnly={readOnly} onUpdate={onUpdate} />
+            {/* AKTIVITETI (audit trail) */}
+            <TaskActivityTab
+              taskId={task.id}
+              getUserDisplayName={getUserDisplayName}
+              open={openRow === 'hist'}
+              onToggle={() => toggleRow('hist')}
+            />
 
-          {/* Chat — a live conversation about this task, separate from the comment
-              log. Collapsed by default: the listener only runs while it is open. */}
-          <TaskChatSection taskId={task.id} getUserDisplayName={getUserDisplayName} />
+            {/* ── Beyond the design's scope: the sections FivoCRM already had,
+                   rendered as the same kind of card ── */}
 
-          {/* Comments */}
-          <TaskCommentsSection
-            task={task}
+            {/* Client approval (portal-visible tasks) — Prano / Kërko ndryshime in the portal */}
+            {!isGuestMode && (
+              <TaskClientApprovalSection
+                task={task}
+                readOnly={readOnly}
+                onUpdate={onUpdate}
+                getUserDisplayName={getUserDisplayName}
+                onComplete={() => changeStatus('Done')}
+              />
+            )}
+
+            {/* Collaborators */}
+            {taskCollaborators && taskCollaborators.length > 0 && (
+              <div className={`${cardCls} px-4 py-3.5`}>
+                <h4 className="mb-2 text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground">Bashkëpunëtorët</h4>
+                <div className="flex flex-wrap gap-2">
+                  {taskCollaborators.map(collab => (
+                    <Badge key={collab.id} variant="secondary" className="text-xs">
+                      <Users className="mr-1 h-3 w-3" />
+                      {getUserDisplayName(collab.userId)}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Time Tracking - with live timer + entry log */}
+            <TaskTimeTrackingSection task={task} allActiveTimeEntries={allActiveTimeEntries} />
+
+            {/* Subtasks */}
+            {!task.parentTaskId && (
+              <TaskSubtasksSection
+                task={task}
+                readOnly={readOnly}
+                subtasks={subtasks}
+                allTasks={allTasks}
+                projects={projects}
+                teamMembers={teamMembers}
+                getUserDisplayName={getUserDisplayName}
+                onSelectSubtask={onSelectSubtask}
+              />
+            )}
+
+            {/* Attachments */}
+            <TaskAttachmentsSection task={task} readOnly={readOnly} onUpdate={onUpdate} />
+
+            {/* Chat — a live conversation about this task, separate from the comment
+                log. Collapsed by default: the listener only runs while it is open. */}
+            <TaskChatSection taskId={task.id} getUserDisplayName={getUserDisplayName} />
+
+            {/* Comments */}
+            <TaskCommentsSection
+              task={task}
+              readOnly={readOnly}
+              comments={comments}
+              onAddComment={onAddComment}
+              focusCommentId={focusCommentId}
+              onEditComment={onEditComment}
+              onDeleteComment={onDeleteComment}
+              onToggleReaction={onToggleReaction}
+              mentionCandidates={mentionCandidates}
+              resolveLegacyMention={resolveLegacyMention}
+              getUserDisplayName={getUserDisplayName}
+            />
+          </div>
+
+          {/* Footer: "Ndryshuar · date" + Ruaj (design) */}
+          <TaskPanelFooter
             readOnly={readOnly}
-            comments={comments}
-            onAddComment={onAddComment}
-            focusCommentId={focusCommentId}
-            onEditComment={onEditComment}
-            onDeleteComment={onDeleteComment}
-            onToggleReaction={onToggleReaction}
-            mentionCandidates={mentionCandidates}
-            resolveLegacyMention={resolveLegacyMention}
-            getUserDisplayName={getUserDisplayName}
+            isGuestMode={isGuestMode}
+            summary={footerSummary}
+            dirty={dirty}
+            onSave={handleFooterSave}
           />
         </div>
-      </ScrollArea>
 
-        {/* Footer: Fshi · përmbledhja · Ruaj (design) */}
-        <TaskPanelFooter
-          readOnly={readOnly}
-          isGuestMode={isGuestMode}
-          canDelete={canDeleteThis}
-          summary={footerSummary}
-          onSave={handleFooterSave}
-          onRequestDelete={() => setDeleteConfirm(true)}
-        />
+        {/* In-sheet toast (design): dark pill, springs in under the header */}
+        <div
+          aria-live="polite"
+          className={`pointer-events-none absolute left-1/2 top-[72px] z-30 flex items-center gap-2 whitespace-nowrap rounded-full bg-foreground px-4 py-2.5 text-[14px] font-semibold text-background shadow-[0_8px_24px_rgba(12,27,51,.18)] transition-all duration-300 ${
+            flash.on ? '-translate-x-1/2 translate-y-0 opacity-100' : '-translate-x-1/2 -translate-y-3 opacity-0'
+          }`}
+        >
+          <span className="font-extrabold text-emerald-400">✓</span>{flash.text}
+        </div>
       </div>
 
       {/* Delete Confirmation Dialog */}

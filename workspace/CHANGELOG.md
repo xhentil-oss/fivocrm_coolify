@@ -19,6 +19,11 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
+### [2026-10-23] — Tasks: paneli i detyrës rindërtohet sipas dizajnit "Task Sheet" (Claude Design 66731fef…, MedRise DS → tokenat e app-it)
+- Kontrata e layout-it te `src/components/tasks/panel/panelShared.tsx` (`cardCls`, `SheetRow`, `IconTile`, `pillCls`, `RowDivider`, `dayLabel`): karta të grupuara Detajet / Koha / Organizimi / Përshkrimi / Aktiviteti, rreshta 52px `[tile][label][vlera][chevron]`, opsione pill 40px që hapen INLINE nën rresht (një i hapur njëherësh, `openRow` në `TaskDetailPanel.tsx`)
+- Header ngjitës i tejdukshëm (`TaskPanelHeader.tsx`): pill statusi me menu të ankoruar (edhe në mobil), titulli shfaqet kur scroll-ohet, menu "⋯" Dupliko / Kopjo lidhjen / Fshi; footer `TaskPanelFooter.tsx` "Ndryshuar · data" + Ruaj/Mbyll (dirty = draft titulli/përshkrimi), dialog fshirjeje i qendruar; toast brenda fletës
+- Prioriteti = kontroll i segmentuar (Urgjent i kuq), etiketat inline (`TaskLabelsRow`), Kujtesë/Përsëritje/Bllokohet si rreshta; `PickerPanel`, `rowCls` u hoqën. Asnjë ndryshim logjike (shkrimet, njoftimet, receipts, recurrence mbeten identike); seksionet jashtë dizajnit (miratimi, koha, nën-detyrat, materialet, chat, komentet) u bënë karta
+- Lexo dizajnin me `DesignSync get_file` (kërkon `/design-login` një herë në sesion interaktiv); `WebFetch` 403
 ### [2026-10-02] — Nazmija: sekretarja virtuale e ekipit (chat bot vetëm për stafin, fazat 0–2)
 - Motor i pastër `src/lib/nazmije/core.ts` (personazhi, 46 thënie, humor, gate, fakte sipas rolit, digest-e) + kopje byte-identike `api/_nazmijeCore.ts`; 35 teste.
 - `api/_nazmije.ts` (`POST /api/nazmije`: ask/enable/disable, `postAsNazmije`, `runNazmijeDigest`) — pa Auth user, pa rresht `teamMembers`; DM-ja te ajo kalon nga serveri.

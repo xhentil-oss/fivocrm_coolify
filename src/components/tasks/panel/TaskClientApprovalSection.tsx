@@ -144,7 +144,7 @@ const TaskClientApprovalSection: React.FC<Props> = ({ task, readOnly, onUpdate, 
   };
 
   return (
-    <div className="pt-4 border-t">
+    <div className="overflow-hidden rounded-[18px] border border-border bg-card px-4 py-3.5 shadow-[0_1px_2px_rgba(12,27,51,0.06)]">
       <div className="mb-2 flex items-center gap-2">
         <h4 className={`${sectionTitleCls} flex items-center gap-1.5`}>
           <BadgeCheck className="h-4 w-4" />Miratimi i klientit

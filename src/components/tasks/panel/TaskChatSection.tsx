@@ -58,7 +58,7 @@ const TaskChatSection: React.FC<{
   };
 
   return (
-    <div className="pt-4 border-t">
+    <div className="overflow-hidden rounded-[18px] border border-border bg-card px-4 py-3.5 shadow-[0_1px_2px_rgba(12,27,51,0.06)]">
       <button
         type="button"
         onClick={() => setShowChat(v => !v)}

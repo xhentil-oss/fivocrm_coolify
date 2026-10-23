@@ -1,12 +1,16 @@
 import React, { useMemo } from 'react';
+import { Activity } from 'lucide-react';
 import { useCollection } from '../../../hooks/useFirestore';
-import { formatDateCompact } from './panelShared';
+import { IconTile, SheetRow, cardCls, dayLabel, timeStr } from './panelShared';
 
-/** "Historik" — per-task activity history (Jira-style audit trail). */
+/** "Aktiviteti" card — per-task activity history (Jira-style audit trail),
+ *  collapsed into one row ("N ngjarje") that opens the list. */
 const TaskActivityTab: React.FC<{
   taskId: string;
   getUserDisplayName: (userId: string) => string;
-}> = ({ taskId, getUserDisplayName }) => {
+  open: boolean;
+  onToggle: () => void;
+}> = ({ taskId, getUserDisplayName, open, onToggle }) => {
   // Per-task activity history (Jira-style audit tab). Single where = index-free.
   const { data: rawTaskActivities } = useCollection<any>('activities', {
     skip: !taskId,
@@ -19,21 +23,34 @@ const TaskActivityTab: React.FC<{
 
   if (taskActivities.length === 0) return null;
 
+  const when = (raw: any) => {
+    const d = raw instanceof Date ? raw : new Date(raw?.toMillis?.() || Date.now());
+    return `${dayLabel(d)} · ${timeStr(d)}`;
+  };
+
   return (
-    <div className="pt-4 border-t">
-      <h4 className="text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground mb-2">Historik</h4>
-      <ul className="space-y-1.5">
-        {taskActivities.map((a) => (
-          <li key={a.id} className="flex items-start gap-2 text-xs text-muted-foreground">
-            <span className="mt-1 h-1.5 w-1.5 rounded-full bg-primary/50 flex-shrink-0" />
-            <span className="flex-1 min-w-0">
-              <span className="text-foreground font-medium">{a.createdByUserId ? getUserDisplayName(a.createdByUserId) : 'Sistemi'}</span>{' '}
-              {a.description || a.message || a.type}
-              <span className="block text-[10px] opacity-60">{formatDateCompact(a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt?.toMillis?.() || Date.now()))}</span>
-            </span>
-          </li>
-        ))}
-      </ul>
+    <div className={cardCls}>
+      <SheetRow
+        tile={<IconTile tone="neutral"><Activity className="h-[17px] w-[17px]" strokeWidth={2} /></IconTile>}
+        label="Aktiviteti"
+        value={`${taskActivities.length} ngjarje`}
+        valueClassName="text-[15px] text-muted-foreground"
+        open={open}
+        onToggle={onToggle}
+      />
+      {open && (
+        <ul className="flex flex-col gap-3 px-4 pb-4 pl-[58px] pt-0.5">
+          {taskActivities.map((a) => (
+            <li key={a.id} className="flex flex-col gap-0.5">
+              <div className="text-[14px] text-foreground/80">
+                <strong className="font-semibold text-foreground">{a.createdByUserId ? getUserDisplayName(a.createdByUserId) : 'Sistemi'}</strong>{' '}
+                {a.description || a.message || a.type}
+              </div>
+              <div className="text-[12px] text-muted-foreground">{when(a.createdAt)}</div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 };

@@ -130,7 +130,7 @@ const TaskCommentsSection: React.FC<TaskCommentsSectionProps> = ({
 
 
   return (
-    <div className="pt-4 border-t">
+    <div className="overflow-hidden rounded-[18px] border border-border bg-card px-4 py-3.5 shadow-[0_1px_2px_rgba(12,27,51,0.06)]">
       <div className="flex items-center justify-between mb-3">
         <h4 className="text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground flex items-center gap-1.5">
           <MessageSquare className="w-4 h-4 text-muted-foreground" />

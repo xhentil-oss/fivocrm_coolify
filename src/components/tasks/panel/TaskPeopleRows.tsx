@@ -1,5 +1,5 @@
 import React, { useMemo, useRef } from 'react';
-import { Check } from 'lucide-react';
+import { Check, FolderOpen, Search } from 'lucide-react';
 import { collection, getDocs, query as fsQuery, where as fsWhere } from 'firebase/firestore';
 import { db } from '../../../lib/firebase';
 import { useMutation, getGlobalBusinessId } from '../../../hooks/useFirestore';
@@ -9,7 +9,7 @@ import { useActivityLogger } from '../../../hooks/useActivityLogger';
 import { taskDeepLink } from '../../../lib/deepLinks';
 import { Input } from '../../ui/input';
 import type { Task } from '../../../types';
-import { PickerPanel, hashColor, rowCls, rowLabelCls } from './panelShared';
+import { IconTile, RowDivider, SheetRow, hashColor, pillCls, rowBodyCls } from './panelShared';
 import { assigneeSeenLabel, assigneeSeenMs, receiptTimeLabel, reassignPatch } from '../../../lib/taskReceipts';
 
 interface TaskPeopleRowsProps {
@@ -35,7 +35,8 @@ interface TaskPeopleRowsProps {
   closeStatus: () => void;
 }
 
-/** "Projekti" + "Caktuar te" rows with their searchable pickers. */
+/** "Projekti" + "Caktuar te" rows (Detajet card) — a tap opens the inline
+ *  pill options under the row (search box once the list grows). */
 const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
   task,
   readOnly,
@@ -201,6 +202,7 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
   const showSelfOption = !!user && (!aq || (user.displayName || '').toLowerCase().includes(aq) || (user.email || '').toLowerCase().includes(aq));
   const assigneeName = getUserDisplayName(task.assignedToUserId || '') || 'Pa caktuar';
 
+  // One member as an inline pill option (design: 40px pills under the row).
   const memberOption = (uid: string, email: string | undefined, isYou: boolean) => {
     const name = isYou ? (user?.displayName || 'Ti') : getUserDisplayName(uid);
     const n = activeCountOf(uid);
@@ -210,153 +212,154 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
         key={uid}
         type="button"
         onClick={() => assignTo(uid)}
-        className={`flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left transition-colors hover:bg-muted max-sm:min-h-[52px] ${on ? 'bg-primary/10' : ''}`}
+        title={email ? `${email} · ${n} detyra aktive` : `${n} detyra aktive`}
+        className={`${pillCls(on)} max-w-full gap-2 pl-1.5`}
       >
-        <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full text-[10.5px] font-bold text-white" style={{ background: hashColor(name) }}>
+        <span
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-extrabold ${on ? 'bg-primary-foreground/20 text-primary-foreground' : 'text-white'}`}
+          style={on ? undefined : { background: hashColor(name) }}
+        >
           {name.slice(0, 2).toUpperCase()}
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5 text-[13px] font-semibold text-foreground">
-            <span className="truncate">{name}</span>
-            {isYou && <span className="shrink-0 rounded-[5px] bg-primary/10 px-1.5 py-px text-[9.5px] font-extrabold text-primary">Ti</span>}
-          </span>
-          {email && <span className="mt-px block truncate text-[11px] text-muted-foreground">{email}</span>}
-        </span>
-        <span title="Detyra aktive" className={`shrink-0 whitespace-nowrap text-[10.5px] font-semibold ${loadToneOf(n)}`}>{n} aktive</span>
-        {on && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+        <span className="truncate">{name}</span>
+        {isYou && <span className={`shrink-0 rounded-[5px] px-1.5 py-px text-[9.5px] font-extrabold ${on ? 'bg-primary-foreground/20' : 'bg-primary/10 text-primary'}`}>Ti</span>}
+        <span className={`shrink-0 text-[11px] font-semibold ${on ? 'text-primary-foreground/80' : loadToneOf(n)}`}>{n}</span>
+        {on && <Check className="h-3.5 w-3.5 shrink-0" strokeWidth={2.6} />}
       </button>
     );
   };
 
+  // Inline search box shown above long option lists (the design's pills alone
+  // stop scaling past a handful of projects/people).
+  const searchBox = (value: string, onChange: (v: string) => void, placeholder: string) => (
+    <div className="mb-1 flex w-full items-center gap-2 rounded-full border border-border bg-muted px-3.5">
+      <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="h-10 w-full min-w-[40px] bg-transparent text-[14px] font-medium text-foreground outline-none placeholder:text-muted-foreground/70"
+      />
+      {value && (
+        <button type="button" onClick={() => onChange('')} className="shrink-0 text-[11px] text-muted-foreground">✕</button>
+      )}
+    </div>
+  );
+
+  const seenMs = task.assignedToUserId && task.assignedToUserId !== user?.uid ? assigneeSeenMs(task) : null;
+  const showSeen = !!task.assignedToUserId && task.assignedToUserId !== user?.uid;
+
   return (
     <>
       {/* Projekti */}
-      <div className={rowCls}>
-        <span className={rowLabelCls}>Projekti</span>
-        <div className="relative max-w-full justify-self-start">
-          <button
-            type="button"
-            disabled={readOnly}
-            onClick={(e) => { e.stopPropagation(); closeStatus(); setAssignOpen(false); setProjectQuery(''); setProjectOpen(v => !v); }}
-            className={`flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 transition-colors disabled:cursor-default ${projectOpen ? 'border-primary bg-primary/10' : 'border-border bg-background hover:border-primary/50'}`}
-          >
-            <span className="h-[9px] w-[9px] shrink-0 rounded-full" style={{ background: currentProject ? hashColor(currentProject.name) : '#C3CEDD' }} />
-            <span className="truncate text-[13px] font-bold text-foreground">
-              {projectsLoading ? 'Duke ngarkuar…' : (currentProject?.name || 'Pa projekt')}
-            </span>
-            {!readOnly && <span className="text-[10px] text-muted-foreground">{projectOpen ? '▲' : '▼'}</span>}
-          </button>
-          {projectOpen && (
-            <PickerPanel
-              title="Zgjidh projektin"
-              searchPlaceholder="Kërko projektin…"
-              query={projectQuery}
-              onQuery={setProjectQuery}
-              onClose={() => { setProjectOpen(false); setProjectQuery(''); }}
-            >
-              {projectOptions.length === 0 && (
-                <div className="px-3 py-5 text-center text-xs text-muted-foreground">Asnjë projekt nuk përputhet me "{projectQuery}"</div>
-              )}
-              {projectOptions.map(p => (
-                <button
-                  key={p.id || '__none__'}
-                  type="button"
-                  onClick={() => changeProject(p.id)}
-                  className={`flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left transition-colors hover:bg-muted max-sm:min-h-[52px] ${(task.projectId || '') === p.id ? 'bg-primary/10' : ''}`}
-                >
-                  <span className="h-[10px] w-[10px] shrink-0 rounded-full" style={{ background: p.dot }} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-semibold text-foreground">{p.name}</span>
-                    {p.sub && <span className="mt-px block text-[11px] text-muted-foreground">{p.sub}</span>}
-                  </span>
-                  {(task.projectId || '') === p.id && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
-                </button>
-              ))}
-            </PickerPanel>
+      <SheetRow
+        tile={<IconTile tone="brand"><FolderOpen className="h-[17px] w-[17px]" strokeWidth={2} /></IconTile>}
+        label="Projekti"
+        value={
+          <span className="inline-flex max-w-full items-center gap-2">
+            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: currentProject ? hashColor(currentProject.name) : '#C3CEDD' }} />
+            <span className="truncate">{projectsLoading ? 'Duke ngarkuar…' : (currentProject?.name || 'Pa projekt')}</span>
+          </span>
+        }
+        valueClassName={`text-[15px] ${currentProject ? 'text-foreground/80' : 'text-muted-foreground'}`}
+        open={projectOpen}
+        disabled={readOnly}
+        onToggle={() => { closeStatus(); setAssignOpen(false); setProjectQuery(''); setProjectOpen(v => !v); }}
+      />
+      {projectOpen && !readOnly && (
+        <div className={rowBodyCls} onClick={(e) => e.stopPropagation()}>
+          {projects.length > 6 && searchBox(projectQuery, setProjectQuery, 'Kërko projektin…')}
+          {projectOptions.length === 0 && (
+            <div className="w-full py-2 text-center text-xs text-muted-foreground">Asnjë projekt nuk përputhet me "{projectQuery}"</div>
           )}
+          {projectOptions.map(p => {
+            const on = (task.projectId || '') === p.id;
+            return (
+              <button
+                key={p.id || '__none__'}
+                type="button"
+                onClick={() => changeProject(p.id)}
+                title={p.sub || undefined}
+                className={`${pillCls(on)} max-w-full gap-2`}
+              >
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: on ? 'currentColor' : p.dot }} />
+                <span className="truncate">{p.name}</span>
+                {p.sub && <span className={`shrink-0 text-[11px] font-semibold ${on ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>{p.sub.split(' ')[0]}</span>}
+              </button>
+            );
+          })}
         </div>
-      </div>
+      )}
+
+      <RowDivider />
 
       {/* Caktuar te */}
-      <div className={rowCls}>
-        <span className={rowLabelCls}>Caktuar te</span>
-        <div className="relative max-w-full justify-self-start">
-          <button
-            type="button"
-            disabled={readOnly}
-            onClick={(e) => { e.stopPropagation(); closeStatus(); setProjectOpen(false); setAssignQuery(''); setAssignOpen(v => !v); }}
-            className={`flex max-w-full items-center gap-2 rounded-full border py-1 pl-1 pr-3 transition-colors disabled:cursor-default ${assignOpen ? 'border-primary bg-primary/10' : 'border-border bg-background hover:border-primary/50'}`}
-          >
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10.5px] font-bold text-white" style={{ background: hashColor(assigneeName) }}>
-              {assigneeName.slice(0, 2).toUpperCase()}
-            </span>
-            <span className="truncate text-[13.5px] font-bold text-foreground">{assigneeName}</span>
-            {!readOnly && <span className="text-[10px] text-muted-foreground">{assignOpen ? '▲' : '▼'}</span>}
-          </button>
-          {/* "Parë 14:32" / "Pa parë ende" — for the assigner and everyone else
-              (the assignee themselves just opened it). */}
-          {task.assignedToUserId && task.assignedToUserId !== user?.uid && (() => {
-            const ms = assigneeSeenMs(task);
-            return (
+      <SheetRow
+        tile={
+          <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full text-[11px] font-extrabold text-white" style={{ background: task.assignedToUserId ? hashColor(assigneeName) : '#C3CEDD' }}>
+            {task.assignedToUserId ? assigneeName.slice(0, 2).toUpperCase() : '?'}
+          </span>
+        }
+        label="Caktuar te"
+        value={
+          <span className="flex flex-col items-end gap-0.5">
+            <span className={`truncate text-[15px] ${task.assignedToUserId ? 'text-foreground/80' : 'text-muted-foreground'}`}>{assigneeName}</span>
+            {/* "Parë 14:32" / "Pa parë ende" — for the assigner and everyone else
+                (the assignee themselves just opened it). */}
+            {showSeen && (
               <span
-                title={ms !== null ? `${assigneeName} e hapi detyrën ${receiptTimeLabel(ms)}` : `${assigneeName} nuk e ka hapur ende detyrën`}
-                className={`mt-1 flex items-center gap-1 pl-1 text-[11px] font-semibold ${ms !== null ? 'text-sky-600 dark:text-sky-400' : 'text-muted-foreground'}`}
+                title={seenMs !== null ? `${assigneeName} e hapi detyrën ${receiptTimeLabel(seenMs)}` : `${assigneeName} nuk e ka hapur ende detyrën`}
+                className={`text-[12px] ${seenMs !== null ? 'text-sky-600 dark:text-sky-400' : 'text-muted-foreground'}`}
               >
-                {ms !== null ? '✓✓' : '✓'} {assigneeSeenLabel(task)}
+                {seenMs !== null ? '✓✓ ' : ''}{assigneeSeenLabel(task)}
               </span>
-            );
-          })()}
-          {assignOpen && (
-            <PickerPanel
-              title="Cakto anëtarin"
-              searchPlaceholder="Kërko anëtarin…"
-              query={assignQuery}
-              onQuery={setAssignQuery}
-              onClose={() => { setAssignOpen(false); setAssignQuery(''); }}
-            >
-              {showSelfOption && user && (
-                <>
-                  <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground">Përdoruesi aktual</div>
-                  {memberOption(user.uid, user.email || undefined, true)}
-                </>
-              )}
-              {permissions.canAssignTasks && assignMembers.length > 0 && (
-                <div className="px-2.5 pb-1 pt-2 text-[10px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground">Anëtarët e ekipit</div>
-              )}
-              {permissions.canAssignTasks && assignMembers.map((m: any) => memberOption(m.userId, m.email, false))}
-              {!permissions.canAssignTasks && (
-                <div className="px-3 py-3 text-center text-[11px] leading-relaxed text-muted-foreground">
-                  Roli yt cakton detyra vetëm për vete. Lejen «Cakto detyra te të tjerët» e jep një admin te Ekipet → Ndrysho Lejet.
-                </div>
-              )}
-              {!showSelfOption && permissions.canAssignTasks && assignMembers.length === 0 && (
-                <div className="px-3 py-5 text-center text-xs text-muted-foreground">Asnjë anëtar nuk përputhet me "{assignQuery}"</div>
-              )}
-              {permissions.canAssignTasks && (
-                <div className="mt-1 border-t px-2.5 pb-1 pt-2">
-                  <p className="mb-1 text-[10px] font-semibold text-muted-foreground">Ose shkruaj User ID:</p>
-                  <Input
-                    placeholder="User ID…"
-                    className="h-8 text-xs"
-                    defaultValue={task.assignedToUserId || ''}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        const v = (e.target as HTMLInputElement).value.trim();
-                        if (v) { manualInputRef.current = v; assignTo(v); }
-                      }
-                    }}
-                    onBlur={(e) => {
-                      const v = e.target.value.trim();
-                      if (manualInputRef.current === v) { manualInputRef.current = ''; return; }
-                      if (v && v !== task.assignedToUserId) assignTo(v);
-                    }}
-                  />
-                </div>
-              )}
-            </PickerPanel>
+            )}
+          </span>
+        }
+        valueClassName="text-right"
+        open={assignOpen}
+        disabled={readOnly}
+        onToggle={() => { closeStatus(); setProjectOpen(false); setAssignQuery(''); setAssignOpen(v => !v); }}
+      />
+      {assignOpen && !readOnly && (
+        <div className={`${rowBodyCls} flex-col items-stretch`} onClick={(e) => e.stopPropagation()}>
+          {(teamMembers || []).length > 6 && searchBox(assignQuery, setAssignQuery, 'Kërko anëtarin…')}
+          <div className="flex flex-wrap gap-2">
+            {showSelfOption && user && memberOption(user.uid, user.email || undefined, true)}
+            {permissions.canAssignTasks && assignMembers.map((m: any) => memberOption(m.userId, m.email, false))}
+          </div>
+          {!permissions.canAssignTasks && (
+            <div className="text-[13px] leading-relaxed text-muted-foreground">
+              Roli yt cakton detyra vetëm për vete. Lejen «Cakto detyra te të tjerët» e jep një admin te Ekipet → Ndrysho Lejet.
+            </div>
+          )}
+          {!showSelfOption && permissions.canAssignTasks && assignMembers.length === 0 && (
+            <div className="py-2 text-center text-xs text-muted-foreground">Asnjë anëtar nuk përputhet me "{assignQuery}"</div>
+          )}
+          {permissions.canAssignTasks && (
+            <div className="mt-1 border-t border-border pt-2">
+              <p className="mb-1 text-[11px] font-semibold text-muted-foreground">Ose shkruaj User ID:</p>
+              <Input
+                placeholder="User ID…"
+                className="h-9 rounded-full text-xs"
+                defaultValue={task.assignedToUserId || ''}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    const v = (e.target as HTMLInputElement).value.trim();
+                    if (v) { manualInputRef.current = v; assignTo(v); }
+                  }
+                }}
+                onBlur={(e) => {
+                  const v = e.target.value.trim();
+                  if (manualInputRef.current === v) { manualInputRef.current = ''; return; }
+                  if (v && v !== task.assignedToUserId) assignTo(v);
+                }}
+              />
+            </div>
           )}
         </div>
-      </div>
+      )}
     </>
   );
 };

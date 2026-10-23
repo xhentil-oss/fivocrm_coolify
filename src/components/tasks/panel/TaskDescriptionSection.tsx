@@ -2,11 +2,12 @@ import React from 'react';
 import RichTextEditor, { RichTextDisplay } from '../../RichTextEditor';
 import { Button } from '../../ui/button';
 import type { Task } from '../../../types';
+import { cardCls, eyebrowCls } from './panelShared';
 
 interface TaskDescriptionSectionProps {
   task: Task;
   readOnly: boolean;
-  // The draft lives in the panel: "Ruaj ndryshimet" in the footer commits it.
+  // The draft lives in the panel: "Ruaj" in the footer commits it.
   isEditing: boolean;
   setIsEditing: (v: boolean) => void;
   draft: string;
@@ -14,7 +15,8 @@ interface TaskDescriptionSectionProps {
   onUpdate: (id: string, data: any) => Promise<any>;
 }
 
-/** "Përshkrimi" — rich-text description (click to edit). */
+/** "Përshkrimi" — eyebrow + a card that reads like the design's textarea
+ *  (tap to edit; rich text underneath). */
 const TaskDescriptionSection: React.FC<TaskDescriptionSectionProps> = ({
   task,
   readOnly,
@@ -24,10 +26,10 @@ const TaskDescriptionSection: React.FC<TaskDescriptionSectionProps> = ({
   setDraft: setDescriptionText,
   onUpdate,
 }) => (
-  <div className="pt-4 border-t">
-    <h4 className="text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground mb-2">Përshkrimi</h4>
+  <div className="flex flex-col gap-2">
+    <div className={eyebrowCls}>Përshkrimi</div>
     {isEditingDescription ? (
-      <div>
+      <div className={`${cardCls} p-3`}>
         <RichTextEditor
           content={descriptionText}
           onChange={(html) => setDescriptionText(html)}
@@ -38,14 +40,15 @@ const TaskDescriptionSection: React.FC<TaskDescriptionSectionProps> = ({
             }
             setIsEditingDescription(false);
           }}
-          placeholder="Shto përshkrim..."
-          minHeight="150px"
+          placeholder="Shto shënime, lidhje ose hapat e radhës…"
+          minHeight="120px"
           autoFocus
         />
-        <div className="flex justify-end gap-2 mt-2">
+        <div className="mt-2 flex justify-end gap-2">
           <Button
             size="sm"
             variant="ghost"
+            className="rounded-full"
             onClick={() => {
               setDescriptionText(task.description || '');
               setIsEditingDescription(false);
@@ -55,6 +58,7 @@ const TaskDescriptionSection: React.FC<TaskDescriptionSectionProps> = ({
           </Button>
           <Button
             size="sm"
+            className="rounded-full"
             onClick={async () => {
               const cleaned = descriptionText === '<p></p>' ? '' : descriptionText;
               if (cleaned !== task.description) {
@@ -69,13 +73,16 @@ const TaskDescriptionSection: React.FC<TaskDescriptionSectionProps> = ({
       </div>
     ) : (
       <div
-        className={`min-h-[100px] text-sm p-3 rounded border border-dashed transition-colors ${!readOnly ? 'cursor-pointer hover:bg-muted/50 border-transparent hover:border-border' : 'border-transparent'}`}
+        role={readOnly ? undefined : 'button'}
+        tabIndex={readOnly ? undefined : 0}
+        className={`${cardCls} min-h-[112px] px-4 py-3.5 text-[16px] leading-relaxed text-foreground transition-colors ${!readOnly ? 'cursor-text hover:border-primary/40' : ''}`}
         onClick={() => !readOnly && setIsEditingDescription(true)}
+        onKeyDown={(e) => { if (!readOnly && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setIsEditingDescription(true); } }}
       >
         {task.description ? (
           <RichTextDisplay content={task.description} />
         ) : (
-          <span className="text-muted-foreground">{readOnly ? 'Nuk ka përshkrim.' : 'Kliko për të shtuar përshkrim...'}</span>
+          <span className="text-muted-foreground/70">{readOnly ? 'Nuk ka përshkrim.' : 'Shto shënime, lidhje ose hapat e radhës…'}</span>
         )}
       </div>
     )}

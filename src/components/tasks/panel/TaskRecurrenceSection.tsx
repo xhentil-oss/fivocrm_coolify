@@ -1,24 +1,48 @@
 import React, { useState } from 'react';
+import { Repeat } from 'lucide-react';
 import { addFrequency, recurrenceDayOfWeek, recurrenceDayOfMonth, hasLiveSeriesSibling, recurrenceHasEnded } from '../../../lib/recurringUtils';
 import { parseTaskDate } from '../../../lib/taskReminders';
 import { toast } from '../../../hooks/use-toast';
 import { Button } from '../../ui/button';
 import type { Task } from '../../../types';
-import { chipCls, rowCls, rowLabelCls } from './panelShared';
+import { IconTile, SheetRow, chipCls, pillCls, rowBodyCls } from './panelShared';
 
 interface TaskRecurrenceSectionProps {
   task: Task;
   readOnly: boolean;
   allTasks?: Task[];
   onUpdate: (id: string, data: any) => Promise<any>;
+  open: boolean;
+  onToggle: () => void;
 }
 
 const WEEK_CHIPS = [{ v: 1, l: 'Hën' }, { v: 2, l: 'Mar' }, { v: 3, l: 'Mër' }, { v: 4, l: 'Enj' }, { v: 5, l: 'Pre' }, { v: 6, l: 'Sht' }, { v: 0, l: 'Die' }];
+const DAY_NAMES_SHORT = ['Die', 'Hën', 'Mar', 'Mër', 'Enj', 'Pre', 'Sht'];
+const DAY_NAMES = ['Diel', 'Hënë', 'Martë', 'Mërkurë', 'Enjte', 'Premte', 'Shtunë'];
 
-/** "Përsërit." row — frequency chips, day editor and "Deri më". Always mounted
- *  (renders nothing when hidden) so its draft state survives like it did when
- *  it lived in the panel. */
-const TaskRecurrenceSection: React.FC<TaskRecurrenceSectionProps> = ({ task, readOnly, allTasks, onUpdate }) => {
+/** Human description of the series ("Çdo javë, Hënë"). */
+const describeRecurrence = (task: Task) => {
+  const n = task.recurringInterval ?? 1;
+  switch (task.recurringFrequency) {
+    case 'daily': {
+      const days = (task as any).recurringDaysOfWeek as number[] | undefined;
+      return days && days.length > 0 && days.length < 7 ? `Çdo ${days.map(d => DAY_NAMES_SHORT[d]).join(', ')}` : 'Çdo ditë';
+    }
+    case 'weekly':
+      return `Çdo ${n > 1 ? `${n} javë` : 'javë'}, ${DAY_NAMES[(task as any).recurringDayOfWeek ?? 0]}`;
+    case 'monthly':
+      return `Çdo ${n > 1 ? `${n} muaj` : 'muaj'}, ditën ${(task as any).recurringDayOfMonth ?? 1}`;
+    case 'yearly':
+      return `Çdo ${n > 1 ? `${n} vite` : 'vit'}`;
+    default:
+      return 'Përsëritet';
+  }
+};
+
+/** "Përsëritje" row (Koha card) — frequency pills, day editor and "Deri më".
+ *  Always mounted (renders nothing when hidden) so its draft state survives
+ *  like it did when it lived in the panel. */
+const TaskRecurrenceSection: React.FC<TaskRecurrenceSectionProps> = ({ task, readOnly, allTasks, onUpdate, open, onToggle }) => {
   // Recurring edit state
   const [editingRecurring, setEditingRecurring] = useState(false);
   const [recurringDayOfWeek, setRecurringDayOfWeek] = useState<number>((task as any).recurringDayOfWeek ?? 1);
@@ -105,102 +129,96 @@ const TaskRecurrenceSection: React.FC<TaskRecurrenceSectionProps> = ({ task, rea
   if (!(task.isRecurring || !readOnly)) return null;
 
   return (
-    <div className={`${rowCls} items-start`}>
-      <span className={`${rowLabelCls} pt-1`}>Përsërit.</span>
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            disabled={readOnly}
-            onClick={() => task.isRecurring && onUpdate(task.id, { isRecurring: false } as any)}
-            className={chipCls(!task.isRecurring)}
-          >
-            Asnjëherë
-          </button>
-          {([['daily', 'Çdo ditë'], ['weekly', 'Çdo javë'], ['monthly', 'Çdo muaj']] as const).map(([k, l]) => (
+    <>
+      <SheetRow
+        tile={<IconTile tone="info"><Repeat className="h-[17px] w-[17px]" strokeWidth={2} /></IconTile>}
+        label="Përsëritje"
+        value={task.isRecurring ? describeRecurrence(task) : 'Asnjëherë'}
+        valueClassName={`text-[15px] ${task.isRecurring ? 'text-foreground/80' : 'text-muted-foreground'}`}
+        open={open}
+        disabled={readOnly}
+        onToggle={onToggle}
+      />
+      {open && !readOnly && (
+        <div className={`${rowBodyCls} flex-col items-stretch gap-3`} onClick={(e) => e.stopPropagation()}>
+          <div className="flex flex-wrap gap-2">
             <button
-              key={k}
               type="button"
-              disabled={readOnly}
-              onClick={() => (!task.isRecurring || task.recurringFrequency !== k) && enableRecurring(k)}
-              className={chipCls(!!task.isRecurring && task.recurringFrequency === k)}
+              onClick={() => task.isRecurring && onUpdate(task.id, { isRecurring: false } as any)}
+              className={pillCls(!task.isRecurring)}
             >
-              ↻ {l}
+              Asnjëherë
             </button>
-          ))}
-          {task.isRecurring && <span className="text-[11px] text-muted-foreground">Europe/Tirane</span>}
-        </div>
-        {task.isRecurring && (
-          <>
-            {!editingRecurring ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
-                  🔄 {task.recurringFrequency === 'daily'
-                       ? (() => {
-                           const days = (task as any).recurringDaysOfWeek as number[] | undefined;
-                           const names = ['Die', 'Hën', 'Mar', 'Mër', 'Enj', 'Pre', 'Sht'];
-                           return days && days.length > 0 ? `Çdo ${days.map(d => names[d]).join(', ')}` : 'Çdo ditë';
-                         })()
-                       : task.recurringFrequency === 'weekly'
-                       ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' javë' : 'javë'}, ${['Diel', 'Hënë', 'Martë', 'Mërkurë', 'Enjte', 'Premte', 'Shtunë'][(task as any).recurringDayOfWeek ?? 0]}`
-                       : task.recurringFrequency === 'monthly'
-                       ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' muaj' : 'muaj'}, ditën ${(task as any).recurringDayOfMonth ?? 1}`
-                       : `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' vite' : 'vit'}`}
-                </span>
-                {!readOnly && (task.recurringFrequency === 'weekly' || task.recurringFrequency === 'daily') && (
-                  <button
-                    type="button"
-                    onClick={() => setEditingRecurring(true)}
-                    className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-                  >
-                    Ndrysho
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {task.recurringFrequency === 'weekly' && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {WEEK_CHIPS.map(day => (
-                      <button key={day.v} type="button" onClick={() => setRecurringDayOfWeek(day.v)} className={chipCls(recurringDayOfWeek === day.v)}>
-                        {day.l}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {task.recurringFrequency === 'daily' && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {WEEK_CHIPS.map(day => (
-                      <button key={day.v} type="button" onClick={() => toggleRecurringDay(day.v)} className={chipCls(recurringDaysOfWeek.includes(day.v))}>
-                        {day.l}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <Button size="sm" className="h-7 text-xs" onClick={saveRecurring}>Ruaj</Button>
-                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setEditingRecurring(false)}>Anulo</Button>
+            {([['daily', 'Çdo ditë'], ['weekly', 'Çdo javë'], ['monthly', 'Çdo muaj']] as const).map(([k, l]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => (!task.isRecurring || task.recurringFrequency !== k) && enableRecurring(k)}
+                className={pillCls(!!task.isRecurring && task.recurringFrequency === k)}
+              >
+                {l}
+              </button>
+            ))}
+          </div>
+          {task.isRecurring && (
+            <>
+              {!editingRecurring ? (
+                <div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+                  <span>{describeRecurrence(task)} · Europe/Tirane</span>
+                  {(task.recurringFrequency === 'weekly' || task.recurringFrequency === 'daily') && (
+                    <button
+                      type="button"
+                      onClick={() => setEditingRecurring(true)}
+                      className="font-semibold text-primary underline underline-offset-2"
+                    >
+                      Ndrysho ditët
+                    </button>
+                  )}
                 </div>
+              ) : (
+                <div className="space-y-2">
+                  {task.recurringFrequency === 'weekly' && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {WEEK_CHIPS.map(day => (
+                        <button key={day.v} type="button" onClick={() => setRecurringDayOfWeek(day.v)} className={chipCls(recurringDayOfWeek === day.v)}>
+                          {day.l}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {task.recurringFrequency === 'daily' && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {WEEK_CHIPS.map(day => (
+                        <button key={day.v} type="button" onClick={() => toggleRecurringDay(day.v)} className={chipCls(recurringDaysOfWeek.includes(day.v))}>
+                          {day.l}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <Button size="sm" className="h-8 rounded-full text-xs" onClick={saveRecurring}>Ruaj</Button>
+                    <Button size="sm" variant="outline" className="h-8 rounded-full text-xs" onClick={() => setEditingRecurring(false)}>Anulo</Button>
+                  </div>
+                </div>
+              )}
+              {/* Repeat-until — bounds the recurrence */}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[13px] text-muted-foreground">Deri më:</span>
+                <input
+                  type="date"
+                  defaultValue={(task as any).recurringEndDate ? (() => { const d = new Date((task as any).recurringEndDate); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })() : ''}
+                  onChange={(e) => { const v = e.target.value; const nd = v ? (() => { const [y, mo, dd] = v.split('-').map(Number); return new Date(y, mo - 1, dd); })() : null; changeRecurringEndDate(nd); }}
+                  className="h-9 rounded-full border border-border bg-muted px-3 font-mono text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+                {(task as any).recurringEndDate
+                  ? <button type="button" onClick={() => changeRecurringEndDate(null)} className="text-[13px] font-semibold text-muted-foreground underline underline-offset-2 hover:text-foreground">Hiq</button>
+                  : <span className="text-[13px] text-muted-foreground/70">pa fund</span>}
               </div>
-            )}
-            {/* Repeat-until — bounds the recurrence */}
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] text-muted-foreground">Deri më:</span>
-              <input
-                type="date"
-                defaultValue={(task as any).recurringEndDate ? (() => { const d = new Date((task as any).recurringEndDate); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })() : ''}
-                disabled={readOnly}
-                onChange={(e) => { const v = e.target.value; const nd = v ? (() => { const [y, mo, dd] = v.split('-').map(Number); return new Date(y, mo - 1, dd); })() : null; changeRecurringEndDate(nd); }}
-                className="h-6 rounded border border-border/50 bg-muted/40 px-1.5 text-[11px] text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
-              />
-              {(task as any).recurringEndDate
-                ? (!readOnly && <button type="button" onClick={() => changeRecurringEndDate(null)} className="text-[11px] text-muted-foreground underline hover:text-foreground">Hiq</button>)
-                : <span className="text-[11px] text-muted-foreground/70">pa fund</span>}
-            </div>
-          </>
-        )}
-      </div>
-    </div>
+            </>
+          )}
+        </div>
+      )}
+    </>
   );
 };
 
