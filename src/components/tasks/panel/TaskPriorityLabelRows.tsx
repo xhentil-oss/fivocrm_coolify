@@ -32,7 +32,7 @@ export const TaskPriorityRow: React.FC<{
               aria-checked={on}
               disabled={readOnly}
               onClick={() => !on && onUpdate(task.id, { priority: k })}
-              className={`h-9 rounded-full text-[14px] font-bold transition-colors disabled:cursor-default ${
+              className={`h-9 min-w-0 truncate rounded-full px-1 text-[13px] font-bold transition-colors disabled:cursor-default sm:text-[14px] ${
                 on
                   ? urgent
                     ? 'bg-red-600 text-white shadow-sm'

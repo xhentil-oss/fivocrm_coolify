@@ -97,7 +97,16 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const [descriptionText, setDescriptionText] = useState(task.description || '');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
-  const titleInputRef = useRef<HTMLInputElement>(null);
+  const titleInputRef = useRef<HTMLTextAreaElement>(null);
+  // Grow the title box to its content (a textarea so long titles wrap like the
+  // design's h1); re-measured on every draft change and on task switch.
+  const fitTitle = useCallback(() => {
+    const el = titleInputRef.current;
+    if (!el) return;
+    el.style.height = '0px';
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+  useEffect(() => { fitTitle(); }, [titleText, fitTitle, isExpanded]);
 
   // Start/deadline state + every handler that writes them.
   const {
@@ -483,18 +492,19 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           <div className="flex flex-col gap-6 px-4 pb-6 pt-4">
             {/* Title + created info */}
             <div className="flex flex-col gap-1.5 px-1">
-              <input
+              <textarea
                 ref={titleInputRef}
                 value={titleText}
+                rows={1}
                 disabled={readOnly}
                 onChange={(e) => setTitleText(e.target.value)}
                 onBlur={handleSaveTitle}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                  if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); }
                   if (e.key === 'Escape') setTitleText(task.title);
                 }}
                 aria-label="Titulli i detyrës"
-                className="w-full border-none bg-transparent text-[28px] font-bold leading-[1.1] tracking-[-0.02em] text-foreground outline-none disabled:opacity-100 sm:text-[30px]"
+                className="w-full resize-none overflow-hidden border-none bg-transparent text-[26px] font-bold leading-[1.1] tracking-[-0.02em] text-foreground outline-none [text-wrap:balance] disabled:opacity-100 sm:text-[30px]"
               />
               {subtitleText && <div className="text-[14px] text-muted-foreground">{subtitleText}</div>}
             </div>

@@ -61,7 +61,7 @@ const TaskPanelHeader: React.FC<TaskPanelHeaderProps> = ({
       </div>
 
       <div
-        className={`grid h-[60px] grid-cols-[1fr_auto_1fr] items-center bg-background/80 px-3 backdrop-blur-xl transition-colors duration-200 ${
+        className={`grid h-[60px] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 bg-background/80 px-3 backdrop-blur-xl transition-colors duration-200 ${
           scrolled ? 'border-b border-border' : 'border-b border-transparent'
         }`}
       >
@@ -71,11 +71,11 @@ const TaskPanelHeader: React.FC<TaskPanelHeaderProps> = ({
             type="button"
             disabled={readOnly}
             onClick={(e) => { e.stopPropagation(); onToggleStatus(); }}
-            className="flex h-9 items-center gap-2 rounded-full border border-border bg-card pl-2.5 pr-3 text-[14px] font-bold text-foreground transition-colors hover:bg-muted disabled:cursor-default disabled:hover:bg-card"
+            className="flex h-9 max-w-[46vw] items-center gap-2 rounded-full border border-border bg-card pl-2.5 pr-3 text-[14px] font-bold sm:max-w-none text-foreground transition-colors hover:bg-muted disabled:cursor-default disabled:hover:bg-card"
           >
-            <span className="h-2 w-2 rounded-full" style={{ background: statusMeta.dot }} />
-            {task.status === 'Done' && <Check className="h-3.5 w-3.5 text-emerald-600" />}
-            {statusMeta.label}
+            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: statusMeta.dot }} />
+            {task.status === 'Done' && <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />}
+            <span className="truncate">{statusMeta.label}</span>
             {!readOnly && <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" strokeWidth={2.4} />}
           </button>
           {statusOpen && (
@@ -101,7 +101,7 @@ const TaskPanelHeader: React.FC<TaskPanelHeaderProps> = ({
 
         {/* Title — fades in once the big heading scrolled away */}
         <div
-          className={`max-w-[40vw] truncate text-[15px] font-bold text-foreground transition-opacity duration-200 sm:max-w-[260px] ${scrolled ? 'opacity-100' : 'opacity-0'}`}
+          className={`min-w-0 truncate text-center text-[15px] font-bold text-foreground transition-opacity duration-200 ${scrolled ? 'opacity-100' : 'opacity-0'}`}
           aria-hidden={!scrolled}
         >
           {task.title}

@@ -221,7 +221,7 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
         >
           {name.slice(0, 2).toUpperCase()}
         </span>
-        <span className="truncate">{name}</span>
+        <span className="min-w-0 truncate">{name}</span>
         {isYou && <span className={`shrink-0 rounded-[5px] px-1.5 py-px text-[9.5px] font-extrabold ${on ? 'bg-primary-foreground/20' : 'bg-primary/10 text-primary'}`}>Ti</span>}
         <span className={`shrink-0 text-[11px] font-semibold ${on ? 'text-primary-foreground/80' : loadToneOf(n)}`}>{n}</span>
         {on && <Check className="h-3.5 w-3.5 shrink-0" strokeWidth={2.6} />}
@@ -259,7 +259,7 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
         value={
           <span className="inline-flex max-w-full items-center gap-2">
             <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: currentProject ? hashColor(currentProject.name) : '#C3CEDD' }} />
-            <span className="truncate">{projectsLoading ? 'Duke ngarkuar…' : (currentProject?.name || 'Pa projekt')}</span>
+            <span className="min-w-0 truncate">{projectsLoading ? 'Duke ngarkuar…' : (currentProject?.name || 'Pa projekt')}</span>
           </span>
         }
         valueClassName={`text-[15px] ${currentProject ? 'text-foreground/80' : 'text-muted-foreground'}`}
@@ -284,7 +284,7 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
                 className={`${pillCls(on)} max-w-full gap-2`}
               >
                 <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: on ? 'currentColor' : p.dot }} />
-                <span className="truncate">{p.name}</span>
+                <span className="min-w-0 truncate">{p.name}</span>
                 {p.sub && <span className={`shrink-0 text-[11px] font-semibold ${on ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>{p.sub.split(' ')[0]}</span>}
               </button>
             );
@@ -303,14 +303,14 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
         }
         label="Caktuar te"
         value={
-          <span className="flex flex-col items-end gap-0.5">
-            <span className={`truncate text-[15px] ${task.assignedToUserId ? 'text-foreground/80' : 'text-muted-foreground'}`}>{assigneeName}</span>
+          <span className="flex max-w-full flex-col items-end gap-0.5">
+            <span className={`max-w-full truncate text-[15px] ${task.assignedToUserId ? 'text-foreground/80' : 'text-muted-foreground'}`}>{assigneeName}</span>
             {/* "Parë 14:32" / "Pa parë ende" — for the assigner and everyone else
                 (the assignee themselves just opened it). */}
             {showSeen && (
               <span
                 title={seenMs !== null ? `${assigneeName} e hapi detyrën ${receiptTimeLabel(seenMs)}` : `${assigneeName} nuk e ka hapur ende detyrën`}
-                className={`text-[12px] ${seenMs !== null ? 'text-sky-600 dark:text-sky-400' : 'text-muted-foreground'}`}
+                className={`max-w-full truncate text-[12px] ${seenMs !== null ? 'text-sky-600 dark:text-sky-400' : 'text-muted-foreground'}`}
               >
                 {seenMs !== null ? '✓✓ ' : ''}{assigneeSeenLabel(task)}
               </span>
