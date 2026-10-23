@@ -467,11 +467,15 @@ export async function runCrmAutomations(opts: CrmAutomationRunOptions = {}) {
         // Fast tick: runs of the window only (index businessId+ruleId+firedAt) — a
         // lead born in the window can only have fired inside it, and the daily cap
         // needs 24h. The run doc's create() stays the hard idempotency guarantee.
+        // A missing index must not PAUSE the rule (this block's catch does that) —
+        // fall back to the full per-rule read the hourly run uses.
+        const allRuns = () => db.collection('crmAutomationRuns').where('ruleId', '==', rule.id).get();
         const runsSnap = opts.fast
           ? await db.collection('crmAutomationRuns')
             .where('businessId', '==', businessId).where('ruleId', '==', rule.id)
             .where('firedAt', '>=', admin.firestore.Timestamp.fromMillis(nowMs - FAST_WINDOW_MS)).get()
-          : await db.collection('crmAutomationRuns').where('ruleId', '==', rule.id).get();
+            .catch((err: any) => { console.warn(`[CRON:crm-automations] fast runs query failed (${err?.code}), full read`); return allRuns(); })
+          : await allRuns();
         const runs = buildRunsIndex(runsSnap.docs.map(d => d.data() as any));
         const pop = rule.entity === 'lead' ? population.leads : population.customers;
         const result = evaluateRule(rule, pop, { ruleCreatedAtMs: toMs(rule.createdAt), runs }, nowMs);
