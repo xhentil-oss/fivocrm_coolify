@@ -187,6 +187,7 @@ const SettingsView: React.FC = () => {
   // ── AI Assistant (FivoAI) ──
   const [aiProvider, setAiProvider] = useState<AiProviderName>('gemini');
   const [aiApiKey, setAiApiKey] = useState('');
+  const [aiModel, setAiModel] = useState('');
   // The key's shape is the one fact that cannot be mis-clicked — the server routes
   // by it too (`resolveProviderChoice`), so the form follows the pasted key.
   // A model id belongs to ONE provider: switching provider drops a model that is
@@ -206,7 +207,6 @@ const SettingsView: React.FC = () => {
   const [aiModelCustom, setAiModelCustom] = useState(false);
   const aiModelKnown = !aiModel || AI_PROVIDER_META[aiProvider].models.some((x) => x.id === aiModel);
   const aiModelSelectValue = aiModelCustom || !aiModelKnown ? '__custom__' : aiModel;
-  const [aiModel, setAiModel] = useState('');
   // Auto-reminder for inquiries missing materials
   const [inquiryReminderOn, setInquiryReminderOn] = useState(false);
   const [inquiryReminderDays, setInquiryReminderDays] = useState('3');
