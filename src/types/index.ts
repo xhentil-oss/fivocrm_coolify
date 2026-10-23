@@ -18,8 +18,13 @@ export interface WhatsAppAccount {
   connectionStatus?: 'connected' | 'disconnected' | null;
   lastConnectedAt?: Date | null;
   lastDisconnectedAt?: Date | null;
-  /** Why the socket last closed (VPS-written): 'logged_out' | 'replaced' | 'banned' | other code. */
-  lastDisconnectReason?: string | null;
+  /**
+   * Why the socket last closed (VPS-written). Legacy rows hold a string
+   * ('logged_out' | '401' | …); since Baileys 7 the VPS writes `{ code, name }`.
+   * Never render it raw — read it through `waDisconnectLabel()` /
+   * `waDisconnectReasonText()` (`src/lib/messaging/waDisconnect.ts`).
+   */
+  lastDisconnectReason?: string | { code: number | null; name: string } | null;
   businessId?: string;
   createdAt?: Date;
   updatedAt?: Date;

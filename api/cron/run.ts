@@ -63,6 +63,7 @@ import { costRateFor, resolveFinanceSettings, budgetAlertsDue, type FinanceSetti
 // catch it (tsconfig.api.json uses moduleResolution "node"), so the guard is
 // src/lib/apiImports.test.ts.
 import { formatMoney } from '../_money.js';
+import { waDisconnectReasonText } from '../_waDisconnect.js';
 import { projectInvoiceLines, type InvoiceLineService } from '../_projectInvoiceLines.js';
 import {
   PERMANENT_BILLING_BLOCK_LIST,
@@ -3706,7 +3707,7 @@ async function runWhatsappDisconnectAlerts(opts?: { businessId?: string | null }
       userId,
       type: 'whatsapp_disconnected',
       title: `📵 WhatsApp i shkëputur: ${label}`,
-      message: `Numri ${label} është i shkëputur prej ${minutes} min${a.lastDisconnectReason ? ` (${String(a.lastDisconnectReason).slice(0, 80)})` : ''}. Kujtesat dhe fushatat automatike nuk dërgohen — skanoni QR-in në Cilësimet → WhatsApp.`,
+      message: `Numri ${label} është i shkëputur prej ${minutes} min${waDisconnectReasonText(a.lastDisconnectReason) ? ` (${waDisconnectReasonText(a.lastDisconnectReason)!.slice(0, 80)})` : ''}. Kujtesat dhe fushatat automatike nuk dërgohen — skanoni QR-in në Cilësimet → WhatsApp.`,
       actionUrl: '/app/settings',
       actionLabel: 'Rilidh WhatsApp',
       businessId,

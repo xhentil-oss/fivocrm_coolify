@@ -36,6 +36,7 @@ import {
 import { WhatsAppAccount, TeamMember, UserProfile } from '../types';
 import { MetaChannel } from '../hooks/useTeamSettings';
 import { swiftKeyDown, ibanChange } from '../lib/utils';
+import { waDisconnectLabel, waDisconnectReasonText } from '../lib/messaging/waDisconnect';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Label } from '../components/ui/label';
@@ -556,16 +557,6 @@ const SettingsView: React.FC = () => {
   };
 
   /** Albanian reading of the VPS-stamped disconnect reason. */
-  const waDisconnectLabel = (reason: string | null | undefined): string | null => {
-    if (!reason) return null;
-    const r = String(reason).toLowerCase();
-    if (r === 'logged_out' || r === 'loggedout' || r === '401') return 'U shkëput nga telefoni — skano QR';
-    if (r === 'replaced' || r === 'connectionreplaced' || r === '440') return 'U hap në një pajisje tjetër';
-    if (r === 'banned' || r === 'forbidden' || r === '403') return 'Numri u bllokua nga WhatsApp';
-    if (r === 'restart_required' || r === 'restartrequired' || r === '515') return 'Po rinis lidhjen';
-    if (r === 'timed_out' || r === 'connectionlost' || r === '408' || r === '428') return 'Lidhja ra — po rilidhet';
-    return reason;
-  };
   const fmtWaDate = (v: any): string | null => {
     const d = v?.toDate ? v.toDate() : v instanceof Date ? v : v ? new Date(v) : null;
     return d && !isNaN(d.getTime()) ? d.toLocaleString('sq-AL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : null;
@@ -2078,7 +2069,7 @@ const SettingsView: React.FC = () => {
                             {acc.assignedToName && ` · ${acc.assignedToName}`}
                           </p>
                           {!isConnected && (acc.lastDisconnectReason || acc.lastDisconnectedAt) && (
-                            <p className="text-[11px] text-amber-600 dark:text-amber-400 truncate" title={acc.lastDisconnectReason || undefined}>
+                            <p className="text-[11px] text-amber-600 dark:text-amber-400 truncate" title={waDisconnectReasonText(acc.lastDisconnectReason) || undefined}>
                               {waDisconnectLabel(acc.lastDisconnectReason) || 'U shkëput'}
                               {fmtWaDate(acc.lastDisconnectedAt) ? ` · ${fmtWaDate(acc.lastDisconnectedAt)}` : ''}
                             </p>
