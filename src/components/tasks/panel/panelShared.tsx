@@ -107,12 +107,16 @@ export const SheetRow: React.FC<{
   chevron?: boolean;
   title?: string;
 }> = ({ tile, label, value, valueClassName = 'text-[15px] text-foreground/80', open = false, onToggle, disabled, chevron = true, title }) => {
-  const grid = `grid w-full items-center gap-3 px-4 py-[11px] text-left min-h-[52px] ${chevron ? 'grid-cols-[30px_1fr_auto_16px]' : 'grid-cols-[30px_1fr_auto]'}`;
+  // The label column sizes to its word (labels are short, fixed Albanian
+  // words); the VALUE gets every remaining pixel and truncates. A percentage
+  // max-width on the value resolved against its own auto track, so it was
+  // clamped to half of itself ("9 Te…", "Asnj…").
+  const grid = `grid w-full items-center gap-3 px-4 py-[11px] text-left min-h-[52px] ${chevron ? 'grid-cols-[30px_auto_minmax(0,1fr)_16px]' : 'grid-cols-[30px_auto_minmax(0,1fr)]'}`;
   const inner = (
     <>
       {tile}
-      <span className="min-w-0 truncate text-[16px] font-semibold text-foreground">{label}</span>
-      <span className={`min-w-0 max-w-[55%] truncate text-right ${valueClassName}`}>{value}</span>
+      <span className="whitespace-nowrap text-[16px] font-semibold text-foreground">{label}</span>
+      <span className={`min-w-0 justify-self-end max-w-full truncate text-right ${valueClassName}`}>{value}</span>
       {chevron && (
         <ChevronRight
           className={`h-4 w-4 text-muted-foreground/70 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
