@@ -8361,6 +8361,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           businessId: scopeId,
           ruleId: (req.query.ruleId as string) || null,
           dryRun: req.query.dryRun === '1',
+          // `fast=1`: the 5-minute tick from the VPS — only "Lead i ri" rules over
+          // leads born in the last 48h (a welcome message must not wait an hour).
+          fast: req.query.fast === '1',
         });
         break;
       }

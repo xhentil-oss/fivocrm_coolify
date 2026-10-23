@@ -17,7 +17,7 @@ import { getTimestampMs } from '../../lib/utils';
 import { LEAD_STAGES, leadStageLabel } from '../../lib/leadStages';
 import {
   ACTION_META, AUTOMATION_RECIPES, BLOCK_LABELS, CONDITION_META, OP_LABELS, TRIGGER_META,
-  customerFacts, describeRule, evaluateRule, leadFacts, overdueInvoiceFact, recipeToDraft, validateRule,
+  WA_DAILY_CAP_DEFAULT, customerFacts, describeRule, evaluateRule, leadFacts, overdueInvoiceFact, recipeToDraft, ruleSendsWhatsapp, validateRule,
   type AutomationAction, type AutomationActionType, type AutomationCondition, type AutomationEntity,
   type AutomationRule, type AutomationRun, type ConditionField, type ConditionOp, type EntityFacts,
   type OverdueInvoiceFact, type RuleDraft, type TriggerKind,
@@ -56,6 +56,7 @@ const emptyDraft = (entity: AutomationEntity): RuleDraft => ({
   enrollExisting: false,
   cooldownDays: null,
   maxPerRun: null,
+  maxPerDay: null,
 });
 
 const defaultAction = (type: AutomationActionType): AutomationAction => {
@@ -67,6 +68,7 @@ const defaultAction = (type: AutomationActionType): AutomationAction => {
     case 'set_status': return { type, status: 'Contacted' };
     case 'start_cadence': return { type };
     case 'send_email': return { type, subject: 'Përshëndetje {{firstName}}', body: '' };
+    case 'send_whatsapp': return { type, text: 'Përshëndetje {{firstName}}, ' };
     default: return { type: 'notify', to: 'owner', title: '' };
   }
 };
@@ -160,6 +162,7 @@ const AutomationRulesPanel: React.FC<Props> = ({ leads, customers, teamMembers, 
       enrollExisting: !!draft.enrollExisting,
       cooldownDays: draft.cooldownDays ?? null,
       maxPerRun: draft.maxPerRun ?? null,
+      maxPerDay: draft.maxPerDay ?? null,
     };
     try {
       if (id) await mutation.update(id, payload);
@@ -512,9 +515,16 @@ const RuleBuilderDialog: React.FC<{
               <div className="flex flex-wrap gap-4 pt-1">
                 {!triggerMeta?.recurring && (
                   <label className="flex items-center gap-2 text-xs">
-                    <Switch checked={!!draft.enrollExisting} onCheckedChange={v => set({ enrollExisting: v })} />
+                    <Switch checked={!!draft.enrollExisting} disabled={ruleSendsWhatsapp(draft) && !draft.enrollExisting} onCheckedChange={v => set({ enrollExisting: v })} />
                     Zbatoje edhe për rekordet ekzistuese
+                    {ruleSendsWhatsapp(draft) && <span className="text-muted-foreground">(jo me WhatsApp — vetëm rekordet e reja)</span>}
                   </label>
+                )}
+                {ruleSendsWhatsapp(draft) && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <span>Maks. mesazhe WhatsApp në 24 orë</span>
+                    <Input type="number" min={1} max={200} className="h-8 w-20" value={draft.maxPerDay ?? ''} placeholder={String(WA_DAILY_CAP_DEFAULT)} onChange={e => set({ maxPerDay: e.target.value === '' ? null : Number(e.target.value) })} />
+                  </div>
                 )}
                 {triggerMeta?.recurring && (
                   <div className="flex items-center gap-2 text-xs">
@@ -797,6 +807,16 @@ const ActionEditor: React.FC<{ action: AutomationAction; members: Member[]; labe
         <div className="space-y-2">
           <Input className="h-9" value={a.subject} placeholder="Subjekti" onChange={e => onChange({ subject: e.target.value } as any)} />
           <Textarea className="min-h-[96px]" value={a.body} placeholder={'Përshëndetje {{firstName}},\n\n…'} onChange={e => onChange({ body: e.target.value } as any)} />
+        </div>
+      );
+    case 'send_whatsapp':
+      return (
+        <div className="space-y-1.5">
+          <Textarea className="min-h-[140px]" value={a.text} maxLength={1500} placeholder={'Përshëndetje {{firstName}},'} onChange={e => onChange({ text: e.target.value } as any)} />
+          <div className="flex justify-between gap-2 text-[11px] text-muted-foreground">
+            <span>Tokenë: {'{{firstName}} {{name}} {{company}} {{owner}}'} · del nga numri i lidhur i biznesit, 09:00–20:00, një herë për kontakt.</span>
+            <span className="tabular-nums whitespace-nowrap">{(a.text || '').length}/1500</span>
+          </div>
         </div>
       );
     default:

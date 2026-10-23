@@ -2718,6 +2718,9 @@ function startCronSchedulers(): void {
   // that have an active rule (leads/customers/invoices scoped by businessId) and
   // every firing is keyed per (rule, record, occurrence), so a tick is idempotent.
   setInterval(() => { void triggerCronJob('crm-automations'); }, 60 * MIN);
+  // "Lead i ri" rules (e.g. the WhatsApp intro) every 5 min: reads only leads born
+  // in the last 48h + that window's runs; the hourly full run above is the backstop.
+  setInterval(() => { void triggerCronJob('crm-automations', { fast: '1' }); }, 5 * MIN);
   // Google Reviews: hourly pull. The job reads ONLY connected gmbAccounts and
   // diffs reviews per location, so an hour with no new reviews costs a handful of
   // reads and zero writes. A tenant can opt out via teamSettings.gmbAutoSync.

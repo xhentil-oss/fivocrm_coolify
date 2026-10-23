@@ -688,6 +688,9 @@ const CRMView: React.FC = () => {
           jobTitle: r.jobTitle || undefined,
           website: r.website || undefined,
           source: r.source || 'Import CSV',
+          // Marks the row as imported whatever its `source` column says: automations
+          // that MESSAGE people (WhatsApp intro) must never fire on a CSV import.
+          importedAt: new Date(),
           businessCategory: r.businessCategory || undefined,
           address: r.address || undefined,
           notes: r.notes || undefined,

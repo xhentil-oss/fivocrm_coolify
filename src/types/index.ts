@@ -2097,6 +2097,8 @@ export interface FileAttachment {
 }
 
 export interface Lead extends FollowUpFields {
+  /** Set by the CSV import — automations that message people skip imported leads. */
+  importedAt?: Date | null;
   id: string;
   name: string;
   email?: string;

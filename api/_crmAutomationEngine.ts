@@ -73,7 +73,8 @@ export type AutomationAction =
   | { type: 'add_tags'; tags: string[] }
   | { type: 'set_status'; status: string }
   | { type: 'start_cadence' }
-  | { type: 'send_email'; subject: string; body: string };
+  | { type: 'send_email'; subject: string; body: string }
+  | { type: 'send_whatsapp'; text: string };
 
 export type AutomationActionType = AutomationAction['type'];
 
@@ -94,6 +95,8 @@ export interface AutomationRule {
   cooldownDays?: number | null;
   /** Safety valve: max firings per run (default MAX_PER_RUN_DEFAULT). */
   maxPerRun?: number | null;
+  /** WhatsApp rules only: max firings per rolling 24h (default WA_DAILY_CAP_DEFAULT). */
+  maxPerDay?: number | null;
   /** Round-robin position, advanced by the cron. */
   roundRobinCursor?: number;
   /** Stats written by the cron. */
@@ -131,7 +134,16 @@ export type AutomationBlockReason =
   | 'already-fired'      // this occurrence already has a run record
   | 'cooldown'           // recurring trigger fired too recently on this record
   | 'condition-failed'   // a condition did not hold
-  | 'run-cap';           // maxPerRun reached in this run
+  | 'run-cap'            // maxPerRun reached in this run
+  // ── WhatsApp rules only. None of these consumes the occurrence: no run doc is
+  // written, so the record is simply re-evaluated on the next tick.
+  | 'quiet-hours'        // outside WA_SEND_HOURS (local) - nothing is sent at night
+  | 'daily-cap'          // maxPerDay firings already in the last 24h
+  | 'imported'           // a CSV import is not a person who asked to hear from us
+  | 'opted-out'          // the contact wrote STOP/NDALO
+  | 'no-phone'           // no deliverable phone number (yet)
+  | 'already-customer'   // the lead is already linked to a customer
+  | 'channel-down';      // (job) no connected WhatsApp number for the business
 
 export const BLOCK_LABELS: Record<AutomationBlockReason, string> = {
   'terminal-status': 'lead i mbyllur (Fituar/Konvertuar/Humbur)',
@@ -141,7 +153,48 @@ export const BLOCK_LABELS: Record<AutomationBlockReason, string> = {
   'cooldown': 'në periudhë pritjeje',
   'condition-failed': 'kusht i paplotësuar',
   'run-cap': 'kufiri për ekzekutim',
+  'quiet-hours': 'jashtë orarit të dërgimit (09:00–20:00)',
+  'daily-cap': 'kufiri ditor i mesazheve',
+  'imported': 'lead i importuar (CSV)',
+  'opted-out': 'ka refuzuar WhatsApp',
+  'no-phone': 'pa numër telefoni të vlefshëm',
+  'already-customer': 'tashmë klient',
+  'channel-down': 'asnjë numër WhatsApp i lidhur',
 };
+
+/** WhatsApp rules: local send window [from, to) in WA_SEND_TZ. */
+export const WA_SEND_HOURS = { from: 9, to: 20 } as const;
+export const WA_SEND_TZ = 'Europe/Tirane';
+/** WhatsApp rules: default max firings per rolling 24h (a mass import must never become a mass blast). */
+export const WA_DAILY_CAP_DEFAULT = 30;
+
+export function ruleSendsWhatsapp(rule: Pick<AutomationRule, 'actions'>): boolean {
+  return (rule.actions || []).some(a => a.type === 'send_whatsapp');
+}
+
+/** Hour of day (0-23) in `timeZone` at `ms`. */
+export function localHourAt(ms: number, timeZone: string = WA_SEND_TZ): number {
+  const h = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+  return Number(h) % 24;
+}
+
+export function inWaSendWindow(ms: number): boolean {
+  const h = localHourAt(ms);
+  return h >= WA_SEND_HOURS.from && h < WA_SEND_HOURS.to;
+}
+
+/**
+ * Same digits rule as src/lib/messaging/waPhone.ts (`toWaPhone`) - copied, not
+ * imported, because this file must stay import-free (its api twin is a byte copy).
+ */
+export function waPhoneOf(raw: unknown): string {
+  let d = String(raw ?? '').replace(/\D/g, '');
+  if (d.startsWith('00')) d = d.slice(2);
+  if (/^3550[6-9]/.test(d)) d = '355' + d.slice(4);
+  else if (/^0[6-9]\d{7,8}$/.test(d)) d = '355' + d.slice(1);
+  else if (/^[6-9]\d{8}$/.test(d)) d = '355' + d;
+  return d.length >= 8 && d.length <= 15 ? d : '';
+}
 
 export const MAX_PER_RUN_DEFAULT = 50;
 export const MS_PER_DAY = 86_400_000;
@@ -213,6 +266,7 @@ export const ACTION_META: Record<AutomationActionType, ActionMeta> = {
   set_status:    { label: 'Ndrysho fazën',       help: 'Lëviz lead-in në një fazë tjetër.',                                      entity: 'lead' },
   start_cadence: { label: 'Nis kadencën',        help: 'Aktivizon sekuencën e ndjekjes (Cilësimet → CRM).',                      entity: 'lead' },
   send_email:    { label: 'Dërgo email',         help: 'Email te kontakti me tokenët {{name}}, {{company}}, {{owner}}…',        entity: 'both' },
+  send_whatsapp: { label: 'Dërgo WhatsApp',      help: 'Mesazh nga numri i lidhur i biznesit, me tokenët {{firstName}}, {{company}}, {{owner}}… Vetëm 09:00–20:00, me kufi ditor; respekton refuzimin dhe nuk i shkon lead-eve të importuara.', entity: 'both' },
 };
 
 /** Tokens accepted by `renderAutomationText`. */
@@ -250,6 +304,10 @@ export interface EntityFacts {
   lastActivityMs: number | null;
   firstResponseMs: number | null;
   overdueInvoices: OverdueInvoiceFact[];
+  /** WhatsApp guards. */
+  waOptOut?: boolean;
+  imported?: boolean;
+  linkedCustomerId?: string | null;
 }
 
 /** Date | Firestore Timestamp-like | ISO string | epoch → ms, else null. */
@@ -332,6 +390,11 @@ export function leadFacts(id: string, raw: Record<string, unknown>, nowMs: numbe
     lastActivityMs,
     firstResponseMs: toMs(raw.firstResponseAt),
     overdueInvoices: [],
+    waOptOut: raw.waOptOut === true,
+    // `importedAt` is stamped by the CSV import; older imports only carry the
+    // default source label.
+    imported: raw.importedAt != null || String(raw.source || '').trim().toLowerCase() === 'import csv',
+    linkedCustomerId: str(raw.customerId) || null,
   };
 }
 
@@ -362,6 +425,9 @@ export function customerFacts(id: string, raw: Record<string, unknown>, ctx: Cus
     lastActivityMs,
     firstResponseMs: null,
     overdueInvoices: ctx.overdueInvoices ?? [],
+    waOptOut: raw.waOptOut === true,
+    imported: raw.importedAt != null,
+    linkedCustomerId: null,
   };
 }
 
@@ -567,6 +633,13 @@ export function evaluateEntity(rule: AutomationRule, f: EntityFacts, opts: Evalu
   const failedField = firstFailingCondition(rule.conditions, f, nowMs);
   if (failedField) return { fires: [], blocked: 'condition-failed', failedField };
 
+  if (ruleSendsWhatsapp(rule)) {
+    if (f.imported) return { fires: [], blocked: 'imported', failedField: null };
+    if (f.waOptOut) return { fires: [], blocked: 'opted-out', failedField: null };
+    if (f.entity === 'lead' && f.linkedCustomerId) return { fires: [], blocked: 'already-customer', failedField: null };
+    if (!waPhoneOf(f.phone)) return { fires: [], blocked: 'no-phone', failedField: null };
+  }
+
   const prior = opts.runs?.get(f.id);
   const recurring = TRIGGER_META[rule.trigger.kind]?.recurring;
   if (recurring && prior && prior.lastFiredMs > 0 && nowMs - prior.lastFiredMs < cooldownMsFor(rule)) {
@@ -579,9 +652,19 @@ export function evaluateEntity(rule: AutomationRule, f: EntityFacts, opts: Evalu
 
 /** Evaluate a rule over a whole population — the cron's loop and the builder's preview. */
 export function evaluateRule(rule: AutomationRule, population: EntityFacts[], opts: EvaluateOptions, nowMs: number): EvaluationResult {
-  const cap = Math.max(1, Number(rule.maxPerRun) || MAX_PER_RUN_DEFAULT);
+  const runCap = Math.max(1, Number(rule.maxPerRun) || MAX_PER_RUN_DEFAULT);
   const out: EvaluationResult = { considered: 0, fires: [], blocked: {}, failedConditions: {} };
   const bump = (r: AutomationBlockReason) => { out.blocked[r] = (out.blocked[r] || 0) + 1; };
+  const sendsWa = ruleSendsWhatsapp(rule);
+  const quiet = sendsWa && !inWaSendWindow(nowMs);
+  // Rolling 24h of firings, from the run index (one entry per record).
+  let dailyLeft = Infinity;
+  if (sendsWa) {
+    const dayCap = Math.max(1, Number(rule.maxPerDay) || WA_DAILY_CAP_DEFAULT);
+    let sent24h = 0;
+    for (const v of opts.runs?.values() || []) if (v.lastFiredMs > nowMs - MS_PER_DAY) sent24h++;
+    dailyLeft = Math.max(0, dayCap - sent24h);
+  }
   for (const f of population) {
     if (f.entity !== rule.entity) continue;
     out.considered++;
@@ -591,8 +674,11 @@ export function evaluateRule(rule: AutomationRule, population: EntityFacts[], op
       if (r.failedField) out.failedConditions[r.failedField] = (out.failedConditions[r.failedField] || 0) + 1;
       continue;
     }
+    // Due, but held back: these leave no trace, so the record fires on a later tick.
+    if (quiet) { bump('quiet-hours'); continue; }
     for (const occurrence of r.fires) {
-      if (out.fires.length >= cap) { bump('run-cap'); break; }
+      if (out.fires.length >= dailyLeft) { bump('daily-cap'); break; }
+      if (out.fires.length >= runCap) { bump('run-cap'); break; }
       out.fires.push({ facts: f, occurrence });
     }
   }
@@ -695,11 +781,17 @@ export function validateRule(rule: RuleDraft): string[] {
         if (!String(a.subject || '').trim()) errors.push(`Veprimi ${i + 1}: emaili ka nevojë për subjekt.`);
         if (!String(a.body || '').trim()) errors.push(`Veprimi ${i + 1}: emaili ka nevojë për përmbajtje.`);
         break;
+      case 'send_whatsapp':
+        if (!String(a.text || '').trim()) errors.push(`Veprimi ${i + 1}: mesazhi WhatsApp ka nevojë për tekst.`);
+        else if (String(a.text).length > 1500) errors.push(`Veprimi ${i + 1}: mesazhi WhatsApp është shumë i gjatë (maks. 1500 shkronja).`);
+        if (rule.enrollExisting) errors.push(`Veprimi ${i + 1}: një mesazh WhatsApp nuk lejohet për rekordet ekzistuese — fik “përfshi ekzistuesit”.`);
+        break;
       default:
         break;
     }
   }
   if (rule.cooldownDays != null && rule.cooldownDays !== undefined && !(Number(rule.cooldownDays) >= 0)) errors.push('Periudha e pritjes duhet të jetë ≥ 0 ditë.');
+  if (rule.maxPerDay != null && !(Number(rule.maxPerDay) >= 1 && Number(rule.maxPerDay) <= 200)) errors.push('Kufiri ditor duhet të jetë 1–200.');
   return errors;
 }
 
@@ -816,6 +908,20 @@ export const AUTOMATION_RECIPES: AutomationRecipe[] = [
       { type: 'create_task', title: 'Check-in me {{name}}', description: '{{days}} ditë pa aktivitet. Telefono dhe pyet si po shkon.', dueInDays: 2, priority: 'medium', assignTo: 'owner' },
     ],
     cooldownDays: 45,
+  },
+  {
+    key: 'new-lead-whatsapp-intro',
+    name: 'Lead i ri → prezantim në WhatsApp',
+    description: 'Çdo lead i ri (faza “I ri”) me telefon merr një prezantim të shkurtër të kompanisë nga numri i lidhur — jo lead-et e importuara, jo ata që na shkruan vetë në WhatsApp, jo klientët ekzistues. Vetëm 09:00–20:00, maks. 30 në ditë.',
+    entity: 'lead',
+    trigger: { kind: 'lead_created' },
+    conditions: [
+      { field: 'status', op: 'in', values: ['New'] },
+      { field: 'source', op: 'not_in', values: ['whatsapp', 'whatsapp-keyword', 'Import CSV'] },
+    ],
+    actions: [
+      { type: 'send_whatsapp', text: 'Përshëndetje {{firstName}}, faleminderit për interesin! [PREZANTIMI I KOMPANISË — do e vendosim së bashku]' },
+    ],
   },
 ];
 

@@ -363,3 +363,68 @@ describe('validateRule', () => {
     expect((AUTOMATION_RECIPES[0].actions[0] as { mode: string }).mode).toBe('round_robin');
   });
 });
+
+// ── WhatsApp action guards ────────────────────────────────────────────────────
+
+describe('send_whatsapp guards', () => {
+  const wa = (over: Partial<AutomationRule> = {}) => rule({
+    enrollExisting: false,
+    createdAt: daysAgo(5),
+    actions: [{ type: 'send_whatsapp', text: 'Përshëndetje {{firstName}}' }],
+    ...over,
+  });
+  const fresh = (id: string, over: Record<string, unknown> = {}) => lead(id, { phoneNumber: '0691234567', ...over });
+
+  it('fires once for a new lead with a phone, inside the window', () => {
+    const r = evaluateRule(wa(), [fresh('a')], { ruleCreatedAtMs: toMs(daysAgo(5)) }, NOW);
+    expect(r.fires.map(x => x.facts.id)).toEqual(['a']);
+  });
+
+  it('never reaches leads that existed before the rule', () => {
+    const r = evaluateRule(wa(), [fresh('old', { createdAt: daysAgo(10) })], { ruleCreatedAtMs: toMs(daysAgo(5)) }, NOW);
+    expect(r.fires).toHaveLength(0);
+    expect(r.blocked['predates-rule']).toBe(1);
+  });
+
+  it('holds back (does not consume) outside 09:00–20:00 Tirane', () => {
+    const night = new Date('2026-09-07T21:30:00Z').getTime(); // 23:30 local
+    const r = evaluateRule(wa(), [lead('a', { phoneNumber: '0691234567', createdAt: new Date(night - MS_PER_HOUR) })], { ruleCreatedAtMs: toMs(daysAgo(5)) }, night);
+    expect(r.fires).toHaveLength(0);
+    expect(r.blocked['quiet-hours']).toBe(1);
+  });
+
+  it('skips imported, opted-out, already-customer and phoneless leads by name', () => {
+    const pop = [
+      fresh('imp', { importedAt: daysAgo(1) }),
+      fresh('csv', { source: 'Import CSV' }),
+      fresh('stop', { waOptOut: true }),
+      fresh('cust', { customerId: 'c1' }),
+      lead('nophone'),
+    ];
+    const r = evaluateRule(wa(), pop, { ruleCreatedAtMs: toMs(daysAgo(5)) }, NOW);
+    expect(r.fires).toHaveLength(0);
+    expect(r.blocked).toMatchObject({ imported: 2, 'opted-out': 1, 'already-customer': 1, 'no-phone': 1 });
+  });
+
+  it('caps firings per rolling 24h', () => {
+    const runs = buildRunsIndex([
+      { entityId: 'x1', fireKey: 'created', firedAt: hoursAgo(2) },
+      { entityId: 'x2', fireKey: 'created', firedAt: hoursAgo(30) },
+    ]);
+    const r = evaluateRule(wa({ maxPerDay: 2 }), [fresh('a'), fresh('b')], { ruleCreatedAtMs: toMs(daysAgo(5)), runs }, NOW);
+    expect(r.fires).toHaveLength(1);
+    expect(r.blocked['daily-cap']).toBe(1);
+  });
+
+  it('validation: text required, no enrollExisting', () => {
+    expect(validateRule(wa({ actions: [{ type: 'send_whatsapp', text: ' ' }] }))).toEqual(expect.arrayContaining([expect.stringContaining('tekst')]));
+    expect(validateRule(wa({ enrollExisting: true })).some(e => e.includes('ekzistuese'))).toBe(true);
+    expect(validateRule(wa())).toEqual([]);
+  });
+
+  it('every block reason has a label', () => {
+    for (const k of ['quiet-hours', 'daily-cap', 'imported', 'opted-out', 'no-phone', 'already-customer'] as const) {
+      expect(BLOCK_LABELS[k]).toBeTruthy();
+    }
+  });
+});

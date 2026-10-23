@@ -26,6 +26,9 @@ import admin, { adminDb as db } from './_firebaseAdmin.js';
 import { notifyUser, escapeHtml } from './_push.js';
 import { sendBulkEmail } from './_mailer.js';
 import { getTeamConfig } from './_tenantConfig.js';
+import { makeWaAgentResolver } from './_waAgent.js';
+import { sendBaileysText } from './_waSend.js';
+import { toWaPhone } from './_waPhone.js';
 import {
   AUTOMATION_RECIPES,
   MS_PER_DAY,
@@ -36,6 +39,7 @@ import {
   overdueInvoiceFact,
   pickRoundRobin,
   renderAutomationText,
+  ruleSendsWhatsapp,
   runDocId,
   toMs,
   type AutomationAction,
@@ -71,6 +75,8 @@ interface TenantContext {
   customers?: Doc[];
   invoicesByCustomer?: Map<string, Doc[]>;
   projectTouchByCustomer?: Map<string, number>;
+  /** Resolved once per tenant, only when a rule sends WhatsApp. */
+  wa?: { agent: { id: string; teamId: string; connected: boolean } | null; vpsUrl: string; vpsSecret: string };
 }
 
 const MANAGER_ROLES = new Set(['Admin', 'Manager', 'Owner', 'SuperAdmin']);
@@ -121,11 +127,26 @@ function needsCustomerActivity(rules: AutomationRule[]): boolean {
   return rules.some(r => r.trigger.kind === 'customer_inactive' || r.conditions.some(c => c.field === 'daysSinceActivity'));
 }
 
-async function buildPopulation(ctx: TenantContext, rules: AutomationRule[], teamIds: Set<string>, nowMs: number): Promise<{ leads: EntityFacts[]; customers: EntityFacts[] }> {
+/** Fast mode looks back this far — wider than any tick gap, so a missed tick is caught up. */
+const FAST_WINDOW_MS = 48 * 3_600_000;
+/** Triggers the fast tick evaluates: "a record was born", the only ones a minute matters for. */
+const FAST_TRIGGERS = new Set(['lead_created']);
+
+async function recentLeadDocs(businessId: string, sinceMs: number): Promise<Doc[]> {
+  const snap = await db.collection('leads')
+    .where('businessId', '==', businessId)
+    .where('createdAt', '>=', admin.firestore.Timestamp.fromMillis(sinceMs))
+    .get();
+  return snap.docs.map(d => ({ id: d.id, data: d.data() }));
+}
+
+async function buildPopulation(ctx: TenantContext, rules: AutomationRule[], teamIds: Set<string>, nowMs: number, fast = false): Promise<{ leads: EntityFacts[]; customers: EntityFacts[] }> {
   const leads: EntityFacts[] = [];
   const customers: EntityFacts[] = [];
   if (needsLeads(rules)) {
-    ctx.leads = await scopedDocs('leads', ctx.businessId, teamIds);
+    // Fast tick: only leads born in the window (index businessId+createdAt) —
+    // the hourly full run still covers legacy teamId-only rows.
+    ctx.leads = fast ? await recentLeadDocs(ctx.businessId, nowMs - FAST_WINDOW_MS) : await scopedDocs('leads', ctx.businessId, teamIds);
     for (const d of ctx.leads) leads.push(leadFacts(d.id, d.data, nowMs));
   }
   if (needsCustomers(rules)) {
@@ -338,6 +359,37 @@ async function executeAction(
       return { type: a.type, ok: true, detail: f.email };
     }
 
+    case 'send_whatsapp': {
+      // Guards the engine already applied (opt-out, import, phone, window, cap)
+      // are re-checked on the live doc: the population can be minutes old.
+      if (raw.waOptOut === true) return { type: a.type, ok: false, detail: 'ka refuzuar WhatsApp' };
+      const phone = toWaPhone(f.phone);
+      if (!phone) return { type: a.type, ok: false, detail: 'pa numër të vlefshëm' };
+      const wa = ctx.wa;
+      if (!wa?.agent || !wa.vpsUrl) return { type: a.type, ok: false, detail: 'asnjë numër WhatsApp i lidhur' };
+      const text = render(a.text).trim();
+      if (!text) return { type: a.type, ok: false, detail: 'mesazh bosh' };
+      const res = await sendBaileysText(wa.vpsUrl, wa.vpsSecret, wa.agent.id, phone, text, {
+        teamId: wa.agent.teamId,
+        leadId: f.entity === 'lead' ? f.id : null,
+        customerId: f.entity === 'customer' ? f.id : null,
+        leadName: f.name || null,
+        automated: true,
+        automationKind: 'automation',
+        source: 'cron',
+        businessId: rule.businessId,
+        // One message per rule per record, ever — the VPS refuses a repeat for 24h
+        // and the run doc refuses it forever.
+        idempotencyKey: `crm_${rule.id}_${f.id}`,
+      });
+      if (!res.ok) return { type: a.type, ok: false, detail: res.error || `VPS ${res.status}` };
+      // A real outbound touch: the dormancy/stale jobs must see it. NOT
+      // firstResponseAt — an automatic intro is not a human answering the lead.
+      await entityRef(f).update({ lastActivityAt: now, updatedAt: now }).catch(() => {});
+      await logLeadActivity(f, rule, 'whatsapp', 'WhatsApp automatik', text.slice(0, 500));
+      return { type: a.type, ok: true, detail: res.duplicate ? 'tashmë i dërguar (VPS)' : phone };
+    }
+
     default:
       return { type: (a as any).type, ok: false, detail: 'veprim i panjohur' };
   }
@@ -351,6 +403,8 @@ export interface CrmAutomationRunOptions {
   /** Manual run: only this rule (still must be active). */
   ruleId?: string | null;
   dryRun?: boolean;
+  /** Every-few-minutes tick: only `lead_created` rules, only leads born in the last 48h. */
+  fast?: boolean;
 }
 
 export async function runCrmAutomations(opts: CrmAutomationRunOptions = {}) {
@@ -362,6 +416,7 @@ export async function runCrmAutomations(opts: CrmAutomationRunOptions = {}) {
   const snap = await q.get();
   let ruleDocs = snap.docs;
   if (opts.ruleId) ruleDocs = ruleDocs.filter(d => d.id === opts.ruleId);
+  if (opts.fast) ruleDocs = ruleDocs.filter(d => FAST_TRIGGERS.has(String((d.data() as any)?.trigger?.kind || '')));
   if (!ruleDocs.length) return { rules: 0, tenants: 0, fired: 0, considered: 0 };
 
   const suspended = new Set<string>();
@@ -390,7 +445,14 @@ export async function runCrmAutomations(opts: CrmAutomationRunOptions = {}) {
     let population: { leads: EntityFacts[]; customers: EntityFacts[] };
     try {
       ctx = await loadTenant(businessId, teamIds);
-      population = await buildPopulation(ctx, rules, teamIds, nowMs);
+      population = await buildPopulation(ctx, rules, teamIds, nowMs, !!opts.fast);
+      if (rules.some(ruleSendsWhatsapp)) {
+        const resolver = makeWaAgentResolver();
+        const preferTeam = rules.find(ruleSendsWhatsapp)?.teamId || null;
+        const agent = await resolver.resolve(businessId, preferTeam, null);
+        const relay = agent ? await resolver.relayFor(preferTeam, agent.teamId) : { vpsUrl: '', vpsSecret: '' };
+        ctx.wa = { agent: agent && agent.connected ? agent : null, ...relay };
+      }
     } catch (err: any) {
       console.error(`[CRON:crm-automations] tenant ${businessId} load failed:`, err);
       continue;
@@ -402,11 +464,24 @@ export async function runCrmAutomations(opts: CrmAutomationRunOptions = {}) {
     for (const doc of docs) {
       const rule = rules.find(r => r.id === doc.id)!;
       try {
-        const runsSnap = await db.collection('crmAutomationRuns').where('ruleId', '==', rule.id).get();
+        // Fast tick: runs of the window only (index businessId+ruleId+firedAt) — a
+        // lead born in the window can only have fired inside it, and the daily cap
+        // needs 24h. The run doc's create() stays the hard idempotency guarantee.
+        const runsSnap = opts.fast
+          ? await db.collection('crmAutomationRuns')
+            .where('businessId', '==', businessId).where('ruleId', '==', rule.id)
+            .where('firedAt', '>=', admin.firestore.Timestamp.fromMillis(nowMs - FAST_WINDOW_MS)).get()
+          : await db.collection('crmAutomationRuns').where('ruleId', '==', rule.id).get();
         const runs = buildRunsIndex(runsSnap.docs.map(d => d.data() as any));
         const pop = rule.entity === 'lead' ? population.leads : population.customers;
         const result = evaluateRule(rule, pop, { ruleCreatedAtMs: toMs(rule.createdAt), runs }, nowMs);
         considered += result.considered;
+        if (ruleSendsWhatsapp(rule) && !ctx.wa?.agent && result.fires.length) {
+          // No connected number: claiming the run doc now would burn the lead's
+          // one and only intro. Hold every due record for the next tick.
+          result.blocked['channel-down'] = (result.blocked['channel-down'] || 0) + result.fires.length;
+          result.fires = [];
+        }
 
         let ruleFired = 0;
         const state = { ownerId: null as string | null, cursor: Number(rule.roundRobinCursor) || 0, cursorDirty: false };
@@ -446,7 +521,7 @@ export async function runCrmAutomations(opts: CrmAutomationRunOptions = {}) {
         }
 
         fired += ruleFired;
-        if (!opts.dryRun) {
+        if (!opts.dryRun && (!opts.fast || ruleFired > 0 || Object.keys(result.blocked).some(k => k === 'channel-down' || k === 'daily-cap'))) {
           await doc.ref.update({
             lastRunAt: now,
             lastRunConsidered: result.considered,
