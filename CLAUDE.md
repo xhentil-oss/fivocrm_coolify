@@ -887,6 +887,19 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
   (≥1.2s), LID resolved via `senderPn`, LID lookups ≤ once/24h, `getMessage`,
   `markOnlineOnConnect: false`. `npm run prod` now BUILDS first — the old
   `dist/server.js` was months stale.
+- **Baileys 7 (`7.0.0-rc14`, pinned exactly) since 23 Oct 2026.** 6.7.x cannot
+  encrypt 1:1 for LID-migrated contacts → "Waiting for this message". Inbound
+  resolves LID via `remoteJidAlt` → Baileys' `signalRepository.lidMapping` →
+  6.x `senderPn`; keys go through `makeCacheableSignalKeyStore`.
+  `vps/scripts/patch-baileys.mjs` (postinstall, idempotent, version-guarded)
+  fixes upstream #2781 (a 1:1 retry resend encrypted twice → 479). Re-check it
+  on every Baileys bump. A NACK from one of OUR devices (`isOwnDeviceJid`) never
+  fails the row (479 → `assertSessions(force)` hourly); a ✓✓ beats `failed`.
+- **pm2 is the ONLY process manager on the VPS.** A systemd `whatsapp-vps.service`
+  (`npm start`) ran the server too until 23 Oct 2026 — whichever won port 3001
+  was live, the other crash-looped, and `pm2 restart` changed nothing. It is
+  disabled; `pm2-root.service` is enabled. Two processes on one auth dir corrupt
+  the Signal state for good: the fix was a fresh QR pairing.
 
 ### WhatsApp campaign automation (conditions + variants + evergreen rules)
 
