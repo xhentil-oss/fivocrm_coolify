@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node --loader ts-node/esm server.ts",
     "build": "tsc",
-    "prod": "npm run build && node dist/server.js"
+    "prod": "npm run build && node dist/server.js",
+    "postinstall": "node scripts/patch-baileys.mjs"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
