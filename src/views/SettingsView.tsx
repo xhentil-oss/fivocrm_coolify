@@ -189,13 +189,23 @@ const SettingsView: React.FC = () => {
   const [aiApiKey, setAiApiKey] = useState('');
   // The key's shape is the one fact that cannot be mis-clicked — the server routes
   // by it too (`resolveProviderChoice`), so the form follows the pasted key.
+  // A model id belongs to ONE provider: switching provider drops a model that is
+  // not in the new provider's list (the server would only 404 on it).
+  const handleAiProviderChange = (next: AiProviderName) => {
+    setAiProvider(next);
+    setAiModel((m) => (m && !AI_PROVIDER_META[next].models.some((x) => x.id === m) ? '' : m));
+  };
   const handleAiKeyChange = (value: string) => {
     setAiApiKey(value);
     const k = value.trim();
-    if (k.startsWith('AIza')) setAiProvider('gemini');
-    else if (k.startsWith('sk-ant-')) setAiProvider('anthropic');
-    else if (k.startsWith('sk-')) setAiProvider('openai');
+    if (k.startsWith('AIza')) handleAiProviderChange('gemini');
+    else if (k.startsWith('sk-ant-')) handleAiProviderChange('anthropic');
+    else if (k.startsWith('sk-')) handleAiProviderChange('openai');
   };
+  // '' = the provider's default; a saved id outside the list keeps the free-text box.
+  const [aiModelCustom, setAiModelCustom] = useState(false);
+  const aiModelKnown = !aiModel || AI_PROVIDER_META[aiProvider].models.some((x) => x.id === aiModel);
+  const aiModelSelectValue = aiModelCustom || !aiModelKnown ? '__custom__' : aiModel;
   const [aiModel, setAiModel] = useState('');
   // Auto-reminder for inquiries missing materials
   const [inquiryReminderOn, setInquiryReminderOn] = useState(false);
@@ -1265,7 +1275,7 @@ const SettingsView: React.FC = () => {
                         name="aiProvider"
                         value={id}
                         checked={aiProvider === id}
-                        onChange={() => setAiProvider(id)}
+                        onChange={() => handleAiProviderChange(id)}
                         className="w-4 h-4 text-primary"
                       />
                       <div>
@@ -1301,16 +1311,35 @@ const SettingsView: React.FC = () => {
               </div>
 
               <div className="space-y-2">
-                <label className="text-body-sm text-foreground font-medium">Modeli (opsional)</label>
-                <input
-                  type="text"
-                  value={aiModel}
-                  onChange={(e) => setAiModel(e.target.value)}
-                  placeholder={`${AI_PROVIDER_META[aiProvider].defaultModel} (parazgjedhje)`}
-                  className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono text-sm"
-                />
+                <label className="text-body-sm text-foreground font-medium">Modeli</label>
+                <select
+                  value={aiModelSelectValue}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === '__custom__') { setAiModelCustom(true); return; }
+                    setAiModelCustom(false);
+                    setAiModel(v);
+                  }}
+                  className="w-full h-11 px-3 bg-background border border-border rounded-md text-body text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary text-sm"
+                >
+                  <option value="">Parazgjedhja — {AI_PROVIDER_META[aiProvider].defaultModel}</option>
+                  {AI_PROVIDER_META[aiProvider].models.map((m) => (
+                    <option key={m.id} value={m.id}>{m.label} · {m.id}</option>
+                  ))}
+                  <option value="__custom__">Tjetër (shkruaj id-në e modelit)…</option>
+                </select>
+                {aiModelSelectValue === '__custom__' && (
+                  <input
+                    type="text"
+                    value={aiModel}
+                    onChange={(e) => setAiModel(e.target.value)}
+                    placeholder={`p.sh. ${AI_PROVIDER_META[aiProvider].defaultModel}`}
+                    autoFocus
+                    className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono text-sm"
+                  />
+                )}
                 <p className="text-xs text-muted-foreground">
-                  Lëreni bosh për të përdorur modelin e parazgjedhur.
+                  Parazgjedhja është e mjaftueshme për shumicën. Një model që ofruesi nuk e njeh më zëvendësohet automatikisht me parazgjedhjen.
                 </p>
               </div>
             </div>

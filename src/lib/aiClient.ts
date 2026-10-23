@@ -21,6 +21,8 @@ export const AI_PROVIDER_META: Record<AiProviderName, {
   keyPlaceholder: string;
   keyHint: string;
   defaultModel: string;
+  /** Known model ids for the picker (the default first); any other id can still be typed. */
+  models: { id: string; label: string }[];
 }> = {
   gemini: {
     label: 'Google Gemini',
@@ -30,6 +32,11 @@ export const AI_PROVIDER_META: Record<AiProviderName, {
     keyPlaceholder: 'AIza...',
     keyHint: 'Merreni falas te Google AI Studio (pa kartë krediti).',
     defaultModel: 'gemini-2.5-flash',
+    models: [
+      { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash — i shpejtë, falas' },
+      { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro — më i aftë' },
+      { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite — më i lirë' },
+    ],
   },
   openai: {
     label: 'OpenAI',
@@ -39,6 +46,13 @@ export const AI_PROVIDER_META: Record<AiProviderName, {
     keyPlaceholder: 'sk-...',
     keyHint: 'Merreni te platform.openai.com.',
     defaultModel: 'gpt-4o-mini',
+    models: [
+      { id: 'gpt-4o-mini', label: 'GPT-4o mini — i lirë' },
+      { id: 'gpt-4.1-mini', label: 'GPT-4.1 mini' },
+      { id: 'gpt-4.1', label: 'GPT-4.1' },
+      { id: 'gpt-5-mini', label: 'GPT-5 mini' },
+      { id: 'gpt-5', label: 'GPT-5 — më i aftë' },
+    ],
   },
   anthropic: {
     label: 'Anthropic Claude',
@@ -48,6 +62,14 @@ export const AI_PROVIDER_META: Record<AiProviderName, {
     keyPlaceholder: 'sk-ant-...',
     keyHint: 'Merreni te console.anthropic.com (çelësi fillon me sk-ant-).',
     defaultModel: 'claude-opus-5-5',
+    models: [
+      { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 — më i aftë' },
+      { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 — ekuilibër shpejtësi/cilësi' },
+      { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5 — më i shpejtë dhe më i lirë' },
+      { id: 'claude-opus-5', label: 'Claude Opus 5' },
+      { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+      { id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
+    ],
   },
 };
 
