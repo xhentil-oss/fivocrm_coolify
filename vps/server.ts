@@ -1,6 +1,7 @@
 import express from 'express';
 import makeWASocket, {
   useMultiFileAuthState,
+  makeCacheableSignalKeyStore,
   DisconnectReason,
   fetchLatestBaileysVersion,
   generateMessageIDV2,
@@ -499,7 +500,7 @@ const RECEIPT_STATUS: Record<number, 'failed' | 'sent' | 'delivered' | 'read'> =
 /** Receipts can arrive out of order; never downgrade read → delivered → sent. */
 const STATUS_RANK: Record<string, number> = { pending: 0, queued: 0, sent: 1, delivered: 2, read: 3 };
 
-/** DisconnectReason (Baileys 6.7.24) → a readable name for logs and the account doc. 408 is both lost/timedOut. */
+/** DisconnectReason (same codes in Baileys 6.7 and 7) → a readable name for logs and the account doc. 408 is both lost/timedOut. */
 const DISCONNECT_NAMES: Record<number, string> = {
   [DisconnectReason.connectionClosed]: 'connectionClosed',
   [DisconnectReason.connectionLost]: 'connectionLost',
@@ -534,7 +535,7 @@ function writeAccountStatus(agent: AgentState, patch: Record<string, unknown>): 
 // ── Socket lifecycle ──────────────────────────────────────────────────────────
 
 /** Every ev channel we subscribe to — removed on teardown so a dead socket can never write again. */
-const SOCKET_EVENTS = ['creds.update', 'connection.update', 'contacts.upsert', 'contacts.update', 'messaging-history.set', 'messages.upsert', 'messages.update'] as const;
+const SOCKET_EVENTS = ['creds.update', 'connection.update', 'contacts.upsert', 'contacts.update', 'messaging-history.set', 'messages.upsert', 'messages.update', 'lid-mapping.update'] as const;
 const SERVER_ACK_FRAME = 'CB:ack,class:message';
 
 function detachSocket(sock: ReturnType<typeof makeWASocket>): void {
@@ -911,6 +912,22 @@ async function backfillLidMessages(agent: AgentState, lidJid: string, phoneJid: 
   } catch (e) { console.error(`[${agent.config.id}] Backfill error:`, e); }
 }
 
+/** A Baileys 7 contact: `id` is the LID OR the phone jid, with `lid` / `phoneNumber` for the other half. */
+function contactLidPn(c: any): { lid: string | null; pn: string | null } {
+  const id = typeof c?.id === 'string' ? c.id : '';
+  const lid = (typeof c?.lid === 'string' && c.lid) || (id.endsWith('@lid') ? id : null);
+  const pn = (typeof c?.phoneNumber === 'string' && c.phoneNumber) || (id.endsWith('@s.whatsapp.net') ? id : null);
+  return { lid: lid || null, pn: pn || null };
+}
+
+/** Baileys' own LID store (v7). Never throws; null when unknown. */
+async function lidStorePnFor(agent: AgentState, lid: string): Promise<string | null> {
+  try { return (await (agent.sock as any)?.signalRepository?.lidMapping?.getPNForLID(lid)) || null; } catch { return null; }
+}
+async function lidStoreLidFor(agent: AgentState, pnJid: string): Promise<string | null> {
+  try { return (await (agent.sock as any)?.signalRepository?.lidMapping?.getLIDForPN(pnJid)) || null; } catch { return null; }
+}
+
 /**
  * Record LID → phone. Every source (senderPn, contacts, history, USync, groups,
  * Firestore) goes through the same validation: the LID must be a real @lid, the
@@ -1263,7 +1280,11 @@ async function doConnect(agent: AgentState): Promise<void> {
     if (agent.unloading) return;
     if (agent.sock) teardownSocket(agent);
     const sock = makeWASocket({
-      version, auth: state,
+      version,
+      // Baileys 7 keeps LID<->PN mappings, device lists and tc-tokens in the key
+      // store and reads them on EVERY 1:1 send (that lookup is what encrypts for
+      // a LID-addressed contact's devices) - the cache keeps it off the disk.
+      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }) as any) },
       logger: pino({ level: BAILEYS_LOG_LEVEL }),
       browser: ['Business CRM', 'Chrome', '1.0.0'],
       printQRInTerminal: false,
@@ -1386,7 +1407,7 @@ function attachSocketHandlers(agent: AgentState, sock: ReturnType<typeof makeWAS
     if (connection === 'open') onSocketOpen(agent, sock);
   });
 
-  // The SERVER ack of a message we sent. On 6.7.24 Baileys handles this frame only
+  // The SERVER ack of a message we sent. Baileys (6.7 and 7) handles this frame only
   // for errors, so messages.update never reports SERVER_ACK — the first status we
   // used to see was the PHONE's delivery receipt, and a phone that is off kept a
   // message "pending" all night. This frame is WhatsApp saying "accepted".
@@ -1400,23 +1421,23 @@ function attachSocketHandlers(agent: AgentState, sock: ReturnType<typeof makeWAS
     void applyReceipt(agent, id, err ? 'failed' : 'sent', err ? `server-ack-error-${err}` : undefined);
   });
 
-  sock.ev.on('contacts.upsert', (contacts) => {
+  const onContacts = (list: any[]) => {
     if (!live()) return;
-    for (const c of contacts) {
-      const lid = (c as any).lid as string | undefined;
-      if (lid && c.id) void registerLidMapping(agent, lid, c.id);
-      const name = (c as any).notify || (c as any).name || null;
-      if (name && c.id?.endsWith('@s.whatsapp.net')) void syncContactName(agent, c.id, name);
+    for (const c of list) {
+      const { lid, pn } = contactLidPn(c);
+      if (lid && pn) void registerLidMapping(agent, lid, pn);
+      const name = c.notify || c.name || null;
+      if (name && pn) void syncContactName(agent, pn, name);
     }
-  });
+  };
+  sock.ev.on('contacts.upsert', onContacts);
+  sock.ev.on('contacts.update', onContacts as any);
 
-  sock.ev.on('contacts.update', (updates) => {
+  // Baileys 7 announces every LID<->PN pair it learns (usync, history, receipts...).
+  sock.ev.on('lid-mapping.update', (m: any) => {
     if (!live()) return;
-    for (const u of updates) {
-      const lid = (u as any).lid as string | undefined;
-      if (lid && u.id) void registerLidMapping(agent, lid, u.id);
-      const name = (u as any).notify || (u as any).name || null;
-      if (name && u.id?.endsWith('@s.whatsapp.net')) void syncContactName(agent, u.id, name);
+    for (const pair of Array.isArray(m) ? m : [m]) {
+      if (pair?.lid && pair?.pn) void registerLidMapping(agent, pair.lid, pair.pn);
     }
   });
 
@@ -1429,10 +1450,10 @@ function attachSocketHandlers(agent: AgentState, sock: ReturnType<typeof makeWAS
       if (lid && pn) void registerLidMapping(agent, lid, pn);
     }
     for (const c of (data.contacts || [])) {
-      const lid = (c as any).lid as string | undefined; const pn = c.id || (c as any).phoneNumber;
+      const { lid, pn } = contactLidPn(c);
       if (lid && pn) void registerLidMapping(agent, lid, pn);
       const name = (c as any).notify || (c as any).name || null;
-      if (name && c.id?.endsWith('@s.whatsapp.net')) void syncContactName(agent, c.id, name);
+      if (name && pn) void syncContactName(agent, pn, name);
     }
     for (const ch of (data.chats || [])) {
       const lid = (ch as any).lid || (ch as any).lidJid; const pn = ch.id || (ch as any).pnJid;
@@ -1495,22 +1516,26 @@ async function handleUpsertMessage(agent: AgentState, msg: any, type: string): P
   if (cls === 'skip') return;
 
   // ── Who is this? ──
-  // Baileys 6.7.24 exposes the phone behind a LID chat on the key itself
-  // (`senderPn` = stanza attr sender_pn). The old resolver listened for the 7.x
-  // 'lid-mapping.update' event and read 7.x key files — both dead on 6.7.24, so
-  // LID senders stayed unresolved and never reached the CRM. senderPn is only
-  // trusted for messages FROM the contact: on a fromMe stanza it is our number.
+  // Baileys 7: a 1:1 key carries the chat's OTHER address in `remoteJidAlt`
+  // (LID chat -> its phone jid, phone chat -> its LID) in BOTH directions - it
+  // names the contact, never us. Fallbacks: our map, then Baileys' own LID
+  // store, then the 6.x `senderPn` attrs (old stanzas replayed on reconnect).
   const key = msg.key as any;
+  const alt: string | undefined = key.remoteJidAlt || undefined;
   let resolvedJid = rawJid; let isLid = false; let lidJid: string | null = null;
   if (rawJid.endsWith('@lid')) {
     lidJid = canonicalLidJid(rawJid);
     if (!lidJid) return;
     let phoneJid = agent.lidToPhoneMap.get(lidJid) || null;
-    if (!phoneJid && !isFromMe) {
-      const pn = canonicalPhoneJid(key.senderPn) || canonicalPhoneJid(key.participantPn);
+    if (!phoneJid) {
+      const pn = canonicalPhoneJid(alt)
+        || canonicalPhoneJid(await lidStorePnFor(agent, lidJid))
+        || (!isFromMe ? (canonicalPhoneJid(key.senderPn) || canonicalPhoneJid(key.participantPn)) : null);
       if (pn) { await registerLidMapping(agent, lidJid, pn); phoneJid = agent.lidToPhoneMap.get(lidJid) || null; }
     }
     if (phoneJid) resolvedJid = phoneJid; else isLid = true;
+  } else if (alt && alt.endsWith('@lid')) {
+    void registerLidMapping(agent, alt, rawJid);
   } else if (!isFromMe && key.senderLid) {
     void registerLidMapping(agent, key.senderLid, rawJid);
   }
@@ -1659,7 +1684,7 @@ function resolveSendAgent(agentId: string | undefined, teamId: string | undefine
 // ── Outbound: existence check, queue, idempotency ─────────────────────────────
 
 /**
- * "Is this number on WhatsApp?" — per phone, cached 24h both ways. On 6.7.24 a
+ * "Is this number on WhatsApp?" — per phone, cached 24h both ways. Without it a
  * send to a number without WhatsApp never gets a receipt, so without this check
  * the row stayed `pending` forever. exists: null = unknown (timeout/error) → send anyway.
  */
@@ -1676,7 +1701,9 @@ async function checkOnWhatsApp(agent: AgentState, phone: string, timeoutMs: numb
     const entry = row
       ? { exists: true, jid: canonicalPhoneJid(String(row.jid)) || `${phone}@s.whatsapp.net`, at: Date.now() }
       : { exists: false, jid: null, at: Date.now() };
-    if (row?.lid && entry.jid) void registerLidMapping(agent, String(row.lid), entry.jid);
+    // Baileys 7 no longer returns `lid` here; it learns the pair during the
+    // usync and keeps it in its LID store - read it back from there.
+    if (entry.jid) { const pnJid = entry.jid; void lidStoreLidFor(agent, pnJid).then((lid) => { if (lid) void registerLidMapping(agent, lid, pnJid); }); }
     onWaCache.set(phone, entry);
     return entry;
   } catch (e) {
