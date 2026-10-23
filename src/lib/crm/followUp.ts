@@ -389,6 +389,29 @@ export function buildFollowUpQueue(
 }
 
 /** "Të miat": assigned to me, or unassigned and created by me. */
+/**
+ * A contact's tags as a clean string list. `tags` is typed `string[]` but legacy
+ * rows (CSV import, WHMCS mirror, hand edits) have stored a comma-separated
+ * STRING or a map — `(tags || []).forEach` on those crashed /app/follow-ups
+ * for the whole tenant (Oct 2026). Never read `.tags` raw in a UI loop.
+ */
+export function contactTags(raw: unknown): string[] {
+  const v = raw && typeof raw === 'object' ? (raw as { tags?: unknown }).tags : undefined;
+  const list: unknown[] = Array.isArray(v) ? v
+    : typeof v === 'string' ? v.split(/[,;]/)
+    : v && typeof v === 'object' ? Object.values(v as Record<string, unknown>)
+    : [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const t of list) {
+    const k = String(t ?? '').trim();
+    if (!k || seen.has(k.toLowerCase())) continue;
+    seen.add(k.toLowerCase());
+    out.push(k);
+  }
+  return out;
+}
+
 export function isMineItem(item: FollowUpItem, uid: string | null | undefined): boolean {
   if (!uid) return false;
   if (item.assignedToUserId) return item.assignedToUserId === uid;

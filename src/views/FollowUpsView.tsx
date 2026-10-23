@@ -8,7 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useToast } from '../hooks/use-toast';
 import { useFollowUpActions, type FollowUpTarget } from '../hooks/useFollowUpActions';
-import { buildFollowUpQueue, isMineItem, type FollowUpItem, type SnoozePresetKey } from '../lib/crm/followUp';
+import { buildFollowUpQueue, contactTags, isMineItem, type FollowUpItem, type SnoozePresetKey } from '../lib/crm/followUp';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { resolvePlaybooks, currentPlaybookStep, nextPlaybookStep, renderPlaybookTemplate } from '../lib/crm/playbooks';
 import { FollowUpRow, FollowUpSection } from '../components/crm/FollowUpRow';
@@ -68,7 +68,7 @@ const FollowUpsView: React.FC = () => {
     const ls = kind === 'customer' ? [] : leads;
     const cs = kind === 'lead' || !canCustomers ? [] : customers;
     const q = buildFollowUpQueue(ls, cs, now);
-    const tagOk = (i: FollowUpItem) => !tagFilter || ((i.raw as any).tags || []).some((t: string) => String(t).toLowerCase() === tagFilter.toLowerCase());
+    const tagOk = (i: FollowUpItem) => !tagFilter || contactTags(i.raw).some(t => t.toLowerCase() === tagFilter.toLowerCase());
     const keep = (i: FollowUpItem) => tagOk(i) && (scope === 'all' || isMineItem(i, user?.uid));
     if (scope === 'all' && !tagFilter) return q;
     const mine = (arr: FollowUpItem[]) => arr.filter(keep);
@@ -83,8 +83,8 @@ const FollowUpsView: React.FC = () => {
   const tagOptions = useMemo(() => {
     const set = new Map<string, string>();
     playbooks.forEach(p => set.set(p.tag.toLowerCase(), p.tag));
-    [...(leads || []), ...(customers || [])].forEach(c => ((c as any).tags || []).forEach((t: string) => {
-      const k = String(t).trim(); if (k) set.set(k.toLowerCase(), set.get(k.toLowerCase()) || k);
+    [...(leads || []), ...(customers || [])].forEach(c => contactTags(c).forEach(k => {
+      set.set(k.toLowerCase(), set.get(k.toLowerCase()) || k);
     }));
     return [...set.values()].slice(0, 12);
   }, [playbooks, leads, customers]);
@@ -180,7 +180,7 @@ const FollowUpsView: React.FC = () => {
         item={item}
         section={section}
         hint={playbookFor(item)?.hint}
-        tags={(item.raw as any).tags || null}
+        tags={contactTags(item.raw)}
         focused={focus === `${item.kind}:${item.id}`}
         leaving={leaving.has(`${item.kind}:${item.id}`)}
         {...rowProps}

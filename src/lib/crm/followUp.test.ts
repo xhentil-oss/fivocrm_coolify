@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   dueState, dayFromPreset, dayAtNoon, snoozePatch, scheduleNextStepPatch, touchContactPatch,
   completeFollowUpPatch, statusAfterTouch, needsNextStep, buildFollowUpQueue, daysSinceContact,
-  isMineItem, completionTitle, normalizeFollowUpDate, waitingSince,
+  isMineItem, completionTitle, normalizeFollowUpDate, waitingSince, contactTags,
 } from './followUp';
 import type { Customer, Lead } from '../../types';
 
@@ -212,5 +212,20 @@ describe('completionTitle', () => {
     expect(completionTitle({ channel: 'call', result: 'reached' }, null, now)).toBe('Ndjekje e kryer · Telefonatë · Foli');
     expect(completionTitle({ channel: 'whatsapp' }, { date: dayFromPreset('tomorrow', now) }, now)).toBe('Ndjekje e kryer · WhatsApp → hapi tjetër nesër');
     expect(normalizeFollowUpDate(new Date('2026-09-12T23:30:00Z')).getTime()).toBe(dayAtNoon(new Date('2026-09-12T23:30:00Z'), 0).getTime());
+  });
+});
+
+describe('contactTags — tolerates legacy non-array tags', () => {
+  it('returns a clean list for an array', () => {
+    expect(contactTags({ tags: [' SEO ', 'ads', '', 'seo', null] })).toEqual(['SEO', 'ads']);
+  });
+  it('splits a comma/semicolon string (CSV import / hand edit)', () => {
+    expect(contactTags({ tags: 'seo, ads;web' })).toEqual(['seo', 'ads', 'web']);
+  });
+  it('reads a map by its values and ignores everything else', () => {
+    expect(contactTags({ tags: { a: 'x', b: 'y' } })).toEqual(['x', 'y']);
+    expect(contactTags({ tags: 42 })).toEqual([]);
+    expect(contactTags({})).toEqual([]);
+    expect(contactTags(null)).toEqual([]);
   });
 });
