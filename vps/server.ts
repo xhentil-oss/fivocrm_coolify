@@ -1479,7 +1479,14 @@ function attachSocketHandlers(agent: AgentState, sock: ReturnType<typeof makeWAS
       const newStatus = RECEIPT_STATUS[code]; if (!newStatus) continue; // 1 = PENDING is not a receipt
       agent.outstanding.delete(waMessageId);
       agent.ackWaiters.get(waMessageId)?.(code);
-      await applyReceipt(agent, waMessageId, newStatus, code === 0 ? 'WhatsApp e refuzoi mesazhin' : undefined);
+      // Baileys 7 puts the server's NACK code in messageStubParameters[0]
+      // (463 = no privacy token / restricted for new chats, 479 = stale device
+      // session, …). Keep it: "refused" alone cannot be acted on.
+      const nack = code === 0 ? (update.update as any)?.messageStubParameters?.[0] : undefined;
+      await applyReceipt(agent, waMessageId, newStatus, code === 0
+        ? (nack ? `WhatsApp e refuzoi mesazhin (kodi ${nack})` : 'WhatsApp e refuzoi mesazhin')
+        : undefined);
+      if (code === 0) console.warn(`[${agent.config.id}] NACK ${nack ?? '?'} për ${waMessageId} → ${maskJid(String(update.key?.remoteJid || ''))}`);
     }
   });
 }
