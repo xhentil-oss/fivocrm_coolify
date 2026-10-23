@@ -3770,6 +3770,27 @@ async function runLeadWhatsappAutoRemindersLeased(opts?: { businessId?: string |
   const block = (r: string) => { blocked[r] = (blocked[r] || 0) + 1; };
   const failures = makeWaFailureReporter('lead-wa-auto-reminders', 'Rikujtuesit automatikë WhatsApp');
   const waResolver = makeWaAgentResolver(async (teamId: string) => getTeamSettings(teamId));
+  // The lead's own fields are NOT the whole truth: a chat held from the phone (or a
+  // reply the VPS stored under a LID) never touches lastActivityAt. On 23 Oct 2026
+  // this sent "keni pasur mundësi…" to a client who had written the evening before.
+  // So before messaging, ask the message log of EVERY team of the business (the
+  // number often lives on another department) for any row with this phone inside
+  // the quiet window — either direction.
+  const recentByBiz = new Map<string, Promise<Map<string, Date>>>();
+  const recentWaFor = (businessId: string | null | undefined, teamId: string, days: number) => {
+    const key = `${businessId || teamId}|${days}`;
+    if (!recentByBiz.has(key)) {
+      recentByBiz.set(key, (async () => {
+        const teamIds = new Set<string>([teamId]);
+        if (businessId) {
+          const ts = await db.collection('teams').where('businessId', '==', businessId).get();
+          ts.docs.forEach((d) => teamIds.add(d.id));
+        }
+        return recentWaContactsByPhone([...teamIds], new Date(now - days * 86_400_000));
+      })());
+    }
+    return recentByBiz.get(key)!;
+  };
 
   for (const leadDoc of leadsSnap.docs) {
     const lead = leadDoc.data();
@@ -3803,6 +3824,17 @@ async function runLeadWhatsappAutoRemindersLeased(opts?: { businessId?: string |
     const phone = toWaPhone(rawPhone);
     if (!phone) { block('no-phone'); continue; }
     if (isWaUndeliverable(lead)) { block('undeliverable'); continue; }
+    const recent = await recentWaFor(lead.businessId, lead.teamId, days).catch(() => null);
+    if (!recent) { block('history-unreadable'); continue; } // fail CLOSED: never guess
+    if (recent.has(phone)) {
+      block('recent-wa-activity');
+      // Heal the lead so the next run does not have to re-discover it.
+      const at = recent.get(phone)!;
+      if (at.getTime() > lastComm) {
+        await leadDoc.ref.update({ lastActivityAt: admin.firestore.Timestamp.fromDate(at) }).catch(() => {});
+      }
+      continue;
+    }
 
     const tpl = await getTemplate(settings.waAutoReminderTemplateId);
     if (!tpl) { block('no-template'); continue; }
