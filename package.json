@@ -37,6 +37,7 @@
     "test:rules:storage": "firebase emulators:exec --only storage --project fivocrm-rules-test \"node --test scripts/storage-rules.test.mjs\""
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.1.0",
     "@capacitor-firebase/authentication": "^8.3.0",
     "@capacitor/android": "8.5.0",
     "@capacitor/app": "^8.1.0",

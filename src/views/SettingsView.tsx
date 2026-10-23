@@ -65,7 +65,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { getDocs, getDoc, setDoc, query, where, collection, writeBatch, doc, Timestamp } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
-import { testAiConnection, type AiConnectionTest } from '../lib/aiClient';
+import { testAiConnection, AI_PROVIDER_META, type AiConnectionTest, type AiProviderName } from '../lib/aiClient';
 import { dndZoneStamp } from '../lib/notificationPrefs';
 import { toast } from '../hooks/use-toast';
 import { copyText } from '../lib/clipboard';
@@ -185,8 +185,17 @@ const SettingsView: React.FC = () => {
   const [stripeSaved, setStripeSaved] = useState(false);
 
   // ── AI Assistant (FivoAI) ──
-  const [aiProvider, setAiProvider] = useState<'gemini' | 'openai'>('gemini');
+  const [aiProvider, setAiProvider] = useState<AiProviderName>('gemini');
   const [aiApiKey, setAiApiKey] = useState('');
+  // The key's shape is the one fact that cannot be mis-clicked — the server routes
+  // by it too (`resolveProviderChoice`), so the form follows the pasted key.
+  const handleAiKeyChange = (value: string) => {
+    setAiApiKey(value);
+    const k = value.trim();
+    if (k.startsWith('AIza')) setAiProvider('gemini');
+    else if (k.startsWith('sk-ant-')) setAiProvider('anthropic');
+    else if (k.startsWith('sk-')) setAiProvider('openai');
+  };
   const [aiModel, setAiModel] = useState('');
   // Auto-reminder for inquiries missing materials
   const [inquiryReminderOn, setInquiryReminderOn] = useState(false);
@@ -1229,9 +1238,7 @@ const SettingsView: React.FC = () => {
                 </div>
               </div>
               <a
-                href={aiProvider === 'gemini'
-                  ? 'https://aistudio.google.com/app/apikey'
-                  : 'https://platform.openai.com/api-keys'}
+                href={AI_PROVIDER_META[aiProvider].keyUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-primary hover:underline text-sm flex items-center gap-1 shrink-0"
@@ -1246,34 +1253,28 @@ const SettingsView: React.FC = () => {
             <div className="space-y-3">
               <label className="text-body-sm text-foreground font-medium">Ofruesi</label>
               <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
-                <label className={`flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-all ${aiProvider === 'gemini' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground'}`}>
-                  <input
-                    type="radio"
-                    name="aiProvider"
-                    value="gemini"
-                    checked={aiProvider === 'gemini'}
-                    onChange={() => setAiProvider('gemini')}
-                    className="w-4 h-4 text-primary"
-                  />
-                  <div>
-                    <p className="font-medium text-foreground">Google Gemini</p>
-                    <p className="text-xs text-success">Falas — rekomandohet</p>
-                  </div>
-                </label>
-                <label className={`flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-all ${aiProvider === 'openai' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground'}`}>
-                  <input
-                    type="radio"
-                    name="aiProvider"
-                    value="openai"
-                    checked={aiProvider === 'openai'}
-                    onChange={() => setAiProvider('openai')}
-                    className="w-4 h-4 text-primary"
-                  />
-                  <div>
-                    <p className="font-medium text-foreground">OpenAI</p>
-                    <p className="text-xs text-muted-foreground">Me pagesë (GPT)</p>
-                  </div>
-                </label>
+                {(Object.keys(AI_PROVIDER_META) as AiProviderName[]).map((id) => {
+                  const meta = AI_PROVIDER_META[id];
+                  return (
+                    <label
+                      key={id}
+                      className={`flex flex-1 items-center gap-3 p-4 border rounded-lg cursor-pointer transition-all ${aiProvider === id ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground'}`}
+                    >
+                      <input
+                        type="radio"
+                        name="aiProvider"
+                        value={id}
+                        checked={aiProvider === id}
+                        onChange={() => setAiProvider(id)}
+                        className="w-4 h-4 text-primary"
+                      />
+                      <div>
+                        <p className="font-medium text-foreground">{meta.label}</p>
+                        <p className={`text-xs ${meta.tagTone === 'success' ? 'text-success' : 'text-muted-foreground'}`}>{meta.tag}</p>
+                      </div>
+                    </label>
+                  );
+                })}
               </div>
             </div>
 
@@ -1286,15 +1287,13 @@ const SettingsView: React.FC = () => {
                 <input
                   type="password"
                   value={aiApiKey}
-                  onChange={(e) => setAiApiKey(e.target.value)}
-                  placeholder={aiProvider === 'gemini' ? 'AIza...' : 'sk-...'}
+                  onChange={(e) => handleAiKeyChange(e.target.value)}
+                  placeholder={AI_PROVIDER_META[aiProvider].keyPlaceholder}
                   autoComplete="off"
                   className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono text-sm"
                 />
                 <p className="text-xs text-muted-foreground">
-                  {aiProvider === 'gemini'
-                    ? 'Merreni falas te Google AI Studio (pa kartë krediti). Ruhet i sigurt dhe përdoret vetëm nga serveri.'
-                    : 'Merreni te platform.openai.com. Ruhet i sigurt dhe përdoret vetëm nga serveri.'}
+                  {AI_PROVIDER_META[aiProvider].keyHint} Ruhet i sigurt dhe përdoret vetëm nga serveri.
                 </p>
                 {firestoreSettings?.hasAiApiKey && (
                   <p className="text-xs text-success flex items-center gap-1"><Shield className="w-3 h-3" /> Kredencial i ruajtur në kasafortën e serverit — lëri bosh për të mos e ndryshuar.</p>
@@ -1307,7 +1306,7 @@ const SettingsView: React.FC = () => {
                   type="text"
                   value={aiModel}
                   onChange={(e) => setAiModel(e.target.value)}
-                  placeholder={aiProvider === 'gemini' ? 'gemini-2.5-flash (parazgjedhje)' : 'gpt-4o-mini (parazgjedhje)'}
+                  placeholder={`${AI_PROVIDER_META[aiProvider].defaultModel} (parazgjedhje)`}
                   className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono text-sm"
                 />
                 <p className="text-xs text-muted-foreground">
@@ -1324,7 +1323,7 @@ const SettingsView: React.FC = () => {
                 {aiTest.ok ? (
                   <p className="flex items-center gap-2 text-foreground">
                     <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
-                    Lidhja funksionon — {aiTest.provider === 'gemini' ? 'Google Gemini' : aiTest.provider === 'openai' ? 'OpenAI' : aiTest.provider}
+                    Lidhja funksionon — {AI_PROVIDER_META[aiTest.provider as AiProviderName]?.label ?? aiTest.provider}
                     {' · '}<span className="font-mono text-xs">{aiTest.model}</span>
                   </p>
                 ) : (

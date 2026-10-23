@@ -6,6 +6,51 @@
  * named reason, `detail` the provider's own (redacted) message. Before this,
  * every call site threw `HTTP 500` and the user had nothing to act on.
  */
+export type AiProviderName = 'gemini' | 'openai' | 'anthropic';
+
+/**
+ * What Cilësimet → FivoAI shows per provider. The ORDER is the order of the
+ * radio cards; the defaults mirror `api/_aiProvider.ts` (`DEFAULT_*_MODEL`) and
+ * the key shapes mirror `inferProviderFromKey` in `api/_aiErrors.ts`.
+ */
+export const AI_PROVIDER_META: Record<AiProviderName, {
+  label: string;
+  tag: string;
+  tagTone: 'success' | 'muted';
+  keyUrl: string;
+  keyPlaceholder: string;
+  keyHint: string;
+  defaultModel: string;
+}> = {
+  gemini: {
+    label: 'Google Gemini',
+    tag: 'Falas — rekomandohet',
+    tagTone: 'success',
+    keyUrl: 'https://aistudio.google.com/app/apikey',
+    keyPlaceholder: 'AIza...',
+    keyHint: 'Merreni falas te Google AI Studio (pa kartë krediti).',
+    defaultModel: 'gemini-2.5-flash',
+  },
+  openai: {
+    label: 'OpenAI',
+    tag: 'Me pagesë (GPT)',
+    tagTone: 'muted',
+    keyUrl: 'https://platform.openai.com/api-keys',
+    keyPlaceholder: 'sk-...',
+    keyHint: 'Merreni te platform.openai.com.',
+    defaultModel: 'gpt-4o-mini',
+  },
+  anthropic: {
+    label: 'Anthropic Claude',
+    tag: 'Me pagesë (Claude)',
+    tagTone: 'muted',
+    keyUrl: 'https://console.anthropic.com/settings/keys',
+    keyPlaceholder: 'sk-ant-...',
+    keyHint: 'Merreni te console.anthropic.com (çelësi fillon me sk-ant-).',
+    defaultModel: 'claude-opus-5-5',
+  },
+};
+
 export interface AiApiError extends Error {
   code?: string;
   detail?: string;

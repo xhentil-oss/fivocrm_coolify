@@ -143,10 +143,10 @@ export interface TeamSettings {
   stripeMode?: 'test' | 'live';
   taskListOrder?: string[];
   // AI Assistant (FivoAI) — configured per-team from Settings → Integrime
-  aiProvider?: 'gemini' | 'openai';
+  aiProvider?: 'gemini' | 'openai' | 'anthropic';
   /** @deprecated moved to teamSecrets (server-only). */
   aiApiKey?: string;
-  aiModel?: string;         // optional model override (e.g. gemini-2.5-flash, gpt-4o-mini)
+  aiModel?: string;         // optional model override (e.g. gemini-2.5-flash, gpt-4o-mini, claude-opus-5-5)
   // Email marketing provider — configured per-team from Settings → Integrime.
   // Read server-side by api/_mailer.ts (via teamSettings) when sending campaigns.
   emailProvider?: 'resend' | 'sendgrid' | 'mailgun' | 'brevo' | 'smtp';

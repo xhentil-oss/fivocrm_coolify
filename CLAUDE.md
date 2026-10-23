@@ -810,8 +810,10 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
 - **`resolveAiConfig()` is the one answer to "which key, which provider, which model"**
   for chat (`ai-chat.ts`), the WhatsApp draft (`_aiReply.ts`) and GMB replies (`_gmb.ts`):
   tenant key from `teamSecrets.aiApiKey` (+ `teamSettings.aiProvider` / `aiModel`), else
-  the platform env `GEMINI_API_KEY` / `OPENAI_API_KEY`, with one fallback leg between
-  providers. **The key's SHAPE decides the provider** (`AIza…` = Gemini, `sk-…` = OpenAI,
+  the platform env `GEMINI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`; the
+  preferred provider goes first, then every other provider with a key (`providerOrder`).
+  **The key's SHAPE decides the provider** (`AIza…` = Gemini, `sk-ant-…` = Anthropic —
+  tested BEFORE `sk-…` = OpenAI, which it also matches;
   `resolveProviderChoice` in the import-free `_aiErrors.ts`): the Settings form stores
   `aiProvider` apart from the key, so an OpenAI key saved under "Gemini" was sent to
   Gemini, refused as "API key not valid", and surfaced as an opaque 500. On a mismatch the
@@ -826,6 +828,17 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
   `ai-chat.ts` has `maxDuration: 60` in `vercel.json` (provider timeout is 25 s + a
   fallback leg; the platform default would cut it off first). Tests:
   `src/lib/aiErrors.test.ts`.
+- **Anthropic (Claude) goes through the official `@anthropic-ai/sdk`** (Oct 2026;
+  Gemini/OpenAI stay on `fetch`), `maxRetries: 0` (our fallback IS the retry), default
+  model `claude-opus-5-5` (`ANTHROPIC_MODEL`). No `temperature` (5.x rejects sampling
+  params); on 4.6+ models `output_config.effort: 'low'` and `max_tokens` gets
+  `ANTHROPIC_THINKING_HEADROOM` on top of the reply cap because thinking counts
+  against it; the history is trimmed to a `user` first turn with non-empty text. Opus 5
+  / Fable 5 / Sonnet 5.5 are called on the beta endpoint with `fallbacks: 'default'`
+  (a safety decline is re-run on another Claude server-side); a bare
+  `stop_reason: 'refusal'` throws `code: 'ai-refusal'` → classified `refused` (502),
+  never "invalid key". The form's radio cards / links / placeholders come from
+  `AI_PROVIDER_META` (`src/lib/aiClient.ts`) and a pasted key re-selects its provider.
 
 ### WhatsApp via Baileys (VPS): agent lifecycle & honest send status
 
@@ -1640,7 +1653,9 @@ FIREBASE_PRIVATE_KEY          — Service account private_key (use \n for newlin
 FIREBASE_SERVICE_ACCOUNT_JSON — Full service account JSON (alternative)
 STRIPE_SECRET_KEY             — Stripe
 STRIPE_WEBHOOK_SECRET    — Stripe webhooks
-OPENAI_API_KEY           — AI chat
+OPENAI_API_KEY           — AI chat (platform fallback; tenants bring their own key)
+GEMINI_API_KEY           — AI chat (platform fallback)
+ANTHROPIC_API_KEY        — AI chat (platform fallback, Claude)
 META_VERIFY_TOKEN        — Meta webhook verification
 META_ACCESS_TOKEN        — Meta WhatsApp API
 ```

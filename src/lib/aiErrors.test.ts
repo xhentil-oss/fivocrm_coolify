@@ -14,11 +14,14 @@ import {
 
 const GEMINI_KEY = 'AIzaSyD0123456789abcdefghijklmnopqrstuv';
 const OPENAI_KEY = 'sk-proj-0123456789abcdefghijklmnop';
+const ANTHROPIC_KEY = 'sk-ant-api03-0123456789abcdefghijklmnop-AA';
 
 describe('inferProviderFromKey', () => {
-  it('recognises the two key shapes and nothing else', () => {
+  it('recognises the three key shapes and nothing else', () => {
     expect(inferProviderFromKey(GEMINI_KEY)).toBe('gemini');
     expect(inferProviderFromKey(OPENAI_KEY)).toBe('openai');
+    // `sk-ant-…` also matches the OpenAI shape — Anthropic must be tested first.
+    expect(inferProviderFromKey(ANTHROPIC_KEY)).toBe('anthropic');
     expect(inferProviderFromKey('  ' + OPENAI_KEY + ' ')).toBe('openai');
     expect(inferProviderFromKey('hello')).toBeNull();
     expect(inferProviderFromKey('')).toBeNull();
@@ -30,6 +33,7 @@ describe('resolveProviderChoice (the key decides where it can be used)', () => {
   it('keeps the stored provider when it agrees with the key', () => {
     expect(resolveProviderChoice('openai', OPENAI_KEY)).toEqual({ provider: 'openai', mismatch: null });
     expect(resolveProviderChoice('gemini', GEMINI_KEY)).toEqual({ provider: 'gemini', mismatch: null });
+    expect(resolveProviderChoice('anthropic', ANTHROPIC_KEY)).toEqual({ provider: 'anthropic', mismatch: null });
   });
 
   it('routes an OpenAI key stored under aiProvider=gemini to OpenAI, and reports the mismatch', () => {
@@ -38,8 +42,15 @@ describe('resolveProviderChoice (the key decides where it can be used)', () => {
     expect(resolveProviderChoice('openai', GEMINI_KEY)).toEqual({ provider: 'gemini', mismatch: 'openai' });
   });
 
+  it('routes an Anthropic key saved under OpenAI (its `sk-` prefix invites the mis-click) to Anthropic', () => {
+    expect(resolveProviderChoice('openai', ANTHROPIC_KEY)).toEqual({ provider: 'anthropic', mismatch: 'openai' });
+    expect(resolveProviderChoice('gemini', ANTHROPIC_KEY)).toEqual({ provider: 'anthropic', mismatch: 'gemini' });
+    expect(resolveProviderChoice('anthropic', OPENAI_KEY)).toEqual({ provider: 'openai', mismatch: 'anthropic' });
+  });
+
   it('falls back to the stored choice (default Gemini) for an unrecognisable key', () => {
     expect(resolveProviderChoice('openai', 'weird-key')).toEqual({ provider: 'openai', mismatch: null });
+    expect(resolveProviderChoice('anthropic', 'weird-key')).toEqual({ provider: 'anthropic', mismatch: null });
     expect(resolveProviderChoice(undefined, 'weird-key')).toEqual({ provider: 'gemini', mismatch: null });
   });
 });
@@ -78,6 +89,19 @@ describe('classifyAiError', () => {
     expect(c.httpStatus).toBe(504);
   });
 
+  it('an Anthropic refusal (HTTP 200, stop_reason refusal) is its own code, never "invalid key"', () => {
+    const c = classifyAiError(Object.assign(new Error('Anthropic refusal (cyber)'), { code: 'ai-refusal' }));
+    expect(c.code).toBe('refused');
+    expect(c.httpStatus).toBe(502);
+  });
+
+  it('Anthropic SDK errors (typed `status`, JSON body in the message) classify like the fetch ones', () => {
+    expect(classifyAiError(withStatus(401, '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}')).code).toBe('invalid-key');
+    expect(classifyAiError(withStatus(404, '404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-9"}}')).code).toBe('model-not-found');
+    expect(classifyAiError(withStatus(429, '429 rate_limit_error')).code).toBe('rate-limited');
+    expect(classifyAiError(Object.assign(new Error('Request timed out.'), { name: 'APIConnectionTimeoutError' })).code).toBe('timeout');
+  });
+
   it('the not-configured sentinel is a 503, other 4xx a bad request, everything else upstream', () => {
     expect(classifyAiError(new Error('AI nuk është konfiguruar (…)')).httpStatus).toBe(503);
     expect(classifyAiError(withStatus(422, 'OpenAI 422: messages[0] invalid')).code).toBe('bad-request');
@@ -87,9 +111,11 @@ describe('classifyAiError', () => {
   });
 
   it('never echoes a key in the detail', () => {
-    const c = classifyAiError(withStatus(400, `Gemini 400: bad key ${GEMINI_KEY} at ?key=${GEMINI_KEY}&x=1 and ${OPENAI_KEY}`));
+    const c = classifyAiError(withStatus(400, `Gemini 400: bad key ${GEMINI_KEY} at ?key=${GEMINI_KEY}&x=1 and ${OPENAI_KEY} and ${ANTHROPIC_KEY}`));
     expect(c.detail).not.toContain(GEMINI_KEY);
     expect(c.detail).not.toContain(OPENAI_KEY);
+    expect(c.detail).not.toContain(ANTHROPIC_KEY);
+    expect(redactAiSecrets(ANTHROPIC_KEY)).toBe('sk-ant-…');
     expect(c.detail.length).toBeLessThanOrEqual(240);
     expect(redactAiSecrets(`?key=${GEMINI_KEY}`)).toBe('?key=…');
   });
