@@ -912,6 +912,36 @@ async function backfillLidMessages(agent: AgentState, lidJid: string, phoneJid: 
   } catch (e) { console.error(`[${agent.config.id}] Backfill error:`, e); }
 }
 
+/** Is this jid (any device / domain) our own account - its phone number or its LID? */
+function isOwnDeviceJid(agent: AgentState, jid: unknown): boolean {
+  const user = String(jid || '').split('@')[0].split(':')[0];
+  if (!user) return false;
+  const me: any = (agent.sock as any)?.user || agent.authCreds?.me || {};
+  const ownPn = String(me.id || '').split('@')[0].split(':')[0];
+  const ownLid = String(me.lid || '').split('@')[0].split(':')[0];
+  return user === ownPn || user === ownLid || (!!agent.connectedPhone && user === agent.connectedPhone);
+}
+
+/**
+ * 479 (smax-invalid) = the server rejected our stanza for that device: a stale
+ * Signal session. Force a fresh prekey fetch + session for it - at most once an
+ * hour per device, so a device that keeps refusing cannot turn into a loop.
+ */
+const healedSessions = new Map<string, number>();
+async function healDeviceSession(agent: AgentState, jid: unknown, code: string): Promise<void> {
+  const target = String(jid || '');
+  if (!target || !agent.sock) return;
+  const k = `${agent.config.id}|${target}`;
+  if (Date.now() - (healedSessions.get(k) || 0) < 60 * 60_000) return;
+  healedSessions.set(k, Date.now());
+  try {
+    await (agent.sock as any).assertSessions([target], true);
+    console.warn(`[${agent.config.id}] NACK ${code} nga ${maskJid(target)} - sesioni u rikrijua`);
+  } catch (e) {
+    console.warn(`[${agent.config.id}] rikrijimi i sesionit ${maskJid(target)} dështoi:`, (e as Error)?.message || e);
+  }
+}
+
 /** A Baileys 7 contact: `id` is the LID OR the phone jid, with `lid` / `phoneNumber` for the other half. */
 function contactLidPn(c: any): { lid: string | null; pn: string | null } {
   const id = typeof c?.id === 'string' ? c.id : '';
@@ -1213,7 +1243,10 @@ async function applyReceipt(agent: AgentState, waId: string, newStatus: 'failed'
       await found.ref.update({ status: 'failed', error: error || 'WhatsApp e refuzoi mesazhin', updatedAt: nowTs() });
       return;
     }
-    if (current === 'failed' && found.data.error !== 'no-ack') return;
+    // A delivery/read receipt is PROOF the contact got it - it beats an earlier
+    // "failed" (a NACK from one of OUR other devices used to fail the row and then
+    // swallow the recipient's ✓✓). A bare 'sent' still only revives a no-ack row.
+    if (current === 'failed' && newStatus === 'sent' && found.data.error !== 'no-ack') return;
     if (current !== 'failed' && (STATUS_RANK[current] ?? -1) >= STATUS_RANK[newStatus]) return;
     await found.ref.update({
       status: newStatus,
@@ -1417,6 +1450,12 @@ function attachSocketHandlers(agent: AgentState, sock: ReturnType<typeof makeWAS
     if (!id || !agent.outstanding.has(id)) return; // only ids /send handed to this socket
     agent.outstanding.delete(id);
     const err = node?.attrs?.error;
+    if (err && isOwnDeviceJid(agent, node?.attrs?.from)) {
+      // A NACK from one of OUR other devices (phone, Web, hosted) concerns only
+      // the self-copy - the contact's copy is unaffected. Heal, don't fail.
+      void healDeviceSession(agent, node?.attrs?.from, String(err));
+      return;
+    }
     agent.ackWaiters.get(id)?.(err ? 0 : 2);
     void applyReceipt(agent, id, err ? 'failed' : 'sent', err ? `server-ack-error-${err}` : undefined);
   });
@@ -1477,12 +1516,21 @@ function attachSocketHandlers(agent: AgentState, sock: ReturnType<typeof makeWAS
       const code = (update.update as any)?.status;
       if (typeof code !== 'number') continue;
       const newStatus = RECEIPT_STATUS[code]; if (!newStatus) continue; // 1 = PENDING is not a receipt
-      agent.outstanding.delete(waMessageId);
-      agent.ackWaiters.get(waMessageId)?.(code);
       // Baileys 7 puts the server's NACK code in messageStubParameters[0]
       // (463 = no privacy token / restricted for new chats, 479 = stale device
       // session, …). Keep it: "refused" alone cannot be acted on.
       const nack = code === 0 ? (update.update as any)?.messageStubParameters?.[0] : undefined;
+      if (code === 0) {
+        const from = String(update.key?.remoteJid || '');
+        // Baileys 7 turns every NACK into ERROR - also one sent by OUR other
+        // device for its self-copy (479 = stale session). That is not the
+        // contact refusing the message: rebuild that session, keep the status
+        // (and do not resolve the /send waiter as a failure).
+        if (isOwnDeviceJid(agent, from)) { void healDeviceSession(agent, from, String(nack ?? '?')); continue; }
+        if (String(nack) === '479') void healDeviceSession(agent, from, '479');
+      }
+      agent.outstanding.delete(waMessageId);
+      agent.ackWaiters.get(waMessageId)?.(code);
       await applyReceipt(agent, waMessageId, newStatus, code === 0
         ? (nack ? `WhatsApp e refuzoi mesazhin (kodi ${nack})` : 'WhatsApp e refuzoi mesazhin')
         : undefined);
