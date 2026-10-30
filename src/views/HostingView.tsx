@@ -34,9 +34,10 @@ import { saveTeamSettings, useTeamSettingsData } from '../hooks/useTeamSettings'
 import { hostingApi, checkDomains, type DomainCheckRow } from '../lib/hosting/api';
 import {
   BILLING_CYCLES, CYCLE_LABELS, DEFAULT_LIFECYCLE, DOMAIN_BLOCK_LABELS, SUBSCRIPTION_BLOCK_LABELS, ORDER_ERROR_LABELS,
-  availableCycles, daysBetween, decideDomain, decideSubscription, monthlyEquivalent, normalizeLifecycleConfig,
+  availableCycles, daysBetween, decideDomain, decideSubscription, normalizeLifecycleConfig,
   parseDomain, priceOrder, suggestSellPrice, type BillingCycle, type OrderLineInput, type TldPricing,
 } from '../lib/hosting/engine';
+import { hostingMonthlyRecurringRevenue } from '../lib/hosting/finance';
 import type {
   Customer, Domain, DomainTld, HostingEvent, HostingOrder, HostingProduct, HostingServer, Subscription, HostingCoupon, HostingBackup,
 } from '../types';
@@ -67,6 +68,13 @@ const SUB_STATUS: Record<string, { label: string; cls: string }> = {
 const StatusBadge: React.FC<{ status?: string }> = ({ status }) => {
   const s = SUB_STATUS[status || ''] || { label: status || '—', cls: 'bg-muted text-muted-foreground' };
   return <Badge className={`${s.cls} border-0`}>{s.label}</Badge>;
+};
+
+/** Catalog delete (package / TLD / coupon): ask first, and surface a failed write instead of closing silently. */
+const removeWithConfirm = async (message: string, remove: () => Promise<unknown>, toast: ReturnType<typeof useToast>['toast'], done: () => void) => {
+  if (!window.confirm(message)) return;
+  try { await remove(); toast({ title: 'U fshi' }); done(); }
+  catch (e) { toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' }); }
 };
 
 const useTab = (def: string) => {
@@ -110,14 +118,8 @@ const HostingView: React.FC = () => {
     const subs = subscriptions || [];
     const doms = domains || [];
     const active = subs.filter((s) => s.status === 'Active');
-    let mrr = 0;
-    for (const s of active) {
-      const c = s.billingCycle;
-      if (c && (BILLING_CYCLES as readonly string[]).includes(c)) {
-        const m = monthlyEquivalent({ [c as BillingCycle]: { price: s.recurringAmount || 0 } }, c as BillingCycle);
-        mrr += (m || 0) * (cur(s.currency) === 'EUR' ? 1 : 1 / 100); // ALL shown as EUR-ish approximation only in the tile
-      }
-    }
+    // Same definition as Financat (ALL, fivocrm rows only), so the two screens agree.
+    const mrr = hostingMonthlyRecurringRevenue(subs, doms);
     const expiring = doms.filter((d) => { const e = toDate(d.expiryDate); return e && d.status !== 'Expired' && daysBetween(now, e) <= 30; }).length;
     return { active: active.length, suspended: subs.filter((s) => s.status === 'Suspended').length, domains: doms.filter((d) => d.status === 'Active' || d.status === 'Grace').length, expiring, mrr, pendingOrders: (orders || []).filter((o) => o.status === 'Pending' || o.status === 'Failed').length };
   }, [subscriptions, domains, orders]);
@@ -158,7 +160,8 @@ const HostingView: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <Card className="p-4"><p className="text-xs text-muted-foreground">MRR hosting</p><p className="text-xl font-bold">{formatCurrency(stats.mrr, 'ALL')}</p><p className="text-xs text-muted-foreground">abonime + domain-e / muaj</p></Card>
         <Card className="p-4"><p className="text-xs text-muted-foreground">Llogari aktive</p><p className="text-xl font-bold">{stats.active}</p><p className="text-xs text-muted-foreground">{stats.suspended} të pezulluara</p></Card>
         <Card className="p-4"><p className="text-xs text-muted-foreground">Domain-e</p><p className="text-xl font-bold">{stats.domains}</p><p className={`text-xs ${stats.expiring ? 'text-orange-600' : 'text-muted-foreground'}`}>{stats.expiring} skadojnë brenda 30 ditësh</p></Card>
         <Card className="p-4"><p className="text-xs text-muted-foreground">Porosi në pritje</p><p className="text-xl font-bold">{stats.pendingOrders}</p><p className="text-xs text-muted-foreground">pagesë ose aktivizim</p></Card>
@@ -344,7 +347,7 @@ const SubscriptionDialog: React.FC<{
               {isAdmin && <Button size="sm" variant="outline" disabled={sub.status !== 'Active' || !!busy} title="Klienti njoftohet për çdo hyrje të stafit" onClick={() => call('sso', async () => { const r = await hostingApi<{ url: string }>('sub.sso', { subscriptionId: sub.id }); await openExternal(r.url); })}><ExternalLink className="w-4 h-4 mr-1" />Hyr në cPanel</Button>}
               <Button size="sm" variant="outline" disabled={!!busy || !sub.cpanelUsername} onClick={() => call('usage', async () => { const r = await hostingApi<{ usage: any }>('sub.usage', { subscriptionId: sub.id }); setUsage(r.usage || { missing: true }); })}><Activity className="w-4 h-4 mr-1" />Përdorimi</Button>
               {isAdmin && <Button size="sm" variant="outline" disabled={sub.status !== 'Active' || !!busy} title="Klienti njoftohet" onClick={() => call('pw', async () => { const r = await hostingApi<{ password: string }>('sub.resetPassword', { subscriptionId: sub.id }); setPassword(r.password); })}><KeyRound className="w-4 h-4 mr-1" />Fjalëkalim i ri</Button>}
-              {canEdit && sub.status === 'Active' && <Button size="sm" variant="outline" disabled={!!busy} onClick={() => act('sub.suspend', { reason: 'manual' }, 'Llogaria u pezullua')}><Pause className="w-4 h-4 mr-1" />Pezullo</Button>}
+              {canEdit && sub.status === 'Active' && <Button size="sm" variant="outline" disabled={!!busy} onClick={() => { if (!window.confirm(`Pezullo ${sub.domain || sub.cpanelUsername}? Faqja dhe email-et e klientit ndalojnë së punuari derisa të riaktivizohet.`)) return; act('sub.suspend', { reason: 'manual' }, 'Llogaria u pezullua'); }}><Pause className="w-4 h-4 mr-1" />Pezullo</Button>}
               {canEdit && sub.status === 'Suspended' && <Button size="sm" variant="outline" disabled={!!busy} onClick={() => act('sub.unsuspend', {}, 'Llogaria u riaktivizua')}><Play className="w-4 h-4 mr-1" />Riaktivizo</Button>}
               {canEdit && sub.provisionStatus === 'failed' && sub.orderId && <Button size="sm" disabled={!!busy} onClick={() => call('prov', async () => { await hostingApi('order.provision', { orderId: sub.orderId }); toast({ title: 'Aktivizimi u riprovua' }); })}><Wand2 className="w-4 h-4 mr-1" />Riprovo aktivizimin</Button>}
             </div>
@@ -489,11 +492,11 @@ const DomainDialog: React.FC<{ dom: Domain; customerName: (id?: string) => strin
               <Button size="sm" variant="outline" disabled={busy} onClick={() => run(async () => { await hostingApi('domain.setNameservers', { domainId: dom.id, nameservers: ns.split(/\s+/).filter(Boolean) }); toast({ title: 'Nameservers u ruajtën te Dynadot' }); })}>Ruaj NS</Button>
             </div>
             <div className="flex flex-wrap gap-2 items-center">
-              <label className="flex items-center gap-2 text-sm"><Switch checked={dom.autoRenew !== false} onCheckedChange={(v) => run(async () => { await hostingApi('domain.setAutoRenew', { domainId: dom.id, value: v }); })} />Rinovim automatik (me faturë)</label>
-              <label className="flex items-center gap-2 text-sm"><Switch checked={!!dom.lifecycleHold} onCheckedChange={(v) => run(async () => { await hostingApi('domain.setHold', { domainId: dom.id, hold: v }); })} />Hold</label>
+              <label className="flex items-center gap-2 text-sm"><Switch checked={dom.autoRenew !== false} disabled={busy} onCheckedChange={(v) => { if (!v && !window.confirm(`Fik rinovimin automatik për ${dom.domainName}? Nuk do të lëshohet faturë rinovimi dhe domain-i skadon më ${fmtDate(dom.expiryDate)}.`)) return; run(async () => { await hostingApi('domain.setAutoRenew', { domainId: dom.id, value: v }); toast({ title: v ? 'Rinovimi automatik u ndez' : 'Rinovimi automatik u fik' }); }); }} />Rinovim automatik (me faturë)</label>
+              <label className="flex items-center gap-2 text-sm"><Switch checked={!!dom.lifecycleHold} disabled={busy} onCheckedChange={(v) => run(async () => { await hostingApi('domain.setHold', { domainId: dom.id, hold: v }); toast({ title: v ? 'Domain-i u vu në hold' : 'Hold u hoq' }); })} />Hold</label>
               <Button size="sm" variant="outline" disabled={busy} onClick={() => run(async () => { await hostingApi('domain.setPrivacy', { domainId: dom.id, option: dom.privacy ? 'off' : 'full' }); toast({ title: dom.privacy ? 'Privatësia u fik' : 'Privatësia u ndez' }); })}>{dom.privacy ? <EyeOff className="w-4 h-4 mr-1" /> : <Eye className="w-4 h-4 mr-1" />}WHOIS {dom.privacy ? 'publik' : 'privat'}</Button>
               <Button size="sm" variant="outline" disabled={busy} onClick={() => run(async () => { const r = await hostingApi<{ authCode: string }>('domain.authCode', { domainId: dom.id }); setAuth(r.authCode); })}><KeyRound className="w-4 h-4 mr-1" />Kodi EPP</Button>
-              {isAdmin && <Button size="sm" variant="ghost" disabled={busy} onClick={() => run(async () => { await hostingApi('domain.registrarAutoRenew', { domainId: dom.id, value: false }); toast({ title: 'Rinovimi automatik i Dynadot u fik', description: 'Rinovohet vetëm pas pagesës së faturës sonë.' }); })}>Fik auto-renew te Dynadot</Button>}
+              {isAdmin && <Button size="sm" variant="ghost" disabled={busy} onClick={() => window.confirm(`Fik auto-renew te Dynadot për ${dom.domainName}? Pas kësaj domain-i rinovohet vetëm kur paguhet fatura jonë; nëse fatura mbetet e papaguar, domain-i skadon.`) && run(async () => { await hostingApi('domain.registrarAutoRenew', { domainId: dom.id, value: false }); toast({ title: 'Rinovimi automatik i Dynadot u fik', description: 'Rinovohet vetëm pas pagesës së faturës sonë.' }); })}>Fik auto-renew te Dynadot</Button>}
             </div>
             {auth && <Card className="p-3 text-sm bg-amber-50 border-amber-200">Kodi EPP: <code className="font-mono select-all">{auth}</code></Card>}
           </div>
@@ -669,6 +672,7 @@ const ProductsTab: React.FC<{ products: HostingProduct[]; servers: HostingServer
   const { toast } = useToast();
   const mutation = useMutation<HostingProduct>('hostingProducts');
   const [editing, setEditing] = useState<Partial<HostingProduct> | null>(null);
+  const removeEditing = () => editing?.id && removeWithConfirm(`Fshi paketën ${editing.name || ''}? Llogaritë ekzistuese mbeten në WHM, por paketa nuk shitet më dhe nuk mund të zgjidhet për upgrade.`, () => mutation.remove(editing.id!), toast, () => setEditing(null));
   const save = async () => {
     if (!editing) return;
     if (!editing.name?.trim() || !editing.serverId || !editing.whmPackage?.trim()) { toast({ title: 'Emri, serveri dhe paketa WHM janë të detyrueshme', variant: 'destructive' }); return; }
@@ -725,7 +729,7 @@ const ProductsTab: React.FC<{ products: HostingProduct[]; servers: HostingServer
               <label className="flex items-center gap-2 text-sm sm:col-span-2"><Switch checked={editing.portalVisible !== false} onCheckedChange={(v) => setEditing({ ...editing, portalVisible: v })} />E dukshme në portalin e klientit</label>
             </div>
             <DialogFooter>
-              {editing.id && <Button variant="ghost" className="text-red-700 mr-auto" onClick={async () => { await mutation.remove(editing.id!); setEditing(null); }}>Fshi</Button>}
+              {editing.id && <Button variant="ghost" className="text-red-700 mr-auto" onClick={removeEditing}>Fshi</Button>}
               <Button variant="outline" onClick={() => setEditing(null)}>Anulo</Button><Button onClick={save}>Ruaj</Button>
             </DialogFooter>
           </DialogContent>
@@ -741,6 +745,7 @@ const TldsTab: React.FC<{ tlds: DomainTld[]; canEdit: boolean; isAdmin: boolean;
   const { toast } = useToast();
   const mutation = useMutation<DomainTld>('domainTlds');
   const [editing, setEditing] = useState<Partial<DomainTld> | null>(null);
+  const removeEditing = () => editing?.id && removeWithConfirm(`Fshi TLD-në ${editing.tld || ''}? Domain-et ekzistuese nuk preken, por kjo TLD nuk shitet më.`, () => mutation.remove(editing.id!), toast, () => setEditing(null));
   const [margin, setMargin] = useState(settings?.hostingTldMarginPct ?? 40);
   const [syncing, setSyncing] = useState(false);
   const syncCosts = async () => {
@@ -805,7 +810,7 @@ const TldsTab: React.FC<{ tlds: DomainTld[]; canEdit: boolean; isAdmin: boolean;
               <div className="space-y-1"><Label>Statusi</Label><Select value={editing.status || 'Active'} onValueChange={(v) => setEditing({ ...editing, status: v as any })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="Active">Aktive</SelectItem><SelectItem value="Archived">Arkiv</SelectItem></SelectContent></Select></div>
             </div>
             <DialogFooter>
-              {editing.id && <Button variant="ghost" className="text-red-700 mr-auto" onClick={async () => { await mutation.remove(editing.id!); setEditing(null); }}>Fshi</Button>}
+              {editing.id && <Button variant="ghost" className="text-red-700 mr-auto" onClick={removeEditing}>Fshi</Button>}
               <Button variant="outline" onClick={() => setEditing(null)}>Anulo</Button><Button onClick={save}>Ruaj</Button>
             </DialogFooter>
           </DialogContent>
@@ -1070,6 +1075,7 @@ const CouponsTab: React.FC<{ coupons: HostingCoupon[]; canEdit: boolean }> = ({ 
   const { toast } = useToast();
   const mutation = useMutation<HostingCoupon>('hostingCoupons');
   const [editing, setEditing] = useState<Partial<HostingCoupon> | null>(null);
+  const removeEditing = () => editing?.id && removeWithConfirm(`Fshi kuponin ${editing.code || ''}? Porositë që e kanë përdorur e ruajnë zbritjen, por kodi nuk pranohet më.`, () => mutation.remove(editing.id!), toast, () => setEditing(null));
   const save = async () => {
     if (!editing) return;
     const code = String(editing.code || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 32);
@@ -1118,7 +1124,7 @@ const CouponsTab: React.FC<{ coupons: HostingCoupon[]; canEdit: boolean }> = ({ 
               <div className="space-y-1 col-span-2"><Label>Shënim (i brendshëm)</Label><Input value={editing.note || ''} onChange={(e) => setEditing({ ...editing, note: e.target.value })} /></div>
             </div>
             <DialogFooter>
-              {editing.id && <Button variant="ghost" className="text-red-700 mr-auto" onClick={async () => { await mutation.remove(editing.id!); setEditing(null); }}>Fshi</Button>}
+              {editing.id && <Button variant="ghost" className="text-red-700 mr-auto" onClick={removeEditing}>Fshi</Button>}
               <Button variant="outline" onClick={() => setEditing(null)}>Anulo</Button><Button onClick={save}>Ruaj</Button>
             </DialogFooter>
           </DialogContent>
