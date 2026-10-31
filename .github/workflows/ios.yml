@@ -44,7 +44,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # 24 = npm 11, the same npm that writes package-lock.json locally. On 22 (npm 10)
+          # every lock regenerated here failed `npm ci` with "Missing: @types/react@19.3.0".
+          node-version: 24
           cache: npm
 
       # App Store Connect refuses uploads built with an SDK older than iOS 26

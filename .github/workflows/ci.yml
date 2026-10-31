@@ -20,7 +20,9 @@ jobs:
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         with:
-          node-version: 22
+          # 24 = npm 11, the same npm that writes package-lock.json locally. On 22 (npm 10)
+          # every lock regenerated here failed `npm ci` with "Missing: @types/react@19.3.0".
+          node-version: 24
           cache: npm
 
       - run: npm ci
