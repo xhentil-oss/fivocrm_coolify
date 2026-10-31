@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminAuth, adminDb } from './_firebaseAdmin.js';
 import { isTypeMutedByPrefs } from './_notificationTypes.js';
+import { recipientBlockedActor } from './_chatModeration.js';
 import {
   getUserPrefs, isDndActive, sendPushToUser, sendNotificationEmail,
   isViewingConversation, shouldThrottleCategoryEmail, notifyUser,
@@ -157,6 +158,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Shared gates: Do-Not-Disturb (evaluated in the USER's timezone, not UTC) and
   // category mute silence BOTH channels. The mute table is the shared registry, so
   // this can no longer disagree with what the bell shows.
+  // The recipient blocked the caller (chat "Blloko"): no push, no email.
+  if (recipientBlockedActor(prefs, caller.uid)) return res.status(200).json({ skipped: 'blocked' });
   if (isDndActive(prefs)) return res.status(200).json({ skipped: 'dnd' });
   if (isTypeMutedByPrefs(type, prefs)) return res.status(200).json({ skipped: 'category-muted' });
 

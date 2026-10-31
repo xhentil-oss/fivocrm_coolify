@@ -31,6 +31,7 @@ import { safeSenderAddress } from './_emailIdentity.js';
 import admin, { adminDb as db, adminMessaging, adminAuth } from './_firebaseAdmin.js';
 import nodemailer from 'nodemailer';
 import { isTypeMutedByPrefs, NOTIFICATION_TYPE_CATEGORY } from './_notificationTypes.js';
+import { recipientBlockedActor } from './_chatModeration.js';
 
 export const BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://fivocrm.vercel.app').replace(/\/$/, '');
 
@@ -436,7 +437,7 @@ export interface NotifyUserResult {
   written: boolean;
   push?: PushResult;
   email?: string;
-  skipped?: 'no-user' | 'self' | 'bot';
+  skipped?: 'no-user' | 'self' | 'bot' | 'blocked';
   /** The recipient was reading this very conversation → push + email suppressed. */
   inConversation?: boolean;
 }
@@ -503,9 +504,13 @@ export async function notifyUser(input: NotifyUserInput): Promise<NotifyUserResu
   if (input.conversationKey) doc.conversationKey = input.conversationKey;
   if (input.messageId) doc.messageId = input.messageId;
 
+  const prefs = input.prefs ?? await getUserPrefs(userId);
+  // The recipient blocked the person who caused this (chat "Blloko", App Store 1.2):
+  // no bell row, no push, no email. Read before the write — same single prefs read.
+  if (recipientBlockedActor(prefs, input.actorUserId)) return { written: false, skipped: 'blocked' };
+
   await db.collection('notifications').add(doc);
 
-  const prefs = input.prefs ?? await getUserPrefs(userId);
   const result: NotifyUserResult = { written: true };
 
   // Deep-link target: an explicit actionUrl wins; a linkTo that is not a path is a

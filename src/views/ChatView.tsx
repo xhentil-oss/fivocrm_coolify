@@ -24,10 +24,13 @@ import {
   ImageIcon, Circle, Pin, PinOff, Mic, Square, Filter, AtSign,
   Bookmark, BookmarkCheck, ListChecks,
   Zap, BellRing, AlarmClock, Wand2, Clock, CalendarClock, Rows3, Languages, Video,
-  LogOut, Crown, Settings2, MoreVertical,
+  LogOut, Crown, Settings2, MoreVertical, Flag, Ban,
 } from 'lucide-react';
 import { useVideoCall } from '../hooks/useVideoCall';
 import ConversationOwnerBar from '../components/chat/ConversationOwnerBar';
+import ReportMessageDialog from '../components/chat/ReportMessageDialog';
+import { useBlockedUsers } from '../hooks/useBlockedUsers';
+import { isFromBlockedUser, canBlockSender } from '../lib/chat/moderation';
 // Lazy-loaded so the ~260KB Daily.co video SDK only loads when a call starts.
 const VideoCallModal = React.lazy(() => import('../components/VideoCallModal'));
 import { useToast } from '../hooks/use-toast';
@@ -115,6 +118,18 @@ const ACTIVE_PORTAL_QUERY = {
 const ChatView: React.FC = () => {
   const { user } = useAuth();
   const { toast } = useToast();
+  // App Store 1.2: "Raporto" a message, "Blloko" a person (src/lib/chat/moderation.ts).
+  const { blocked: blockedUserIds, blockUser, unblockUser } = useBlockedUsers();
+  const [reportTarget, setReportTarget] = useState<{ id: string; senderId?: string | null; content?: string } | null>(null);
+  const handleBlockUser = useCallback(async (uid: string, name: string) => {
+    if (!window.confirm(`Ta bllokosh ${name}? Mesazhet e tij/saj nuk do të shfaqen më për ty dhe nuk do të marrësh njoftime prej tij/saj. Mund ta zhbllokosh kurdo.`)) return;
+    try {
+      await blockUser(uid);
+      toast({ title: `${name} u bllokua`, description: 'Mesazhet e tij/saj tani janë të fshehura për ty.' });
+    } catch (err) {
+      toast({ title: 'Bllokimi dështoi', description: (err as Error).message, variant: 'destructive' });
+    }
+  }, [blockUser, toast]);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -4182,6 +4197,19 @@ const ChatView: React.FC = () => {
                       // the image/voice note is the only thing in the bubble (no "📎 Attachment").
                       const isPlaceholderContent = message.content === '📎 Attachment' || message.content === '🎙️ Voice note';
 
+                      // Blocked sender: fold the message away, keep a way back (Zhblloko).
+                      if (isFromBlockedUser(message.senderId, user?.uid, blockedUserIds)) {
+                        return (
+                          <div key={message.id} className="flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground italic">
+                            <Ban className="h-3.5 w-3.5 shrink-0" />
+                            <span>Mesazh nga një përdorues i bllokuar</span>
+                            <button className="not-italic text-primary underline hover:opacity-80" onClick={() => unblockUser(message.senderId)}>
+                              Zhblloko
+                            </button>
+                          </div>
+                        );
+                      }
+
                       return (
                         <React.Fragment key={message.id}>
                           {showDateSep && (
@@ -4387,6 +4415,11 @@ const ChatView: React.FC = () => {
                                     <button className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors" aria-label="Përgjigju" title="Përgjigju" onClick={() => setReplyingTo(message)}>
                                       <Reply className="h-3.5 w-3.5" />
                                     </button>
+                                    {canBlockSender(message.senderId, user?.uid) && (
+                                      <button className="p-1 hover:bg-destructive/10 rounded-lg text-muted-foreground hover:text-destructive transition-colors" aria-label="Raporto mesazhin" title="Raporto mesazhin" onClick={() => setReportTarget(message)}>
+                                        <Flag className="h-3.5 w-3.5" />
+                                      </button>
+                                    )}
                                     <button
                                       className={`p-1 hover:bg-accent rounded-lg transition-colors ${bookmarkedMessageIds.has(message.id) ? 'text-amber-500' : 'text-muted-foreground hover:text-foreground'}`}
                                       onClick={() => handleToggleBookmark(message)}
@@ -4541,6 +4574,22 @@ const ChatView: React.FC = () => {
                                       >
                                         <Copy className="h-5 w-5 text-muted-foreground" /> Kopjo
                                       </button>
+                                      {canBlockSender(message.senderId, user?.uid) && (
+                                        <>
+                                          <button
+                                            className="flex items-center gap-3 w-full px-5 py-3 text-[15px] text-destructive active:bg-destructive/10 transition-colors"
+                                            onClick={() => { setReportTarget(message); setLongPressMenuId(null); }}
+                                          >
+                                            <Flag className="h-5 w-5" /> Raporto mesazhin
+                                          </button>
+                                          <button
+                                            className="flex items-center gap-3 w-full px-5 py-3 text-[15px] text-destructive active:bg-destructive/10 transition-colors"
+                                            onClick={() => { setLongPressMenuId(null); handleBlockUser(message.senderId, senderName); }}
+                                          >
+                                            <Ban className="h-5 w-5" /> Blloko {senderName}
+                                          </button>
+                                        </>
+                                      )}
                                       {isOwn && (
                                         <>
                                           <button
@@ -5889,6 +5938,13 @@ const ChatView: React.FC = () => {
           })()}
         </DialogContent>
       </Dialog>
+
+      <ReportMessageDialog
+        message={reportTarget}
+        senderName={reportTarget?.senderId ? getUserDisplayName(reportTarget.senderId) : ''}
+        onClose={() => setReportTarget(null)}
+        onBlock={blockUser}
+      />
 
       {videoRoomUrl && (
         <React.Suspense fallback={null}>

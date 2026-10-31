@@ -75,6 +75,10 @@
       "destination": "/api/email?type=notify-staff"
     },
     {
+      "source": "/api/report-content",
+      "destination": "/api/email?type=report-content"
+    },
+    {
       "source": "/api/tenant-secrets",
       "destination": "/api/email?type=tenant-secrets"
     },

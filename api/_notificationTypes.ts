@@ -106,6 +106,7 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   recurring_project_billing_misconfigured: 'system',
   whatsapp_send_failed: 'system',
   whatsapp_disconnected: 'system',
+  content_reported: 'system',
 };
 
 /** Category of a type, or null for a legacy/unknown value (never muted). */

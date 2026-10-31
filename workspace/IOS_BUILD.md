@@ -168,6 +168,15 @@ as a new (portal) identity. Staff should share their real email or use Google/em
 The web has no Apple button (needs a Services ID + return URL).
 
 ### 4.3 Everything else the reviewer will need
+- **Report + block (guideline 1.2), added 31 Oct 2026 after the 2.1 "Information
+  Needed" rejection** — long-press a message (desktop: hover → 🚩): "Raporto mesazhin"
+  → `ReportMessageDialog` → `POST /api/report-content` (stores
+  `contentReports/{messageId}_{uid}` server-only, notifies managers with
+  `content_reported`, emails CONTENT_REPORT_EMAIL / social@fivo.al); "Blloko <emri>" →
+  `userPreferences.blockedUserIds` (`useBlockedUsers`): the person's messages fold to
+  "Mesazh nga një përdorues i bllokuar · Zhblloko", leave the unread badges, and
+  `notifyUser` / the relay skip push+email for that recipient. Pure logic
+  `src/lib/chat/moderation.ts` (+ `api/_chatModeration.ts`, test-checked).
 - **Review demo account** — `scripts/seed-appstore-demo.mjs` creates/RESETS the isolated
   tenant `demo_appreview` ("Studio Demo", owner `appreview@fivocrm.com`, plan business,
   status active so the lifecycle cron never suspends it, `isDemo: true`) with services,

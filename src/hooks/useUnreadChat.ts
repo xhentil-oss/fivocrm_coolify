@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { useBlockedUsers } from './useBlockedUsers';
 import { useAuth } from '../contexts/AuthContext';
 import { useCollection } from './useFirestore';
 import type { ChatMessage, Channel } from '../types';
@@ -84,9 +85,16 @@ export function useUnreadChat(): UnreadChatState {
   );
   const myGroupIds = useMemo(() => new Set(myGroups.map(g => g.id)), [myGroups]);
 
-  const dmBySender = useMemo(() => dmUnreadBySender(unreadDms, me), [unreadDms, me]);
+  // A blocked person's messages are hidden in the thread, so they must not light the
+  // badges either (chat "Blloko", src/lib/chat/moderation.ts).
+  const { blocked } = useBlockedUsers();
+  const notBlocked = useMemo(
+    () => (rows: ChatMessage[] | undefined) => (blocked.size ? (rows || []).filter(m => !blocked.has(m.senderId)) : rows),
+    [blocked],
+  );
+  const dmBySender = useMemo(() => dmUnreadBySender(notBlocked(unreadDms) as ChatMessage[], me), [unreadDms, me, notBlocked]);
   const clientByChannel = useMemo(() => clientUnreadByChannel(unreadClientMsgs, me), [unreadClientMsgs, me]);
-  const groupByChannel = useMemo(() => groupUnreadByChannel(unreadTenantMsgs, me, myGroupIds), [unreadTenantMsgs, me, myGroupIds]);
+  const groupByChannel = useMemo(() => groupUnreadByChannel(notBlocked(unreadTenantMsgs) as ChatMessage[], me, myGroupIds), [unreadTenantMsgs, me, myGroupIds, notBlocked]);
   const total = useMemo(() => sumCounts(dmBySender, clientByChannel, groupByChannel), [dmBySender, clientByChannel, groupByChannel]);
 
   return {

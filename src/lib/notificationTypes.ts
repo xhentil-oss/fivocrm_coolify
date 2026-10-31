@@ -167,6 +167,9 @@ export const NOTIFICATION_TYPES = {
   // A WhatsApp number (whatsappAccounts) has been disconnected for > 10 min —
   // every automated reminder through it is failing. Once per disconnect.
   whatsapp_disconnected:                { category: 'system', priority: 'critical', groupLabel: 'numra WhatsApp të shkëputur' },
+  // A chat message was reported ("Raporto", App Store 1.2) — to the business's
+  // managers (api/_report-content.ts). The platform inbox gets an email too.
+  content_reported:                     { category: 'system', priority: 'critical', groupLabel: 'mesazhe të raportuara' },
 } as const satisfies Record<string, NotificationTypeSpec>;
 
 /** Every type the product may emit. A value outside this union is a bug. */
