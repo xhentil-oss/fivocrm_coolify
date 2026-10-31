@@ -46,12 +46,18 @@ export function isUnreadDmForMe(m: UnreadMessageLike, me: string): boolean {
 
 /** A client-portal message (in a `client-*` thread) staff have not read. */
 export function isUnreadClientMessage(m: UnreadMessageLike, me: string): boolean {
-  return !!m.channelId && m.senderType === 'client' && m.senderId !== me && !m.isRead && !m.deletedAt;
+  return !!m.channelId && !m.taskId && m.senderType === 'client' && m.senderId !== me && !m.isRead && !m.deletedAt;
 }
 
-/** A group message I (a member) have not opened — per-member via `readBy`. */
+/**
+ * A group message I (a member) have not opened — per-member via `readBy`.
+ * A task-chat row (`taskId`) is none of the three kinds: nothing ever marks it
+ * read, so it is never counted here (and TaskChatSection creates it
+ * `isRead: true` so it leaves the shared unread window at once) — counting it
+ * would show a badge no thread can clear.
+ */
 export function isUnreadGroupMessageForMe(m: UnreadMessageLike, me: string, myGroupIds: Set<string>): boolean {
-  return !!me && !!m.channelId && myGroupIds.has(m.channelId) && m.senderId !== me
+  return !!me && !!m.channelId && !m.taskId && myGroupIds.has(m.channelId) && m.senderId !== me
     && !m.deletedAt && !readByOf(m).includes(me);
 }
 

@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { Sparkles, TrendingUp, Clock, AlertTriangle, ChevronDown, ChevronUp, DollarSign, Flag, Zap } from 'lucide-react';
 import { Badge } from './ui/badge';
 import { toAll, currencySymbol } from '../lib/utils';
+import { dayDiffFromToday, taskDeadline } from '../lib/taskDue';
+import { useTodayKey } from '../hooks/useTodayKey';
 import type { Task, Project, Customer, Invoice } from '../types';
 
 interface SmartSuggestionsProps {
@@ -24,7 +26,6 @@ interface ScoredTask {
 }
 
 // Priority scoring algorithm
-const DAY_MS = 1000 * 60 * 60 * 24;
 
 function computeTaskScore(
   task: Task & { id: string },
@@ -32,9 +33,10 @@ function computeTaskScore(
   projectMap: Map<string, Project & { id: string }>,
   customerRevenueMap: Map<string, number>,
   projectCustomerMap: Map<string, string>,
-  // Single reference "now" (epoch ms) shared by every task in a run so scores are
-  // a pure function of the data + the current day — identical across reloads.
-  nowMs: number,
+  // Single reference "today" (start of the Tirane day, ms) shared by every task
+  // in a run so scores are a pure function of the data + the current day —
+  // identical across reloads.
+  todayKey: number,
 ): ScoredTask {
   let score = 0;
   const reasons: string[] = [];
@@ -46,12 +48,10 @@ function computeTaskScore(
   if (task.priority === 'urgent') reasons.push('Prioritet urgjent');
   else if (task.priority === 'high') reasons.push('Prioritet i lartë');
 
-  // 2. Deadline proximity (0-35 points)
-  const dueDate = task.endDate || task.dueDate;
-  if (dueDate) {
-    const due = dueDate instanceof Date ? dueDate : new Date(dueDate);
-    const daysUntilDue = Math.ceil((due.getTime() - nowMs) / DAY_MS);
-
+  // 2. Deadline proximity (0-35 points) — whole Tirane CALENDAR days, not
+  // ceil(instants): yesterday 23:00 is "1 ditë vonuar", not "Afati sot!".
+  const daysUntilDue = dayDiffFromToday(taskDeadline(task), todayKey);
+  if (daysUntilDue !== null) {
     if (daysUntilDue < 0) {
       score += 35; // Overdue — maximum urgency
       reasons.push(`${Math.abs(daysUntilDue)} ditë vonuar!`);
@@ -145,6 +145,8 @@ const SmartSuggestions: React.FC<SmartSuggestionsProps> = ({
   getUserName,
   maxSuggestions = 5,
 }) => {
+  // The day the deadline distances are measured from — changes at Tirane midnight.
+  const todayKey = useTodayKey();
   // Collapsed by default so the actual task list (below) is immediately visible;
   // the user's choice is remembered across reloads.
   const [expanded, setExpanded] = useState(() => {
@@ -192,9 +194,8 @@ const SmartSuggestions: React.FC<SmartSuggestionsProps> = ({
       t => t.status !== 'Done' && !t.parentTaskId // Only parent, non-done tasks
     );
 
-    const nowMs = Date.now(); // one reference for the whole ranking pass
     const scored = activeTasks.map(task =>
-      computeTaskScore(task, tasks, projectMap, customerRevenueMap, projectCustomerMap, nowMs)
+      computeTaskScore(task, tasks, projectMap, customerRevenueMap, projectCustomerMap, todayKey)
     );
 
     return scored
@@ -202,7 +203,7 @@ const SmartSuggestions: React.FC<SmartSuggestionsProps> = ({
       // reloads just because the source array arrived in a different order.
       .sort((a, b) => b.score - a.score || a.task.id.localeCompare(b.task.id))
       .slice(0, maxSuggestions);
-  }, [tasks, projectMap, customerRevenueMap, projectCustomerMap, maxSuggestions]);
+  }, [tasks, projectMap, customerRevenueMap, projectCustomerMap, maxSuggestions, todayKey]);
 
   if (scoredTasks.length === 0) return null;
 

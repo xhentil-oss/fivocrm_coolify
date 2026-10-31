@@ -23,6 +23,12 @@ export interface ModuleAccess {
   disabledModules: string[];
   /** Layer 1 — what the PLATFORM withheld. Read-only for the tenant. */
   lockedModules: string[];
+  /**
+   * A self-serve signup is born with every module locked until the platform opens
+   * the agreed set (`businesses.moduleSetup === 'pending'`). While true, "locked"
+   * means "not configured yet", not "outside your contract" — the UI says so.
+   */
+  moduleSetupPending: boolean;
   loading: boolean;
   /**
    * Whether this user may flip module toggles. Firestore rules only let the
@@ -68,6 +74,7 @@ export function useModules(): ModuleAccess {
 
   const isSuperAdmin = permissions.isSuperAdmin === true;
   const canManage = isSuperAdmin || (!!user && (business as any)?.ownerId === user.uid);
+  const moduleSetupPending = (business as any)?.moduleSetup === 'pending';
 
   const blockReason = useCallback(
     (idOrPath: string): ModuleBlockReason => {
@@ -103,7 +110,9 @@ export function useModules(): ModuleAccess {
       // The write would succeed (only `lockedModules` is protected by the rules) but
       // change nothing visible — say so instead of leaving a switch that "does not work".
       if (lockedModules.includes(mod.path)) {
-        throw new Error(`"${mod.label}" nuk përfshihet në kontratën tuaj. Kontaktoni FivoCRM për ta aktivizuar.`);
+        throw new Error(moduleSetupPending
+          ? `Modulet e workspace-it po konfigurohen nga FivoCRM — "${mod.label}" hapet sapo të përfundojë.`
+          : `"${mod.label}" nuk përfshihet në kontratën tuaj. Kontaktoni FivoCRM për ta aktivizuar.`);
       }
       const next = new Set(disabledModules);
       if (enabled) next.delete(mod.path);
@@ -113,7 +122,7 @@ export function useModules(): ModuleAccess {
         updatedAt: Timestamp.now(),
       });
     },
-    [businessId, disabledModules, lockedModules],
+    [businessId, disabledModules, lockedModules, moduleSetupPending],
   );
 
   return {
@@ -121,6 +130,7 @@ export function useModules(): ModuleAccess {
     status: (business as any)?.status,
     disabledModules,
     lockedModules,
+    moduleSetupPending,
     // A super-admin has no active business doc to read — never keep them waiting.
     loading: isSuperAdmin ? false : (permissions.isLoading || (!!businessId && loading)),
     canManage,

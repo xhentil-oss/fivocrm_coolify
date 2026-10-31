@@ -47,7 +47,7 @@ const Shell: React.FC<{
  * of the module definition, so wrapping in both would duplicate it.
  */
 const ModuleGate: React.FC<ModuleGateProps> = ({ moduleId, children }) => {
-  const { blockReason, loading, plan } = useModules();
+  const { blockReason, loading, plan, moduleSetupPending } = useModules();
   const mod = MODULE_BY_ID[moduleId];
 
   if (!mod) {
@@ -89,6 +89,17 @@ const ModuleGate: React.FC<ModuleGateProps> = ({ moduleId, children }) => {
       >
         {mod.description} Ky modul përfshihet nga plani <strong>{requiredPlanLabel(mod)}</strong> e
         lart — plani aktual është <strong>{PLAN_LABELS[plan as PlanKey] || plan}</strong>.
+      </Shell>
+    );
+  }
+
+  if (reason === 'locked' && moduleSetupPending) {
+    // A self-serve signup: nothing is withheld yet, the platform simply has not
+    // opened the agreed set. Saying "outside your contract" here would be wrong.
+    return (
+      <Shell icon={Lock} tone="primary" title={`${mod.label} po aktivizohet`}>
+        Workspace-i juaj sapo u krijua dhe FivoCRM po aktivizon modulet e kontratës suaj.
+        Do të njoftoheni me email sapo të jenë gati — zakonisht brenda ditës së punës.
       </Shell>
     );
   }

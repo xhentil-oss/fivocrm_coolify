@@ -235,6 +235,16 @@ export function seriesIdOf(task: Pick<Task, 'id' | 'seriesId'>): string {
   return task.seriesId || task.id;
 }
 
+/**
+ * The title as the legacy series identity compares it: case- and
+ * whitespace-insensitive. MIRRORED in api/cron/run.ts (`legacyOccurrenceKey`,
+ * `sameSeries`) — the cron normalised and this did not, so the two engines
+ * could disagree about whether two legacy rows were one series.
+ */
+export function normalizeSeriesTitle(title: string | null | undefined): string {
+  return (title || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 /** True when two rows are occurrences of the same recurring series. */
 export function sameSeries(a: Task, b: Task): boolean {
   if (a.seriesId || b.seriesId) return seriesIdOf(a) === seriesIdOf(b);
@@ -242,10 +252,33 @@ export function sameSeries(a: Task, b: Task): boolean {
   // change from one occurrence to the next. Frequency is deliberately NOT one
   // of them — changing "çdo javë" to "çdo muaj" on a tip must not make its own
   // live child a stranger (that forked a second series).
-  return a.title === b.title &&
+  return normalizeSeriesTitle(a.title) === normalizeSeriesTitle(b.title) &&
     (a.assignedToUserId ?? '') === (b.assignedToUserId ?? '') &&
     (a.projectId ?? '') === (b.projectId ?? '');
 }
+
+/**
+ * Why a Done tip produced no next occurrence of its own — stamped as
+ * `recurringSkippedReason` by whichever engine decided it, so the row can say
+ * so. MIRRORED in api/cron/run.ts (`RECURRING_SKIPPED_REASONS`) — keep in sync.
+ *   · 'duplicate-occurrence' — the occurrence already existed (a sibling parent
+ *     or the other engine produced it);
+ *   · 'series-ended'        — the next occurrence falls after "deri më";
+ *   · 'child-missing'       — the occurrence this tip recorded (`nextCycleTaskId`)
+ *     no longer exists and the series has no live row: it was deleted, so the
+ *     series is over unless someone re-opens / re-completes the tip
+ *     (`reopenTaskPatch` / `nextCycleClaimIsStale`). Deleting the live
+ *     occurrence is how people stop a series — the cron never resurrects it.
+ */
+export type RecurringSkippedReason = 'duplicate-occurrence' | 'series-ended' | 'child-missing';
+export const RECURRING_SKIPPED_REASONS: ReadonlyArray<RecurringSkippedReason> = ['duplicate-occurrence', 'series-ended', 'child-missing'];
+
+/** Claim bookkeeping written next to `nextCycleCreated` (not on the shared Task type yet). */
+export type NextCycleClaimFields = {
+  /** Id of the occurrence the claim produced; null when the series ended there. */
+  nextCycleTaskId?: string | null;
+  recurringSkippedReason?: RecurringSkippedReason | string | null;
+};
 
 /**
  * The child's blockers. `dependsOn` holds occurrence IDS, so a copied list points
@@ -418,6 +451,36 @@ export type CompleteTaskOutcome =
   | { kind: 'recurring-stopped'; reason: ProjectRecurrenceBlockReason }
   | { kind: 'error'; error: unknown };
 
+/**
+ * Everything the next-cycle claim must write IN ONE TRANSACTION with the claim
+ * (see `claimTaskNextCycle`): the occurrence itself (or the fact that the
+ * series ended) and the Done status of the tip. Before this the claim was
+ * written first and the child + Done afterwards, so a closed tab / dropped
+ * connection in between left a Todo tip with `nextCycleCreated: true` and no
+ * child — the cron skipped it, a second Done could not re-open it, and nothing
+ * said why.
+ */
+export interface NextCyclePlan {
+  /** The occurrence to create with the claim; null = the series has ended. */
+  child: Omit<Task, 'id' | 'createdAt' | 'updatedAt'> | null;
+  /** Written as `recurringSkippedReason` when `child` is null. */
+  skippedReason?: RecurringSkippedReason;
+  /** The caller proved from its task list that the tip's recorded claim has no
+   *  occurrence behind it (`nextCycleClaimIsStale`): the claim may be taken over. */
+  rearm: boolean;
+  /** The `nextCycleTaskId` the caller saw; a take-over is refused when it moved
+   *  (someone else re-claimed in the meantime). */
+  expectedChildId: string | null;
+}
+
+/**
+ * `false` — lost: another completion holds the claim, create nothing.
+ * `true`  — claim reserved ONLY (legacy / non-Firestore implementations): the
+ *           caller creates the child and marks Done itself.
+ * `'done'`— claim + child + Done landed in one transaction: nothing to create.
+ */
+export type ClaimNextCycleResult = boolean | 'done';
+
 export interface CompleteTaskDeps {
   createTask: (data: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>) => Promise<unknown>;
   updateTask: (id: string, data: Partial<Task>) => Promise<unknown>;
@@ -427,12 +490,30 @@ export interface CompleteTaskDeps {
    *  spawn its next cycle (`projectRecurrenceBlockReason`). Omitted = unknown =
    *  no block; every real caller has the list and passes it. */
   projects?: ReadonlyArray<RecurrenceProject> | null;
-  /** Atomically reserve the next cycle (see `claimTaskNextCycle`). Returns false
-   *  when another completion already reserved it — the caller then skips
-   *  creating a child. Omitted only in unit tests / non-Firestore callers. */
-  claimNextCycle?: (taskId: string) => Promise<boolean>;
-  /** Undo the claim when the child could not be created. */
+  /** Atomically reserve the next cycle (see `claimTaskNextCycle`) — and, given
+   *  a plan, write the child and the Done status in the same transaction.
+   *  Returns false when another completion already reserved it — the caller
+   *  then skips creating a child. Omitted only in unit tests / non-Firestore
+   *  callers. */
+  claimNextCycle?: (taskId: string, plan?: NextCyclePlan) => Promise<ClaimNextCycleResult>;
+  /** Undo a claim-only reservation when the child could not be created. */
   releaseNextCycle?: (taskId: string) => Promise<void>;
+}
+
+/**
+ * True when the tip SAYS its next cycle exists (`nextCycleCreated`) but the
+ * caller's task list proves nothing is behind the claim: the recorded
+ * occurrence (`nextCycleTaskId`, when the claim recorded one) is not in the
+ * list AND the series has no live row at all. Such a tip is re-armed when the
+ * person completes it again — the same law `reopenTaskPatch` applies on
+ * re-open. Without a list nothing can be proved, so it is never stale (the
+ * safe side).
+ */
+export function nextCycleClaimIsStale(task: Task, allTasks: readonly Task[] | undefined | null): boolean {
+  if (task.nextCycleCreated !== true || !task.isRecurring || !allTasks) return false;
+  const childId = (task as Task & NextCycleClaimFields).nextCycleTaskId;
+  if (childId && allTasks.some(t => t.id === childId)) return false;
+  return !hasLiveSeriesSibling(task, allTasks as Task[]);
 }
 
 /**
@@ -458,8 +539,10 @@ export async function completeTask(task: Task, deps: CompleteTaskDeps): Promise<
   // (unless the recurrence has ended) and flag the current one so cron skips it.
   //
   // `task.nextCycleCreated` here is a possibly stale snapshot, so it is only a
-  // cheap pre-filter — the authoritative check is the atomic claim below.
-  if (task.isRecurring && task.recurringFrequency && !task.nextCycleCreated) {
+  // cheap pre-filter — the authoritative check is the atomic claim below. A
+  // claim the list proves empty (`nextCycleClaimIsStale`) is taken over.
+  const claimStale = nextCycleClaimIsStale(task, deps.allTasks);
+  if (task.isRecurring && task.recurringFrequency && (!task.nextCycleCreated || claimStale)) {
     // A task inside an archived (or cancelled) project closes WITHOUT a next
     // cycle. The claim is deliberately NOT taken and `nextCycleCreated` stays
     // false: the tip keeps its `nextRecurringDate`, so if the project is ever
@@ -472,20 +555,39 @@ export async function completeTask(task: Task, deps: CompleteTaskDeps): Promise<
       await deps.updateTask(task.id, { status: 'Done', completedAt: new Date() });
       return { kind: 'recurring-stopped', reason: projectBlock };
     }
+    const ended = recurrenceHasEnded(task);
+    const child = ended
+      ? null
+      : buildNextRecurringTask(task, { allTasks: deps.allTasks }) as Omit<Task, 'id' | 'createdAt' | 'updatedAt'>;
     // Reserve the cycle BEFORE creating anything. Losing the race means another
     // completion already spawned the child; we must not spawn a second one.
+    // The plan lets the claim write child + Done in the SAME transaction, so
+    // the three can never land half-way (a claim without its child).
     if (deps.claimNextCycle) {
-      const claimed = await deps.claimNextCycle(task.id);
+      const claimed = await deps.claimNextCycle(task.id, {
+        child,
+        skippedReason: ended ? 'series-ended' : undefined,
+        rearm: claimStale,
+        expectedChildId: (task as Task & NextCycleClaimFields).nextCycleTaskId ?? null,
+      });
       if (!claimed) {
         await deps.updateTask(task.id, { status: 'Done', completedAt: new Date() });
         return { kind: 'completed' };
       }
-    }
-    try {
-      const ended = recurrenceHasEnded(task);
-      if (!ended) {
-        await deps.createTask(buildNextRecurringTask(task, { allTasks: deps.allTasks }) as Omit<Task, 'id' | 'createdAt' | 'updatedAt'>);
+      if (claimed === 'done') {
+        // Everything is already on the document. The Done write is repeated
+        // through the caller's `updateTask` ONLY for its side effects (local
+        // state, completion notifications, activity rows) — same values, and a
+        // failure here changes nothing the database does not already say.
+        try {
+          await deps.updateTask(task.id, { status: 'Done', nextCycleCreated: true, completedAt: new Date() });
+        } catch { /* the transaction is the truth */ }
+        return ended ? { kind: 'recurring-ended' } : { kind: 'recurring-created' };
       }
+    }
+    // Claim-only reservation (no transaction available): child, then Done.
+    try {
+      if (child) await deps.createTask(child);
       await deps.updateTask(task.id, { status: 'Done', nextCycleCreated: true, completedAt: new Date() });
       return ended ? { kind: 'recurring-ended' } : { kind: 'recurring-created' };
     } catch (error) {

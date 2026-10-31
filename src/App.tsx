@@ -6,6 +6,7 @@ import { db } from './lib/firebase';
 import { useAuth } from './contexts/AuthContext';
 import { getStaffIdentity } from './lib/staffIdentity';
 import VerifyEmailScreen, { needsEmailVerification } from './components/VerifyEmailScreen';
+import ModuleSetupBanner from './components/ModuleSetupBanner';
 import ErrorBoundary from './components/ErrorBoundary';
 import TopNavBar from './components/TopNavBar';
 import Sidebar from './components/Sidebar';
@@ -54,6 +55,7 @@ const ProjectDetailView = lazyRetry(() => import('./views/ProjectDetailView'));
 const CRMView = lazyRetry(() => import('./views/CRMView'));
 const FollowUpsView = lazyRetry(() => import('./views/FollowUpsView'));
 const DealsView = lazyRetry(() => import('./views/DealsView'));
+const SalesAgentView = lazyRetry(() => import('./views/SalesAgentView'));
 const TasksView = lazyRetry(() => import('./views/TasksView'));
 const MyTasksView = lazyRetry(() => import('./views/MyTasksView'));
 const ReportsView = lazyRetry(() => import('./views/ReportsView'));
@@ -423,11 +425,18 @@ function AppContent() {
                       attention, and a hard block when the tenant is suspended (Firestore
                       rules already deny its writes, so silence would just look broken). */}
                   <SubscriptionBanner />
+                  {/* A self-serve tenant whose modules the platform has not opened yet. */}
+                  <ModuleSetupBanner />
                   <ErrorBoundary>
                     <SubscriptionGate>
                     <Suspense fallback={<LazyFallback />}>
                     <Routes>
                       <Route path="/" element={<DefaultRedirect />} />
+                      {/* Bare `/app` is where the signup/register flows and the invite
+                          e-mail's app link land ("Kthehu në app"); with only `/` and
+                          `/app/dashboard` registered, a freshly created owner's first
+                          screen was the 404 below. */}
+                      <Route path="/app" element={<DefaultRedirect />} />
                       <Route path="/app/dashboard" element={<StaffDashboard />} />
                       {/* The console moved out of the tenant shell — keep old links alive. */}
                       <Route path="/app/tenants" element={<Navigate to="/superadmin" replace />} />
@@ -479,6 +488,7 @@ function AppContent() {
                       <Route path="/app/shop-orders" element={<ModuleGate moduleId="shop"><ShopOrdersView /></ModuleGate>} />
                       {/* Hosting & domains module (cPanel/WHM + Dynadot). */}
                       <Route path="/app/hosting" element={<ModuleGate moduleId="hosting"><HostingView /></ModuleGate>} />
+                      <Route path="/app/sales-agent" element={<ModuleGate moduleId="sales-agent"><SalesAgentView /></ModuleGate>} />
                       <Route path="/app/service-inquiries" element={<PermissionGate permissionKey="canAccessCRM"><ServiceInquiriesView /></PermissionGate>} />
                       <Route path="/app/expenses" element={<PermissionGate permissionKey="canAccessExpenses"><ExpensesView /></PermissionGate>} />
                       <Route path="/app/expenses/:expenseId" element={<PermissionGate permissionKey="canAccessExpenses"><ExpenseDetailView /></PermissionGate>} />
@@ -494,7 +504,7 @@ function AppContent() {
                       <div className="text-center py-20">
                         <h1 className="text-4xl font-bold text-foreground mb-4">404</h1>
                         <p className="text-muted-foreground mb-6">Faqja nuk u gjet</p>
-                        <Link to="/app/profile" className="text-primary hover:underline">
+                        <Link to="/app/dashboard" className="text-primary hover:underline">
                           Kthehu në dashboard
                         </Link>
                       </div>

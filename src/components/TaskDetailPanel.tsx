@@ -33,6 +33,11 @@ import TaskClientApprovalSection from './tasks/panel/TaskClientApprovalSection';
 import { usePageVisible } from '../hooks/usePageVisible';
 import { shouldMarkAssigneeSeen } from '../lib/taskReceipts';
 import { markAssigneeSeen } from '../lib/taskReceiptWrites';
+import { memberCostRole } from '../lib/finance/costRates';
+import { Capacitor } from '@capacitor/core';
+import { getApiBase } from '../lib/nativeApi';
+import { SERIES_LOCK_NOTE, canDriveTaskSeries, canDuplicateTask, duplicateTaskDraft, lastHumanEdit, lockedStatusesFor, sanitizeTitleInput, shareOrigin, titlePatch } from './tasks/panel/panelLogic';
+import { STATUS_OPTS } from './tasks/panel/panelShared';
 
 // The panel is composed from the sections in src/components/tasks/panel/ (the
 // LAYOUT CONTRACT of the Oct 2026 "Task Sheet" design lives in panelShared.tsx).
@@ -107,6 +112,11 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     el.style.height = `${el.scrollHeight}px`;
   }, []);
   useEffect(() => { fitTitle(); }, [titleText, fitTitle, isExpanded]);
+  // …and on rotation/resize: the wrap points move, the measured height does not.
+  useEffect(() => {
+    window.addEventListener('resize', fitTitle);
+    return () => window.removeEventListener('resize', fitTitle);
+  }, [fitTitle]);
 
   // Start/deadline state + every handler that writes them.
   const {
@@ -147,6 +157,17 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
   const { data: userProfiles } = useCollection<any>('userProfiles');
   const { data: teams } = useCollection<any>('teams');
+  // Per-task activity history (the Aktiviteti card renders it; the footer reads
+  // it for "Ndryshuar nga …"). Single where = index-free.
+  const { data: rawTaskActivities } = useCollection<any>('activities', {
+    where: [{ field: 'entityId', operator: '==', value: task.id }],
+  });
+  // The rate-card role the timer rows are costed under — same source as the
+  // daily report and TimeLogDialog (`memberCostRole` of my teamMembers row).
+  const myCostRole = useMemo(() => {
+    const me = user?.uid ? (teamMembers || []).find((m: any) => m.userId === user.uid) : undefined;
+    return me ? memberCostRole(me) : undefined;
+  }, [teamMembers, user?.uid]);
 
   const taskMutation = useMutation<Task>('tasks');
   const notificationMutation = useMutation<any>('notifications');
@@ -250,13 +271,38 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     }
   }, [isEditingTitle]);
 
-  const handleSaveTitle = async () => {
-    if (titleText.trim() && titleText !== task.title) {
-      await onUpdate(task.id, { title: titleText });
+  // The last value THIS panel wrote for the two typed drafts. The blur save
+  // and the footer's Ruaj both compare against the stored task, which has not
+  // caught up with the first write when the second fires (a click blurs the
+  // field first) — so the same value went to Firestore twice. Comparing with
+  // what was last written makes the second path a no-op.
+  const savedTitleRef = useRef<string>(task.title);
+  const savedDescriptionRef = useRef<string>(task.description || '');
+  useEffect(() => { savedTitleRef.current = task.title; }, [task.title]);
+  useEffect(() => { savedDescriptionRef.current = task.description || ''; }, [task.description]);
+
+  // Saves the TRIMMED title when it changed; an empty or unchanged draft
+  // reverts to the stored title (never saves "").
+  const commitTitle = async () => {
+    const patch = titlePatch(titleText, savedTitleRef.current);
+    if (patch) {
+      savedTitleRef.current = patch.title;
+      setTitleText(patch.title);
+      await onUpdate(task.id, patch);
     } else {
-      setTitleText(task.title);
+      setTitleText(savedTitleRef.current);
     }
+  };
+  const handleSaveTitle = async () => {
+    await commitTitle();
     setIsEditingTitle(false);
+  };
+  // One write path for the description (blur AND the card's Ruaj).
+  const commitDescription = async (html: string) => {
+    const cleaned = html === '<p></p>' ? '' : html;
+    if (cleaned === savedDescriptionRef.current) return;
+    savedDescriptionRef.current = cleaned;
+    await onUpdate(task.id, { description: cleaned });
   };
 
   // ── Sheet state: status menu, "⋯" menu, ONE open row at a time ──
@@ -275,9 +321,19 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     setProjectOpenRaw(false); setAssignOpenRaw(false); setStatusOpen(false); setMenuOpen(false);
   };
   // The people rows keep their own open flags (they also drive the queries);
-  // opening one folds every other row.
-  const setProjectOpen: React.Dispatch<React.SetStateAction<boolean>> = (v) => { setOpenRow(null); setAssignOpenRaw(false); setProjectOpenRaw(v); };
-  const setAssignOpen: React.Dispatch<React.SetStateAction<boolean>> = (v) => { setOpenRow(null); setProjectOpenRaw(false); setAssignOpenRaw(v); };
+  // opening one folds every other row. A functional updater (`v => !v`) is
+  // resolved against the RENDERED value here: the rows call
+  // `setAssignOpen(false)` and `setProjectOpen(v => !v)` in the same batch, and
+  // the first wrapper's `setProjectOpenRaw(false)` made the queued `!v` read
+  // `!false` — so a second tap on Projekti / Caktuar te never closed it.
+  const setProjectOpen: React.Dispatch<React.SetStateAction<boolean>> = (v) => {
+    const next = typeof v === 'function' ? v(projectOpen) : v;
+    setOpenRow(null); setAssignOpenRaw(false); setProjectOpenRaw(next);
+  };
+  const setAssignOpen: React.Dispatch<React.SetStateAction<boolean>> = (v) => {
+    const next = typeof v === 'function' ? v(assignOpen) : v;
+    setOpenRow(null); setProjectOpenRaw(false); setAssignOpenRaw(next);
+  };
   const closePickers = () => { setStatusOpen(false); setAssignOpenRaw(false); setProjectOpenRaw(false); setMenuOpen(false); };
 
   // Header: the big title scrolls away → the header shows it + its hairline.
@@ -300,8 +356,31 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
   // Status change — the completeTask flow (recurring next-cycle, blockers) is the
   // same one the old header select ran; both status dropdowns call this.
+  // The engine flags of a RECURRING series (claim of the next cycle, re-arm on
+  // re-open) are rules-restricted to the assignee / creator / Admin-Manager —
+  // for anyone else Done on a live tip and every re-open of a Done tip are
+  // refused, so the pill does not offer them and the handler explains.
+  const canDriveSeries = canDriveTaskSeries(task, { uid: user?.uid, isAdmin: !!permissions.isAdmin, isManager: !!permissions.isManager });
+  const lockedStatuses = lockedStatusesFor(task, canDriveSeries, STATUS_OPTS.map(s => s.v));
   const changeStatus = async (newStatus: string) => {
     if (newStatus === task.status) return;
+    if (lockedStatuses.includes(newStatus)) {
+      toast({ title: 'Seri periodike', description: SERIES_LOCK_NOTE });
+      return;
+    }
+    try {
+      await changeStatusUnguarded(newStatus);
+    } catch (err: any) {
+      console.error('[Tasks] ndryshimi i statusit dështoi:', err);
+      const denied = err?.code === 'permission-denied' || /permission/i.test(String(err?.message || ''));
+      toast({
+        title: 'Statusi nuk u ndryshua',
+        description: denied ? SERIES_LOCK_NOTE : (err?.message || 'Provo përsëri.'),
+        variant: 'destructive',
+      });
+    }
+  };
+  const changeStatusUnguarded = async (newStatus: string) => {
     if (newStatus === 'Done') {
       const outcome = await completeTask(task, {
         createTask: (data) => taskMutation.create(data as any),
@@ -372,17 +451,16 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     ? `Krijuar ${createdLabel}${creatorLabel ? ` nga ${creatorLabel}` : ''}`
     : (currentProject?.name || '');
 
-  // Footer: "Ndryshuar · 22 Tet" (the document carries no updater id) — until
-  // the first edit it reads "Krijuar nga …".
-  const updatedDate = (() => {
-    const raw: any = (task as any).updatedAt;
-    if (!raw) return null;
-    const d = raw instanceof Date ? raw : raw?.toDate?.() ? raw.toDate() : new Date(raw);
-    return isNaN(d.getTime()) ? null : d;
-  })();
-  const wasEdited = !!updatedDate && !!createdDate && updatedDate.getTime() - createdDate.getTime() > 60_000;
-  const footerSummary = wasEdited && updatedDate
-    ? `Ndryshuar · ${dayLabel(updatedDate)}`
+  // Footer: "Ndryshuar nga X · 22 Tet" — only from a reliable signal
+  // (`updatedByUserId`, else the newest activity written by a person); the
+  // bare `updatedAt` also moves on cron writes (see lastHumanEdit). Until the
+  // first edit it reads "Krijuar nga …".
+  const humanEdit = lastHumanEdit(task as any, rawTaskActivities);
+  const editorLabel = humanEdit?.byUserId
+    ? (humanEdit.byUserId === user?.uid ? 'ti' : getUserDisplayName(humanEdit.byUserId))
+    : '';
+  const footerSummary = humanEdit
+    ? `Ndryshuar${editorLabel ? ` nga ${editorLabel}` : ''} · ${dayLabel(humanEdit.at)}`
     : createdDate
       ? `Krijuar${creatorLabel ? ` nga ${creatorLabel}` : ''} · ${dayLabel(createdDate)}`
       : `${assigneeName.split(' ')[0]}${endDate ? ` · ${dayLabel(endDate)}` : ''}`;
@@ -390,22 +468,25 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   // Typed drafts (title/description) are the only fields that do not save on
   // tap — the footer's Ruaj commits them; everything else already saved.
   const cleanedDraftDesc = descriptionText === '<p></p>' ? '' : descriptionText;
-  const dirty = (titleText.trim() !== '' && titleText.trim() !== task.title)
-    || (isEditingDescription && cleanedDraftDesc !== (task.description || ''));
+  const dirty = !!titlePatch(titleText, savedTitleRef.current)
+    || (isEditingDescription && cleanedDraftDesc !== savedDescriptionRef.current);
 
-  // "Ruaj" — commits any in-progress title/description edit and closes.
+  // "Ruaj" — commits any in-progress title/description edit and closes. Each
+  // commit skips a field that is not dirty (the blur save may already have
+  // written it an instant ago).
   const handleFooterSave = async () => {
-    const patch: any = {};
-    if (titleText.trim() && titleText.trim() !== task.title) patch.title = titleText.trim();
-    if (isEditingDescription && cleanedDraftDesc !== (task.description || '')) patch.description = cleanedDraftDesc;
-    if (Object.keys(patch).length > 0) await onUpdate(task.id, patch);
+    await commitTitle();
+    if (isEditingDescription) await commitDescription(descriptionText);
     onClose();
   };
 
-  // "⋯" → Kopjo lidhjen: the same deep link the notifications carry.
+  // "⋯" → Kopjo lidhjen: the same deep link the notifications carry. In the
+  // Capacitor app `window.location.origin` is `https://localhost`, so the link
+  // is built on the public web origin there.
   const handleCopyLink = async () => {
     setMenuOpen(false);
-    const url = `${window.location.origin}${taskDeepLink(task.id, task.projectId)}`;
+    const origin = shareOrigin(Capacitor.isNativePlatform(), window.location.origin, getApiBase() || window.location.origin);
+    const url = `${origin}${taskDeepLink(task.id, task.projectId)}`;
     try {
       await navigator.clipboard.writeText(url);
       showFlash('Lidhja u kopjua');
@@ -414,32 +495,31 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     }
   };
 
-  // "⋯" → Dupliko detyrën: a fresh Todo with the same plan (title, dates,
-  // people, labels, blockers, description) and NONE of the history — no
-  // recurrence/series, reminder, receipts, approval round or billed value.
+  // "⋯" → Dupliko detyrën: a fresh Todo with the same plan (title, people,
+  // labels, blockers, description, still-future dates) and NONE of the history
+  // — no recurrence/series, reminder, receipts, approval round or billed value.
+  // A duplicated subtask stays under the same parent. The assignee is notified
+  // exactly like a normal create (useCreateTask) — never the actor.
+  const canDuplicate = canDuplicateTask(task, { readOnly, canAssignTasks: !!permissions.canAssignTasks, uid: user?.uid });
   const handleDuplicate = async () => {
     setMenuOpen(false);
+    if (!canDuplicate) return;
     try {
-      const copy: any = {
-        title: `${task.title} (kopje)`,
-        description: task.description || undefined,
-        status: 'Todo',
-        priority: task.priority,
-        projectId: task.projectId || undefined,
-        customerId: task.customerId || undefined,
-        assignedToUserId: task.assignedToUserId || undefined,
-        startDate: task.startDate || undefined,
-        endDate: task.endDate || undefined,
-        labels: (task as any).labels?.length ? [...(task as any).labels] : undefined,
-        section: task.section || undefined,
-        estimatedHours: task.estimatedHours,
-        dependsOn: task.dependsOn?.length ? [...task.dependsOn] : undefined,
-        serviceLabel: task.serviceLabel,
-        serviceId: task.serviceId,
-        dueNotificationSent: false,
-      };
-      await taskMutation.create(copy);
+      const copy = duplicateTaskDraft(task);
+      const created: any = await taskMutation.create(copy as any);
       showFlash('Detyra u duplikua');
+      const assignee = copy.assignedToUserId as string | undefined;
+      if (assignee && assignee !== user?.uid) {
+        notificationMutation.create({
+          userId: assignee,
+          type: 'task_assigned',
+          title: 'Detyrë e Re e Caktuar',
+          message: `Ju u caktuat te detyra: ${copy.title}`,
+          isRead: false,
+          actionUrl: taskDeepLink(created?.id || task.id, task.projectId || undefined),
+          actionLabel: 'Shiko Detyrën',
+        }).catch(err => console.error('[Notifications] task_assigned (dupliko) dërgim dështoi:', err));
+      }
     } catch (err: any) {
       console.error('[Tasks] duplikimi dështoi:', err);
       toast({ title: 'Detyra nuk u duplikua', description: err?.message, variant: 'destructive' });
@@ -475,6 +555,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             statusOpen={statusOpen}
             onToggleStatus={() => { setAssignOpenRaw(false); setProjectOpenRaw(false); setMenuOpen(false); setStatusOpen(v => !v); }}
             onPickStatus={(s) => { setStatusOpen(false); changeStatus(s); }}
+            lockedStatuses={lockedStatuses}
+            lockNote={SERIES_LOCK_NOTE}
             scrolled={scrolled}
             activeWorkersCount={activeWorkers.length}
             onExpand={onExpand}
@@ -482,7 +564,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             onClose={onClose}
             menuOpen={menuOpen}
             onToggleMenu={() => { setStatusOpen(false); setMenuOpen(v => !v); }}
-            canDuplicate={!readOnly}
+            canDuplicate={canDuplicate}
             onDuplicate={handleDuplicate}
             onCopyLink={handleCopyLink}
             canDelete={canDeleteThis}
@@ -497,7 +579,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 value={titleText}
                 rows={1}
                 disabled={readOnly}
-                onChange={(e) => setTitleText(e.target.value)}
+                onChange={(e) => setTitleText(sanitizeTitleInput(e.target.value))}
                 onBlur={handleSaveTitle}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); }
@@ -542,6 +624,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               <div className={cardCls}>
                 <TaskDueDateRow
                   readOnly={readOnly}
+                  done={task.status === 'Done'}
                   endDate={endDate}
                   onDateChange={handleEndDateChange}
                   onTimeChange={handleEndTimeChange}
@@ -570,6 +653,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 <TaskRecurrenceSection
                   task={task}
                   readOnly={readOnly}
+                  canDriveSeries={canDriveSeries}
                   allTasks={allTasks}
                   onUpdate={onUpdate}
                   open={openRow === 'repeat'}
@@ -605,12 +689,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               setIsEditing={setIsEditingDescription}
               draft={descriptionText}
               setDraft={setDescriptionText}
-              onUpdate={onUpdate}
+              onCommit={commitDescription}
             />
 
             {/* AKTIVITETI (audit trail) */}
             <TaskActivityTab
-              taskId={task.id}
+              activities={rawTaskActivities}
               getUserDisplayName={getUserDisplayName}
               open={openRow === 'hist'}
               onToggle={() => toggleRow('hist')}
@@ -646,7 +730,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             )}
 
             {/* Time Tracking - with live timer + entry log */}
-            <TaskTimeTrackingSection task={task} allActiveTimeEntries={allActiveTimeEntries} />
+            <TaskTimeTrackingSection task={task} allActiveTimeEntries={allActiveTimeEntries} costRole={myCostRole} />
 
             {/* Subtasks */}
             {!task.parentTaskId && (

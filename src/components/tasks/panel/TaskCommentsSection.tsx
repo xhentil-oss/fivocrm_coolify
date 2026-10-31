@@ -94,8 +94,14 @@ const TaskCommentsSection: React.FC<TaskCommentsSectionProps> = ({
     }
   };
   const deleteComment = async (id: string) => {
-    await onDeleteComment?.(id);
-    setConfirmDeleteCommentId(null);
+    try {
+      await onDeleteComment?.(id);
+    } catch (err: any) {
+      console.error('[Tasks] fshirja e komentit dështoi:', err);
+      toast({ title: 'Komenti nuk u fshi', description: err?.message, variant: 'destructive' });
+    } finally {
+      setConfirmDeleteCommentId(null);
+    }
   };
 
   // "✓✓ Parë": every comment rendered here while the tab is visible is marked read

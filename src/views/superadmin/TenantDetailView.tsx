@@ -467,6 +467,16 @@ const TenantDetailView: React.FC = () => {
           Çfarë përfshin kontrata e këtij tenanti. Një modul i kyçur këtu nuk mund të hapet nga
           pronari; një modul mbi planin mbetet i mbyllur edhe i disponueshëm — plani e vendos tavanin.
         </p>
+        {biz.moduleSetup === 'pending' && (
+          <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 p-2.5 mb-3">
+            <ShieldAlert className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+            <p className="text-[11px] text-amber-900 dark:text-amber-200">
+              <strong>Tenant i vetë-regjistruar — modulet presin konfigurim.</strong> Pronari sheh një
+              workspace pa asnjë modul derisa t'i hapësh këtu (ose "Hap të gjitha"). Ruajtja e parë e
+              mbyll pritjen dhe e njofton pronarin me email.
+            </p>
+          </div>
+        )}
         <ModuleAccessEditor
           plan={planVal}
           locked={locked}

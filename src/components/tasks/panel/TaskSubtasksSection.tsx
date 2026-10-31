@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Calendar as CalendarIcon, Check, Plus, Trash2, Users } from 'lucide-react';
 import { useMutation } from '../../../hooks/useFirestore';
 import { useAuth } from '../../../contexts/AuthContext';
@@ -7,7 +7,7 @@ import { toast } from '../../../hooks/use-toast';
 import { completeTask } from '../../../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../../../lib/taskRecurrenceClaim';
 import { deleteTaskCascade } from '../../../lib/deleteCascade';
-import { reminderPatchForDeadline, parseTaskDate } from '../../../lib/taskReminders';
+import { reminderPatchForDeadline, parseTaskDate, setReminderPatch } from '../../../lib/taskReminders';
 import { taskDeepLink } from '../../../lib/deepLinks';
 import { taskCompletedNotifications } from '../../../lib/taskNotifications';
 import { Badge } from '../../ui/badge';
@@ -19,7 +19,8 @@ import { Checkbox } from '../../ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select';
 import type { Task } from '../../../types';
-import { getPriorityColor, getPriorityLabel, parseDate, rearmDeadlineAlerts, reopenPatchFor } from './panelShared';
+import { getPriorityColor, getPriorityLabel, rearmDeadlineAlerts, reopenPatchFor } from './panelShared';
+import { SERIES_LOCK_NOTE, canDriveTaskSeries, subtaskEditPatch, type SubtaskEditForm } from './panelLogic';
 
 interface TaskSubtasksSectionProps {
   task: Task;
@@ -50,8 +51,9 @@ const TaskSubtasksSection: React.FC<TaskSubtasksSectionProps> = ({
   const [showSubtaskForm, setShowSubtaskForm] = useState(false);
   const [editingSubtask, setEditingSubtask] = useState<string | null>(null);
 
-  // Subtask form state
-  const [subtaskForm, setSubtaskForm] = useState({
+  // Subtask form state (dates are nullable: the EDIT form shows "Pa datë" for
+  // a subtask without one and writes null — never today's date).
+  const [subtaskForm, setSubtaskForm] = useState<SubtaskEditForm>({
     title: '',
     description: '',
     status: 'Todo',
@@ -82,19 +84,23 @@ const TaskSubtasksSection: React.FC<TaskSubtasksSectionProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id]);
 
+  // In-flight guard: a second Enter/tap while the first create is pending used
+  // to create a second subtask (and a second notification).
+  const creatingRef = useRef(false);
   const handleCreateSubtask = async () => {
-    if (!subtaskForm.title.trim() || !user) return;
+    if (!subtaskForm.title.trim() || !user || creatingRef.current) return;
+    creatingRef.current = true;
 
     const subtaskAssignee = subtaskForm.assignedToUserId || user.uid;
     let createdSubtask: unknown;
     try {
       createdSubtask = await taskMutation.create({
-        title: subtaskForm.title,
+        title: subtaskForm.title.trim(),
         description: subtaskForm.description,
         status: subtaskForm.status,
         priority: subtaskForm.priority,
-        startDate: subtaskForm.startDate,
-        endDate: subtaskForm.endDate,
+        startDate: subtaskForm.startDate ?? undefined,
+        endDate: subtaskForm.endDate ?? undefined,
         assignedToUserId: subtaskAssignee,
         projectId: task.projectId,
         parentTaskId: task.id,
@@ -103,15 +109,18 @@ const TaskSubtasksSection: React.FC<TaskSubtasksSectionProps> = ({
         // task lands in the parent's team/business, not the viewer's active context.
         teamId: (task as any).teamId,
         businessId: (task as any).businessId,
-        // …and the client it serves: `customerId` is the portal-visibility switch
-        // (rules + portal query key on it), so a subtask without it was invisible
-        // to the client and its "Dukshëm për klientin" checkbox never rendered.
-        ...((task as any).customerId ? { customerId: (task as any).customerId } : {}),
+        // NEVER the client: `customerId` is the portal-visibility switch, and the
+        // portal never shows subtasks — on a subtask it only published the whole
+        // document (description, attachments, value) to the client. Explicit null
+        // so the mutation layer does not derive it from the project either.
+        customerId: null,
       } as any);
     } catch (err: any) {
       console.error('[Tasks] krijimi i nën-detyrës dështoi:', err);
       toast({ title: 'Nën-detyra nuk u krijua', description: err?.message, variant: 'destructive' });
       return;
+    } finally {
+      creatingRef.current = false;
     }
 
     // Notify assigned user for subtask
@@ -137,6 +146,15 @@ const TaskSubtasksSection: React.FC<TaskSubtasksSectionProps> = ({
     try {
       const sub = (subtasks || []).find(t => t.id === subtaskId);
       let data = { ...rawData };
+      // Same law as the main pill: a RECURRING subtask's next-cycle claim /
+      // re-open re-arm is rules-restricted to its assignee, creator or a
+      // manager — refuse up front instead of a permission error mid-flow.
+      if (sub?.isRecurring && data.status && data.status !== sub.status
+          && !canDriveTaskSeries(sub, { uid: user?.uid, isAdmin: !!permissions.isAdmin, isManager: !!permissions.isManager })
+          && (data.status === 'Done' || sub.status === 'Done')) {
+        toast({ title: 'Seri periodike', description: SERIES_LOCK_NOTE });
+        return;
+      }
       // A moved deadline follows the main panel's law: re-arm the due/overdue
       // alerts and carry a RELATIVE reminder along (reminderPatchForDeadline).
       if (sub && data.endDate instanceof Date) {
@@ -146,6 +164,9 @@ const TaskSubtasksSection: React.FC<TaskSubtasksSectionProps> = ({
         } else {
           delete data.endDate;
         }
+      } else if (sub && 'endDate' in data && data.endDate === null) {
+        // A cleared deadline: a RELATIVE reminder has nothing to resolve against.
+        if (sub.reminderOffsetMinutes != null) data = { ...data, ...setReminderPatch(sub, null) };
       }
       const prevAssignee = sub?.assignedToUserId;
       // Without canAssignTasks a subtask may only be handed to yourself.
@@ -252,9 +273,10 @@ const TaskSubtasksSection: React.FC<TaskSubtasksSectionProps> = ({
       description: subtask.description || '',
       status: subtask.status,
       priority: subtask.priority || 'medium',
-      startDate: parseDate(subtask.startDate),
-      endDate: parseDate(subtask.endDate),
-      assignedToUserId: subtask.assignedToUserId,
+      // No date → null (shown as "Pa datë"), never today.
+      startDate: parseTaskDate(subtask.startDate),
+      endDate: parseTaskDate(subtask.endDate),
+      assignedToUserId: subtask.assignedToUserId || '',
     });
   };
 
@@ -438,14 +460,14 @@ const TaskSubtasksSection: React.FC<TaskSubtasksSectionProps> = ({
                       <PopoverTrigger asChild>
                         <Button variant="outline" size="sm" className="justify-start text-sm">
                           <CalendarIcon className="w-3 h-3 mr-1" />
-                          {subtaskForm.startDate.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}
+                          {subtaskForm.startDate ? subtaskForm.startDate.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' }) : 'Fillimi: pa datë'}
                         </Button>
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-0">
                         <Calendar
                           mode="single"
-                          selected={subtaskForm.startDate}
-                          onSelect={(date) => date && setSubtaskForm({ ...subtaskForm, startDate: date })}
+                          selected={subtaskForm.startDate ?? undefined}
+                          onSelect={(date) => setSubtaskForm({ ...subtaskForm, startDate: date ?? null })}
                         />
                       </PopoverContent>
                     </Popover>
@@ -453,14 +475,14 @@ const TaskSubtasksSection: React.FC<TaskSubtasksSectionProps> = ({
                       <PopoverTrigger asChild>
                         <Button variant="outline" size="sm" className="justify-start text-sm">
                           <CalendarIcon className="w-3 h-3 mr-1" />
-                          {subtaskForm.endDate.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}
+                          {subtaskForm.endDate ? subtaskForm.endDate.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' }) : 'Afati: pa datë'}
                         </Button>
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-0">
                         <Calendar
                           mode="single"
-                          selected={subtaskForm.endDate}
-                          onSelect={(date) => date && setSubtaskForm({ ...subtaskForm, endDate: date })}
+                          selected={subtaskForm.endDate ?? undefined}
+                          onSelect={(date) => setSubtaskForm({ ...subtaskForm, endDate: date ?? null })}
                         />
                       </PopoverContent>
                     </Popover>
@@ -504,15 +526,10 @@ const TaskSubtasksSection: React.FC<TaskSubtasksSectionProps> = ({
                       size="sm" 
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleUpdateSubtask(subtask.id, {
-                          title: subtaskForm.title,
-                          description: subtaskForm.description,
-                          status: subtaskForm.status,
-                          priority: subtaskForm.priority,
-                          startDate: subtaskForm.startDate,
-                          endDate: subtaskForm.endDate,
-                          assignedToUserId: subtaskForm.assignedToUserId,
-                        });
+                        // Only what changed (a title edit on an undated subtask
+                        // writes no dates; cleared date/assignee → null).
+                        const patch = subtaskEditPatch(subtask, subtaskForm);
+                        if (Object.keys(patch).length > 0) handleUpdateSubtask(subtask.id, patch);
                         setEditingSubtask(null);
                       }}
                       disabled={!subtaskForm.title.trim()}

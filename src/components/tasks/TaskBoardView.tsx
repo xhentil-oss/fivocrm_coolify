@@ -6,7 +6,8 @@ import { Card } from '../ui/card';
 import { Badge } from '../ui/badge';
 import type { Task } from '../../types';
 import { KanbanColumn, SortableTaskCard } from './taskDnd';
-import { TASK_BOARD_COLUMNS, formatDateCompact, isOverdueDate, taskPropsEqual } from './taskListUtils';
+import { isTaskOverdue, taskDeadline } from '../../lib/taskDue';
+import { TASK_BOARD_COLUMNS, formatDateCompact, taskPropsEqual } from './taskListUtils';
 
 interface TaskBoardCardProps {
   task: Task;
@@ -32,8 +33,8 @@ const TaskBoardCard = React.memo<TaskBoardCardProps>(({
   assigneeName,
   onSelect,
 }) => {
-  const dateInfo = formatDateCompact(new Date(task.endDate as any), task.status);
-  const isOverdue = isOverdueDate(task.endDate) && task.status !== 'Done';
+  const dateInfo = formatDateCompact(taskDeadline(task), task.status);
+  const isOverdue = isTaskOverdue(task);
   const subtaskInfo = subtaskTotal !== undefined ? { done: subtaskDone ?? 0, total: subtaskTotal } : undefined;
   const priorityBorder = task.priority === 'urgent' ? 'border-l-red-500' : task.priority === 'high' ? 'border-l-orange-500' : task.priority === 'medium' ? 'border-l-blue-400' : 'border-l-gray-300';
 

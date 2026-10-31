@@ -22,6 +22,7 @@ import waInboundHandler from './_waInbound.js';
 import contactEmailHandler from './_contact-email.js';
 import aiReplyHandler from './_ai-reply.js';
 import nazmijeHandler from './_nazmije.js';
+import salesAgentHandler from './_salesAgent.js';
 import reportContentHandler from './_report-content.js';
 
 /**
@@ -81,6 +82,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('contact-email')) type = 'contact-email';
     else if (req.url.includes('ai-reply')) type = 'ai-reply';
     else if (req.url.includes('/api/nazmije')) type = 'nazmije';
+    else if (req.url.includes('/api/sales-agent')) type = 'sales-agent';
     else if (req.url.includes('report-content')) type = 'report-content';
   }
 
@@ -88,6 +90,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     case 'report-content':
       // Chat "Raporto": stores the report server-side, notifies managers, emails the platform.
       return reportContentHandler(req, res);
+    case 'sales-agent':
+      // Ana, the virtual sales agent: prospecting searches, prospect registration,
+      // handoff/resume, simulation, drafts, enable/disable (api/_salesAgent.ts).
+      return salesAgentHandler(req, res);
     case 'nazmije':
       // Nazmije, the team's virtual secretary: replies to a DM / @mention, and the
       // Admin's enable/disable. Every row she sends is written here (api/_nazmije.ts).

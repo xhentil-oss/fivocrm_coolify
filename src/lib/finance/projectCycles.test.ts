@@ -23,8 +23,10 @@ import {
   resolveCycleAnchorDay,
   seedWorkPeriodKey,
   shiftByWorkCycles,
+  shiftTaskDatesByWorkCycles,
   taskPeriodsBehind,
   workCycleBlockReason,
+  workCycleClaimUnfinished,
   workCycleTaskAction,
   workPeriodsSince,
   zonedMonthValue,
@@ -200,6 +202,53 @@ describe('work cycle', () => {
     expect(workCycleTaskAction({ status: 'In Progress' })).toBe('carry');
     expect(workCycleTaskAction({ status: 'Todo' })).toBe('carry');
     expect(workCycleTaskAction({ status: 'Done', isRecurring: true })).toBe('own-series');
+  });
+
+  it('leaves the subtasks of a recurring tip with their occurrence, and skips rows already cycled into this period', () => {
+    const tip = { id: 'tip', status: 'Done', isRecurring: true };
+    // A Done subtask of a Done recurring tip is NOT reopened under its Done parent.
+    expect(workCycleTaskAction({ status: 'Done', parentTaskId: 'tip' }, { parent: tip })).toBe('parent-own-series');
+    // A subtask of an ordinary task follows the normal rule (its parent reopens too).
+    expect(workCycleTaskAction({ status: 'Done', parentTaskId: 'p' }, { parent: { id: 'p', status: 'Done' } })).toBe('reopen');
+    expect(workCycleTaskAction({ status: 'Done', parentTaskId: 'gone' }, { parent: null })).toBe('reopen');
+    // Idempotent per period: a re-run after a half-applied run writes nothing twice.
+    expect(workCycleTaskAction({ status: 'Todo', workCycleAppliedPeriodKey: '2026-10' }, { periodKey: '2026-10' })).toBe('applied');
+    expect(workCycleTaskAction({ status: 'Todo', workCycleAppliedPeriodKey: '2026-09' }, { periodKey: '2026-10' })).toBe('carry');
+  });
+
+  it('a claimed period whose task writes never completed is resumed, not skipped', () => {
+    const now = at('2026-10-20');
+    const base = { workCycle: 'monthly', status: 'Active', workCycleLastPeriodKey: '2026-10' };
+    // Claimed and applied (or claimed by the job before the field existed): done.
+    expect(workCycleBlockReason({ ...base, workCycleTasksAppliedKey: '2026-10' }, now)).toBe('already-cycled');
+    expect(workCycleBlockReason(base, now)).toBe('already-cycled');
+    // Claimed, tasks still stamped for September: the run died half-way.
+    expect(workCycleClaimUnfinished({ ...base, workCycleTasksAppliedKey: '2026-09' }, '2026-10')).toBe(true);
+    expect(workCycleClaimUnfinished({ ...base, workCycleTasksAppliedKey: '' }, '2026-10')).toBe(true);
+    expect(workCycleBlockReason({ ...base, workCycleTasksAppliedKey: '2026-09' }, now)).toBeNull();
+    expect(workCycleClaimUnfinished({ ...base, workCycleLastPeriodKey: '2026-09', workCycleTasksAppliedKey: '2026-08' }, '2026-10')).toBe(false);
+  });
+
+  it('C19: shifts whichever date field the task actually has, so a dueDate-only task is re-dated instead of carried forever', () => {
+    const now = at('2026-10-02');
+    const legacy = { status: 'Todo', dueDate: at('2026-09-15') };
+    expect(taskPeriodsBehind(legacy, 'monthly', now)).toBe(1);
+    const patch = shiftTaskDatesByWorkCycles(legacy, 'monthly', 1);
+    expect(patch.endDate).toBeUndefined();
+    expect(patch.startDate).toBeUndefined();
+    expect(day(patch.dueDate!)).toBe('2026-10-15');
+    expect(patch.cycleAnchorDueDay).toBe(15);
+    // Once re-dated it is this period's work: not behind, not carried again.
+    expect(taskPeriodsBehind({ ...legacy, ...patch }, 'monthly', now)).toBe(0);
+    // Both present: each moves on its own anchor; nothing is invented.
+    const both = shiftTaskDatesByWorkCycles({ startDate: at('2026-01-31'), endDate: at('2026-01-31'), dueDate: at('2026-01-31') }, 'monthly', 1);
+    expect(day(both.startDate!)).toBe('2026-02-28');
+    expect(day(both.endDate!)).toBe('2026-02-28');
+    expect(day(both.dueDate!)).toBe('2026-02-28');
+    expect(both).toMatchObject({ cycleAnchorStartDay: 31, cycleAnchorEndDay: 31, cycleAnchorDueDay: 31 });
+    expect(shiftTaskDatesByWorkCycles({ endDate: at('2026-09-15') }, 'weekly', 2).cycleAnchorEndDay).toBeUndefined();
+    expect(shiftTaskDatesByWorkCycles(legacy, 'monthly', 0)).toEqual({});
+    expect(shiftTaskDatesByWorkCycles({}, 'monthly', 1)).toEqual({});
   });
 
   it('moves dates by the number of periods that passed, month-end clamped', () => {

@@ -392,7 +392,11 @@ export interface WorkCycleCandidate {
   isRecurring?: boolean;
   recurringFrequency?: unknown;
   status?: string;
+  /** The period CLAIMED (server-owned, written first, in a transaction). */
   workCycleLastPeriodKey?: string | null;
+  /** The period whose task writes COMPLETED (server-owned, written last). A
+   *  claim without it is a run that died half-way and is resumed, not skipped. */
+  workCycleTasksAppliedKey?: string | null;
   lastCompletedAt?: unknown;
   nextRecurringDate?: unknown;
 }
@@ -514,34 +518,72 @@ export function workCycleBlockReason(project: WorkCycleCandidate, now: Date): Wo
   if (!project.workCycleLastPeriodKey) {
     return seedWorkPeriodKey(cycle, project, now) === workPeriodKey(cycle, now) ? 'seeded' : null;
   }
-  if (project.workCycleLastPeriodKey === workPeriodKey(cycle, now)) return 'already-cycled';
+  if (project.workCycleLastPeriodKey === workPeriodKey(cycle, now)) {
+    return workCycleClaimUnfinished(project, workPeriodKey(cycle, now)) ? null : 'already-cycled';
+  }
   return null;
+}
+
+/**
+ * The period was CLAIMED but its task writes never completed (the job died
+ * between the claim and the last write): `workCycleTasksAppliedKey` is a
+ * string that still names an OLDER period. A project that never carried the
+ * field (claimed by the job before it existed) is taken as applied — the old
+ * job wrote everything in one go.
+ */
+export function workCycleClaimUnfinished(project: WorkCycleCandidate, periodKey: string): boolean {
+  if (project.workCycleLastPeriodKey !== periodKey) return false;
+  const applied = project.workCycleTasksAppliedKey;
+  return typeof applied === 'string' && applied !== periodKey;
 }
 
 export interface WorkCycleTask {
   id?: string;
   status?: string;
   isRecurring?: boolean;
+  parentTaskId?: string | null;
   startDate?: unknown;
   endDate?: unknown;
   dueDate?: unknown;
   reminderOffsetMinutes?: number | null;
+  /** Day-of-month anchors kept across month clamps (server-written). */
+  cycleAnchorStartDay?: number | null;
+  cycleAnchorEndDay?: number | null;
+  cycleAnchorDueDay?: number | null;
+  /** The last work period this task was reopened/carried INTO (server-written):
+   *  the per-task idempotency token of the cycle. */
+  workCycleAppliedPeriodKey?: string | null;
 }
 
 /**
  * What a new work period does to one task:
- *   · 'reopen'     — Done last cycle → Todo, dates moved into the new cycle;
- *   · 'carry'      — not finished → stays open (status kept), dates moved into
- *                    the new cycle and marked "mbartur" — an unfinished task
- *                    never blocks the next month (it used to: one open task and
- *                    the cycle never restarted, silently);
- *   · 'own-series' — a recurring TASK has its own engine (seriesId, after
- *                    completion); reopening it here would fork its series.
+ *   · 'reopen'            — Done last cycle → Todo, dates moved into the new cycle;
+ *   · 'carry'             — not finished → stays open (status kept), dates moved
+ *                           into the new cycle and marked "mbartur" — an
+ *                           unfinished task never blocks the next month (it used
+ *                           to: one open task and the cycle never restarted,
+ *                           silently);
+ *   · 'own-series'        — a recurring TASK has its own engine (seriesId, after
+ *                           completion); reopening it here would fork its series;
+ *   · 'parent-own-series' — a SUBTASK of such a tip: it belongs to the
+ *                           occurrence it was done under. Reopening it put a Todo
+ *                           subtask under a Done parent whose series had already
+ *                           moved on to a new occurrence (which has its own
+ *                           subtasks or none) — "Done → Todo" is applied to a
+ *                           parent and its subtasks together, never to the
+ *                           subtasks alone;
+ *   · 'applied'           — already reopened/carried into THIS period (a re-run
+ *                           after a half-applied run): nothing to write again.
  */
-export type WorkCycleTaskAction = 'reopen' | 'carry' | 'own-series';
+export type WorkCycleTaskAction = 'reopen' | 'carry' | 'own-series' | 'parent-own-series' | 'applied';
 
-export function workCycleTaskAction(task: WorkCycleTask): WorkCycleTaskAction {
+export function workCycleTaskAction(
+  task: WorkCycleTask,
+  opts: { parent?: WorkCycleTask | null; periodKey?: string | null } = {},
+): WorkCycleTaskAction {
   if (task.isRecurring) return 'own-series';
+  if (task.parentTaskId && opts.parent?.isRecurring) return 'parent-own-series';
+  if (opts.periodKey && task.workCycleAppliedPeriodKey === opts.periodKey) return 'applied';
   return task.status === 'Done' ? 'reopen' : 'carry';
 }
 
@@ -584,4 +626,41 @@ export function taskPeriodsBehind(task: WorkCycleTask, cycle: WorkCycle, now: Da
   if (ref >= workPeriodStart(cycle, now)) return 0;
   const n = workPeriodsSince(cycle, workPeriodKey(cycle, ref), now);
   return n && n > 0 ? n : 0;
+}
+
+/** The dates (and month anchors) a cycled task is rewritten with. */
+export interface WorkCycleDatePatch {
+  startDate?: Date;
+  endDate?: Date;
+  dueDate?: Date;
+  cycleAnchorStartDay?: number;
+  cycleAnchorEndDay?: number;
+  cycleAnchorDueDay?: number;
+}
+
+/**
+ * Every date field the task ACTUALLY HAS, moved by `periods` work cycles — each
+ * on its own month anchor. `taskPeriodsBehind` reads `endDate ‖ dueDate ‖
+ * startDate`, but the job used to rewrite `dueDate` only as a copy of a moved
+ * `endDate`: a legacy task that carries only `dueDate` was therefore found
+ * "behind" every period, carried again (`carriedOverCount` + 1) and never
+ * re-dated. Nothing is invented: a field the task does not have stays absent.
+ * `periods <= 0` → `{}` (a task already in the current period is not moved).
+ */
+export function shiftTaskDatesByWorkCycles(task: WorkCycleTask, cycle: WorkCycle, periods: number): WorkCycleDatePatch {
+  if (periods <= 0) return {};
+  const out: WorkCycleDatePatch = {};
+  const monthly = cycle === 'monthly';
+  const move = (value: unknown, storedAnchor: number | null | undefined): { date: Date; anchor: number | null } | null => {
+    const anchor = monthly ? resolveCycleAnchorDay(value, storedAnchor) : null;
+    const date = shiftByWorkCycles(value, cycle, periods, anchor);
+    return date ? { date, anchor } : null;
+  };
+  const start = move(task.startDate, task.cycleAnchorStartDay);
+  if (start) { out.startDate = start.date; if (start.anchor) out.cycleAnchorStartDay = start.anchor; }
+  const end = move(task.endDate, task.cycleAnchorEndDay);
+  if (end) { out.endDate = end.date; if (end.anchor) out.cycleAnchorEndDay = end.anchor; }
+  const due = move(task.dueDate, task.cycleAnchorDueDay);
+  if (due) { out.dueDate = due.date; if (due.anchor) out.cycleAnchorDueDay = due.anchor; }
+  return out;
 }

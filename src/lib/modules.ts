@@ -125,6 +125,18 @@ export const MODULES: ModuleDef[] = [
     defaultOff: true,
     group: 'Shitje',
   },
+  {
+    id: 'sales-agent',
+    path: '/app/sales-agent',
+    label: 'Agjentja e shitjeve',
+    description: 'Ana: gjen prospekte në Google Maps, u përgjigjet klientëve me AI, i kualifikon dhe ia dorëzon ekipit.',
+    permissionKey: 'canAccessSalesAgent',
+    minPlan: 'business',
+    optional: true,
+    // AI + Places have real cost — stays off until the tenant switches it on.
+    defaultOff: true,
+    group: 'Shitje',
+  },
   { id: 'price-calculator', path: '/app/price-calculator', label: 'Kalkulatori', description: 'Preventiva të çmimeve me paketa dhe zbritje.', permissionKey: 'canAccessServices', minPlan: 'pro', optional: true, group: 'Shitje' },
   { id: 'contracts', path: '/app/contracts', label: 'Kontratat', description: 'Kontrata me nënshkrim dhe gjurmë auditi.', permissionKey: 'canAccessInvoices', minPlan: 'pro', optional: true, group: 'Shitje' },
 
@@ -211,6 +223,25 @@ export function disabledPathsFor(enabledPaths: Iterable<string>): string[] {
 export function lockedPathsFor(availablePaths: Iterable<string>): string[] {
   return optionalPathsExcept(availablePaths);
 }
+
+/**
+ * The entitlement a SELF-SERVE signup starts with: every optional module LOCKED.
+ *
+ * Which modules a tenant gets is the platform's decision (the super-admin's
+ * `ModuleAccessEditor`), not something a signup form can grant itself — and the
+ * `trial` plan ranks above every tier precisely so a trial can evaluate whatever
+ * the contract includes, which made the plan gate useless as a default. Before
+ * this, a fresh signup saw the whole product (everything but `defaultOff`) until
+ * someone noticed. Now the workspace is born bare, flagged `moduleSetup:
+ * 'pending'`, and the super-admin opens what was agreed; `set-modules` clears the
+ * flag. A tenant the console creates is configured at creation and never pending.
+ */
+export function signupLockedModulePaths(): string[] {
+  return optionalPathsExcept([]);
+}
+
+/** `businesses.moduleSetup`: has the platform configured this tenant's modules yet? */
+export type ModuleSetupState = 'pending' | 'done';
 
 /** Does `plan` include a module requiring at least `minPlan`? */
 export function planIncludes(plan: PlanKey | string | undefined, minPlan: PlanKey): boolean {

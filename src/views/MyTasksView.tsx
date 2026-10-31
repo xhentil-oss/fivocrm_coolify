@@ -16,13 +16,15 @@ import { Input } from '../components/ui/input';
 import { approvalBadge } from '../lib/taskApproval';
 import TaskDetailPanel from '../components/TaskDetailPanel';
 import { openDailyReport } from '../components/DailyReportPopup';
-import { getTodayString, isReportingDay } from '../components/DailyReportForm';
+import { isReportingDay } from '../components/DailyReportForm';
+import { useTodayKey } from '../hooks/useTodayKey';
 import { completeTask, reopenTaskPatch } from '../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { taskCompletedNotifications } from '../lib/taskNotifications';
-import { reminderPatchForDeadline } from '../lib/taskReminders';
+import { reminderPatchForDeadline, setReminderPatch } from '../lib/taskReminders';
 import { taskDateMs } from '../lib/taskSort';
 import { deleteTaskCascade } from '../lib/deleteCascade';
+import { seriesActionBlocked, isPermissionDenied, SERIES_DENIED_TITLE, SERIES_DENIED_MESSAGE } from '../lib/taskSeriesAccess';
 import {
   MY_TASK_BUCKETS, buildMyTasks, deadProjectIdsOf, myTaskIds, snoozeToTomorrowDate,
   quickAddDates, tiraneDayValue, dueLabel, type MyTaskBucket,
@@ -63,7 +65,12 @@ const MyTasksView: React.FC = () => {
     skipTeamFilter: true,
   });
   const { data: projects, loading: projectsLoading } = useCollection<Project>('projects');
-  const today = getTodayString();
+  // Start of today's Tirane day; changes at the Tirane midnight so the summary,
+  // the buckets, the report card and the frog follow the day — not the one the
+  // page was opened on. `YYYY-MM-DD` in Tirane (the cron's day), not the
+  // machine's: `getTodayString` / `toLocaleDateString('sv')` were local.
+  const todayKey = useTodayKey();
+  const today = useMemo(() => tiraneDayValue(0, todayKey), [todayKey]);
   const { data: todayReports } = useCollection<DailyReport>('dailyReports', {
     where: [
       { field: 'userId', operator: '==', value: user?.uid || '__never__' },
@@ -100,16 +107,19 @@ const MyTasksView: React.FC = () => {
     return m;
   }, [projects]);
 
+  // `now` = the day key: every comparison inside is a Tirane CALENDAR-day one
+  // (bucket, "completed today"), so the day's first instant answers exactly as
+  // the current one — and the memo re-runs when the day changes.
   const view = useMemo(
-    () => buildMyTasks(allTasks, { myIds, deadProjectIds, includeCollaborations: showCollaborations }),
-    [allTasks, myIds, deadProjectIds, showCollaborations],
+    () => buildMyTasks(allTasks, { myIds, deadProjectIds, includeCollaborations: showCollaborations, now: todayKey }),
+    [allTasks, myIds, deadProjectIds, showCollaborations, todayKey],
   );
 
   const reportSubmitted = (todayReports?.length || 0) > 0;
   const reportingDay = isReportingDay(new Date());
   const frog = useMemo(
-    () => focusDocs?.find(f => f.date === new Date().toLocaleDateString('sv')),
-    [focusDocs],
+    () => focusDocs?.find(f => f.date === today),
+    [focusDocs, today],
   );
 
   const selectedTask = selectedId ? allTasks.find(t => t.id === selectedId) || null : null;
@@ -124,20 +134,37 @@ const MyTasksView: React.FC = () => {
     return next;
   });
 
+  // Closing / re-opening a RECURRING task writes the engine flag
+  // `nextCycleCreated`, which the rules let only the assignee, the creator,
+  // Admin/Manager or a super-admin change — a collaboration row on a
+  // colleague's series is read-only here (src/lib/taskSeriesAccess.ts).
+  const seriesActor = useMemo(() => ({
+    uid: user?.uid, email: user?.email,
+    isAdmin: permissions.isAdmin, isManager: permissions.isManager,
+    isOwner: permissions.isOwner, isSuperAdmin: permissions.isSuperAdmin,
+  }), [user, permissions.isAdmin, permissions.isManager, permissions.isOwner, permissions.isSuperAdmin]);
+  const toastSeriesDenied = useCallback(
+    () => toast({ title: SERIES_DENIED_TITLE, description: SERIES_DENIED_MESSAGE, variant: 'destructive' }),
+    [toast],
+  );
+
   // ── Reopen (Undo + "Përfunduar sot") ─────────────────────────────────────
   const reopen = useCallback(async (task: Task, status: Task['status'] = 'Todo') => {
+    if (seriesActionBlocked(task, seriesActor)) { toastSeriesDenied(); return; }
     try {
       // The snapshot may predate the completion — the patch is computed for a Done task.
       const doneTask = { ...task, status: 'Done' } as Task;
       await taskMutation.update(task.id, reopenTaskPatch(doneTask, status === 'Done' ? 'Todo' : status, rawTasks || []));
     } catch (err: any) {
-      toast({ title: 'Detyra nuk u rihap', description: err?.message, variant: 'destructive' });
+      if (isPermissionDenied(err)) toastSeriesDenied();
+      else toast({ title: 'Detyra nuk u rihap', description: err?.message, variant: 'destructive' });
     }
-  }, [taskMutation, rawTasks, toast]);
+  }, [taskMutation, rawTasks, toast, seriesActor, toastSeriesDenied]);
 
   // ── Complete ─────────────────────────────────────────────────────────────
   const handleComplete = async (task: Task) => {
     if (!canEdit || busyIds.has(task.id)) return;
+    if (seriesActionBlocked(task, seriesActor)) { toastSeriesDenied(); return; }
     const previousStatus = task.status;
     setBusy(task.id, true);
     try {
@@ -179,7 +206,10 @@ const MyTasksView: React.FC = () => {
         action: undo,
       });
     } catch (err: any) {
-      toast({ title: 'Detyra nuk u mbyll', description: err?.message, variant: 'destructive' });
+      // The claim (or the status write) was refused by the rules — nothing
+      // closed, so name the reason instead of a bare error.
+      if (isPermissionDenied(err)) toastSeriesDenied();
+      else toast({ title: 'Detyra nuk u mbyll', description: err?.message, variant: 'destructive' });
     } finally {
       setBusy(task.id, false);
     }
@@ -191,23 +221,38 @@ const MyTasksView: React.FC = () => {
     const nd = snoozeToTomorrowDate(task);
     const prevEndMs = taskDateMs(task.endDate);
     const startMs = taskDateMs(task.startDate);
+    // A relative "Më kujto" follows the deadline (and is re-armed).
+    const reminderPatch = reminderPatchForDeadline(task, nd);
     const patch: Partial<Task> = {
       endDate: nd,
       // Re-arm the deadline alerts for the new day (same as every other deadline edit).
       dueNotificationSent: false,
       overdueNotificationSent: false,
-      // A relative "Më kujto" follows the deadline.
-      ...reminderPatchForDeadline(task, nd),
+      ...reminderPatch,
       ...(startMs !== null && startMs > nd.getTime() ? { startDate: nd } : {}),
     };
     setBusy(task.id, true);
     try {
       await taskMutation.update(task.id, patch);
+      // Undo puts the relative reminder back on the OLD deadline through the one
+      // reminder writer (`setReminderPatch` — it owns every reminder field,
+      // the skip marks included), then carries the previous DELIVERY marks
+      // back over it: a reminder the cron had already sent (`reminderSentAt`)
+      // or consumed (`reminderSkippedAt`) must not be re-armed by an undo, or
+      // it fires a second time. (`reminderPatchForDeadline` re-derived it with
+      // `reminderSentAt: null` before.)
+      const undoReminder: Partial<Task> = Object.keys(reminderPatch).length > 0 && prevEndMs !== null
+        ? {
+          ...setReminderPatch({ endDate: new Date(prevEndMs) } as Task, { offsetMinutes: task.reminderOffsetMinutes as number }, task.reminderSetByUserId),
+          ...(task.reminderSentAt ? { reminderSentAt: task.reminderSentAt } : {}),
+          ...(task.reminderSkippedAt ? { reminderSkippedAt: task.reminderSkippedAt, reminderSkippedReason: task.reminderSkippedReason ?? null } : {}),
+        }
+        : {};
       const undoPatch: Partial<Task> = {
         endDate: (prevEndMs === null ? null : new Date(prevEndMs)) as any,
         dueNotificationSent: !!task.dueNotificationSent,
         overdueNotificationSent: !!task.overdueNotificationSent,
-        ...(prevEndMs !== null ? reminderPatchForDeadline({ ...task, ...patch } as Task, new Date(prevEndMs)) : {}),
+        ...undoReminder,
         ...('startDate' in patch ? { startDate: task.startDate } : {}),
       };
       toast({
@@ -542,7 +587,8 @@ const MyTasksView: React.FC = () => {
               bottom-0 left-0 right-0 h-[88dvh] rounded-t-[22px] border-t
               sm:inset-y-0 sm:left-auto sm:right-0 sm:h-full sm:rounded-none sm:border-t-0 sm:border-l
               ${panelExpanded ? 'sm:w-full lg:w-[min(100%,1100px)]' : 'sm:w-[min(100%,640px)]'}`}
-            style={{ paddingBottom: 'var(--safe-area-bottom)' }}
+            // The bottom safe-area belongs to the panel's footer (TaskPanelFooter);
+            // padding it here too stacked the inset twice on the mobile sheet.
           >
             <div className="hidden sm:block" style={{ height: 'var(--safe-area-top)' }} />
             <TaskDetailPanel

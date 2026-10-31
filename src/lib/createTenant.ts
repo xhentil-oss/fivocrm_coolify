@@ -1,7 +1,7 @@
 import { doc, collection, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from './firebase';
 import { setGlobalTeamId, setGlobalBusinessId } from '../hooks/useFirestore';
-import { defaultDisabledModulePaths } from './modules';
+import { defaultDisabledModulePaths, signupLockedModulePaths } from './modules';
 import { syncTenantClaims } from './tenantClaims';
 import { beginTenantProvisioning, endTenantProvisioning } from './tenantProvisioning';
 
@@ -58,9 +58,20 @@ async function provisionTenant({ uid, companyName, ownerName, ownerEmail }: Crea
     plan: 'trial',
     status: 'trialing',
     trialEndsAt,
+    // Which modules this tenant gets is the PLATFORM's call, not the signup form's:
+    // every optional module starts LOCKED (`signupLockedModulePaths`) and the tenant
+    // is flagged `moduleSetup: 'pending'` so the super-admin console lists it as
+    // work to do; `/api/platform-admin` (`set-modules`) opens the agreed set and
+    // clears the flag (the owner cannot — rules). Until then the owner sees a bare
+    // workspace with a banner saying why. The `trial` plan would otherwise have
+    // shown everything: it ranks above every tier on purpose.
+    lockedModules: signupLockedModulePaths(),
+    moduleSetup: 'pending',
+    moduleSetupRequestedAt: now,
     // Modules flagged defaultOff in the registry start disabled (landing pages are
     // agency-only; the shop is for retailers, not the service agencies that are the
-    // common case). The owner turns them on from Cilësimet → Modulet.
+    // common case). The owner turns them on from Cilësimet → Modulet — once the
+    // platform has unlocked them.
     disabledModules: defaultDisabledModulePaths(),
     createdAt: now,
     updatedAt: now,
@@ -90,7 +101,7 @@ async function provisionTenant({ uid, companyName, ownerName, ownerEmail }: Crea
     canAccessInvoices: true, canAccessReports: true, canAccessSettings: true,
     canAccessWhatsapp: true, canAccessGoals: true, canAccessTeams: true,
     canAccessChat: true, canAccessCustomers: true, canAccessServices: true,
-    canAccessProducts: true, canAccessHosting: true, canAccessExpenses: true, canAccessProfile: true,
+    canAccessProducts: true, canAccessHosting: true, canAccessSalesAgent: true, canAccessExpenses: true, canAccessProfile: true,
     createdByUserId: uid,
     createdAt: now,
     updatedAt: now,

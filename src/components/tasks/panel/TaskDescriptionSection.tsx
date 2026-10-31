@@ -12,7 +12,10 @@ interface TaskDescriptionSectionProps {
   setIsEditing: (v: boolean) => void;
   draft: string;
   setDraft: (v: string) => void;
-  onUpdate: (id: string, data: any) => Promise<any>;
+  /** The panel's ONE description write: skips a value it already wrote, so the
+   *  editor's blur (a click blurs it first) and this card's Ruaj never write
+   *  the same HTML twice. */
+  onCommit: (html: string) => Promise<void>;
 }
 
 /** "Përshkrimi" — eyebrow + a card that reads like the design's textarea
@@ -24,7 +27,7 @@ const TaskDescriptionSection: React.FC<TaskDescriptionSectionProps> = ({
   setIsEditing: setIsEditingDescription,
   draft: descriptionText,
   setDraft: setDescriptionText,
-  onUpdate,
+  onCommit,
 }) => (
   <div className="flex flex-col gap-2">
     <div className={eyebrowCls}>Përshkrimi</div>
@@ -34,10 +37,7 @@ const TaskDescriptionSection: React.FC<TaskDescriptionSectionProps> = ({
           content={descriptionText}
           onChange={(html) => setDescriptionText(html)}
           onBlur={async (html) => {
-            const cleaned = html === '<p></p>' ? '' : html;
-            if (cleaned !== task.description) {
-              await onUpdate(task.id, { description: cleaned });
-            }
+            await onCommit(html);
             setIsEditingDescription(false);
           }}
           placeholder="Shto shënime, lidhje ose hapat e radhës…"
@@ -60,10 +60,7 @@ const TaskDescriptionSection: React.FC<TaskDescriptionSectionProps> = ({
             size="sm"
             className="rounded-full"
             onClick={async () => {
-              const cleaned = descriptionText === '<p></p>' ? '' : descriptionText;
-              if (cleaned !== task.description) {
-                await onUpdate(task.id, { description: cleaned });
-              }
+              await onCommit(descriptionText);
               setIsEditingDescription(false);
             }}
           >

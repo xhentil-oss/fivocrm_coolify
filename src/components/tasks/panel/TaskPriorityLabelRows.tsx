@@ -31,7 +31,10 @@ export const TaskPriorityRow: React.FC<{
               role="radio"
               aria-checked={on}
               disabled={readOnly}
-              onClick={() => !on && onUpdate(task.id, { priority: k })}
+              // Compare with the DOCUMENT's value, not the defaulted one: a task
+              // with no `priority` shows "Mesatar" lit, and tapping it must
+              // still write `medium`.
+              onClick={() => task.priority !== k && onUpdate(task.id, { priority: k })}
               className={`h-9 min-w-0 truncate rounded-full px-1 text-[13px] font-bold transition-colors disabled:cursor-default sm:text-[14px] ${
                 on
                   ? urgent

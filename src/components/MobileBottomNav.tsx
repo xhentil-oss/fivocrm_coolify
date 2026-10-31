@@ -22,6 +22,7 @@ import {
   Package,
   BellRing,
   Server as ServerIcon,
+  Bot,
 } from 'lucide-react';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useUnreadChat } from '../hooks/useUnreadChat';
@@ -73,6 +74,7 @@ const MobileBottomNav: React.FC = () => {
     { to: '/app/crm',           icon: Shield,       label: 'CRM',         perm: 'canAccessCRM' },
     { to: '/app/products',      icon: Package,      label: 'Dyqani',      perm: 'canAccessProducts' },
     { to: '/app/hosting',       icon: ServerIcon,   label: 'Hosting',     perm: 'canAccessHosting' },
+    { to: '/app/sales-agent',   icon: Bot,          label: 'Ana',         perm: 'canAccessSalesAgent' },
     { to: '/app/invoices',      icon: Receipt,      label: 'Faturat',     perm: 'canAccessInvoices' },
     { to: '/app/expenses',      icon: DollarSign,   label: 'Shpenzimet',  perm: 'canAccessExpenses' },
     { to: '/app/goals',         icon: Target,       label: 'Objektivat',  perm: 'canAccessGoals' },

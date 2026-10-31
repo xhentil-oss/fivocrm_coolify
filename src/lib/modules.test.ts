@@ -13,6 +13,7 @@ import {
   optionalPathsExcept,
   moduleBlockReason,
   planIncludes,
+  signupLockedModulePaths,
 } from './modules';
 
 const shop = MODULE_BY_ID.shop;
@@ -172,6 +173,18 @@ describe('moduleBlockReason', () => {
     expect(lockedPathsFor(available)).toEqual(['/app/hosting']);
     expect(lockedPathsFor(MODULES.map(m => m.path))).toEqual([]);
     expect(lockedPathsFor([])).toEqual(optionalPathsExcept([]));
+  });
+
+  it('a self-serve signup starts with EVERY optional module locked — the platform opens them', () => {
+    const locked = signupLockedModulePaths();
+    expect(locked).toEqual(MODULES.filter(m => m.optional).map(m => m.path));
+    // The trial plan ranks above every tier, so the plan gate would let everything
+    // through: the lock is the only thing standing between a signup and the whole product.
+    for (const mod of MODULES.filter(m => m.optional)) {
+      expect(moduleBlockReason(mod, { plan: 'trial', lockedModules: locked, permissions: undefined })).toBe('locked');
+    }
+    // …and the super-admin's "Hap të gjitha" is the inverse.
+    expect(lockedPathsFor(MODULES.map(m => m.path))).toEqual([]);
   });
 
   it('lets a super-admin through every gate', () => {

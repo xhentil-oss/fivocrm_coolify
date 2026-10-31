@@ -116,11 +116,12 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
     const newProject = pid ? projects.find(p => p.id === pid) : undefined;
     const patch = { projectId: pid || null, customerId: (newProject as any)?.customerId || '' };
     await onUpdate(task.id, patch as any);
-    // Subtasks ride along: they carry the parent's projectId/customerId, and
-    // leaving them behind keeps the OLD client's portal read access alive (and
-    // deleting the old project later would cascade-delete them).
+    // Subtasks ride along on projectId, and leaving them behind would let the
+    // old project's deletion cascade-delete them. They NEVER carry customerId:
+    // the portal never shows a subtask, so the field only published the
+    // subtask document (description, attachments, value) to the client.
     await Promise.allSettled(
-      (subtasks || []).map(st => taskMutation.update(st.id, patch as any)),
+      (subtasks || []).map(st => taskMutation.update(st.id, { projectId: patch.projectId, customerId: null } as any)),
     );
     // Client-VISIBLE comments carry the client's customerId too (it is what the
     // portal's `customerId == mine` query and the rules key on). Left behind,
@@ -128,7 +129,7 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
     // theirs. Only comments that already HAVE a customerId are touched — an
     // internal comment must never become visible by a move. Best effort: the
     // move itself is already saved.
-    void repointClientComments([task.id, ...(subtasks || []).map(st => st.id)], patch.customerId || null);
+    void repointClientComments([task.id], patch.customerId || null);
   };
 
   const repointClientComments = async (taskIds: string[], customerId: string | null) => {
@@ -182,7 +183,7 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
 
   const pq = projectQuery.trim().toLowerCase();
   const projectOptions = [
-    { id: '', name: 'Pa projekt', dot: '#C3CEDD', sub: '' },
+    { id: '', name: 'Pa projekt', dot: '', sub: '' },
     ...projects.map(p => {
       const n = p.id
         ? openByProject.get(p.id) || 0
@@ -258,7 +259,7 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
         label="Projekti"
         value={
           <span className="inline-flex max-w-full items-center gap-2">
-            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: currentProject ? hashColor(currentProject.name) : '#C3CEDD' }} />
+            <span className="h-2 w-2 shrink-0 rounded-full bg-muted-foreground/40" style={currentProject ? { background: hashColor(currentProject.name) } : undefined} />
             <span className="min-w-0 truncate">{projectsLoading ? 'Duke ngarkuar…' : (currentProject?.name || 'Pa projekt')}</span>
           </span>
         }
@@ -283,7 +284,7 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
                 title={p.sub || undefined}
                 className={`${pillCls(on)} max-w-full gap-2`}
               >
-                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: on ? 'currentColor' : p.dot }} />
+                <span className="h-2 w-2 shrink-0 rounded-full bg-muted-foreground/40" style={on ? { background: 'currentColor' } : p.dot ? { background: p.dot } : undefined} />
                 <span className="min-w-0 truncate">{p.name}</span>
                 {p.sub && <span className={`shrink-0 text-[11px] font-semibold ${on ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>{p.sub.split(' ')[0]}</span>}
               </button>
@@ -297,7 +298,12 @@ const TaskPeopleRows: React.FC<TaskPeopleRowsProps> = ({
       {/* Caktuar te */}
       <SheetRow
         tile={
-          <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full text-[11px] font-extrabold text-white" style={{ background: task.assignedToUserId ? hashColor(assigneeName) : '#C3CEDD' }}>
+          // Unassigned: theme tokens (the old `#C3CEDD` + white "?" was ~1.4:1
+          // and the only light-theme literal in dark mode).
+          <span
+            className={`flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full text-[11px] font-extrabold ${task.assignedToUserId ? 'text-white' : 'bg-muted text-muted-foreground'}`}
+            style={task.assignedToUserId ? { background: hashColor(assigneeName) } : undefined}
+          >
             {task.assignedToUserId ? assigneeName.slice(0, 2).toUpperCase() : '?'}
           </span>
         }

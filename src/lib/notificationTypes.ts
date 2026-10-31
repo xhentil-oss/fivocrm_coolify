@@ -170,6 +170,29 @@ export const NOTIFICATION_TYPES = {
   // A chat message was reported ("Raporto", App Store 1.2) — to the business's
   // managers (api/_report-content.ts). The platform inbox gets an email too.
   content_reported:                     { category: 'system', priority: 'critical', groupLabel: 'mesazhe të raportuara' },
+  // A self-serve workspace was created with every module locked and is waiting for
+  // the PLATFORM to open the agreed set — to the super-admins, once per tenant
+  // (api/_sync-claims.ts). Deep-links to /superadmin/tenants/<id>.
+  platform_tenant_signup:               { category: 'system', priority: 'warning',  groupLabel: 'tenantë të rinj' },
+  // …and the answer, to the owner: the platform configured the modules (set-modules).
+  modules_configured:                   { category: 'system', priority: 'success' },
+  // ── Virtual sales agent ("Ana", api/_salesAgent.ts + api/_salesAgentJobs.ts) ──
+  // The agent handed a conversation to a person (asked for a human, complaint,
+  // custom price, …) — to the thread owner, else the managers; escalated once more
+  // when nobody picks it up within the SLA.
+  sales_agent_handoff:                  { category: 'messages', priority: 'critical', groupLabel: 'biseda që presin një person' },
+  // The agent collected enough qualification fields on a lead (summary attached).
+  sales_agent_qualified:                { category: 'messages', priority: 'success',  groupLabel: 'lead të kualifikuar nga Ana' },
+  // A meeting the agent booked with a prospect (Google Calendar).
+  sales_agent_meeting_booked:           { category: 'messages', priority: 'success',  groupLabel: 'takime të rezervuara nga Ana' },
+  // A Google Maps prospecting search finished — to the person who requested it.
+  prospects_ready:                      { category: 'system',   priority: 'info',     groupLabel: 'kërkime prospektesh të përfunduara' },
+  // Yesterday in sales, 08:15 local, to managers.
+  sales_agent_daily_digest:             { category: 'system',   priority: 'info',     groupLabel: 'përmbledhje ditore e Anës' },
+  // Cold WhatsApp outreach paused itself after blocks/failures (7 days).
+  sales_agent_paused:                   { category: 'system',   priority: 'warning',  groupLabel: 'pauza të agjentes' },
+  // A tenant cap was reached (AI replies / Places requests) — nothing more is sent today/this month.
+  sales_agent_budget:                   { category: 'system',   priority: 'warning',  groupLabel: 'kuota të agjentes' },
 } as const satisfies Record<string, NotificationTypeSpec>;
 
 /** Every type the product may emit. A value outside this union is a bug. */

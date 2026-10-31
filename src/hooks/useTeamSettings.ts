@@ -3,6 +3,7 @@ import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useGlobalTeamId, setGlobalWaEnabled } from './useFirestore';
 import type { NazmijeSettings } from '../lib/nazmije/core';
+import type { SalesAgentSettings } from '../lib/salesAgent/core';
 
 export interface BankAccount {
   id: string;
@@ -43,6 +44,8 @@ export interface TeamSettings {
   hasMetaChannelTokens?: boolean;
   hasGmbClientSecret?: boolean;
   hasDynadotApiKey?: boolean;
+  /** Google Places API key (sales agent prospecting) lives in teamSecrets. */
+  hasGooglePlacesApiKey?: boolean;
   // Company identity (used in contract templates)
   companyName?: string;
   companyAddress?: string;
@@ -213,12 +216,15 @@ export interface TeamSettings {
   // ── Nazmije (sekretarja virtuale) ──
   /** `enabled`/`channelId` are written by POST /api/nazmije (enable/disable); the rest by Cilësimet. Shape: NazmijeSettings. */
   nazmije?: Partial<NazmijeSettings>;
+  // ── Agjentja e shitjeve (Ana) ──
+  /** `enabled` is written by POST /api/sales-agent (enable/disable); the rest by Cilësimet. Shape: SalesAgentSettings. */
+  salesAgent?: Partial<SalesAgentSettings> & { lastRun?: Record<string, unknown> };
 }
 
 /** Credential fields that must never be written to `teamSettings` (see tenantSecrets). */
 const SECRET_FIELDS = [
   'aiApiKey', 'emailApiKey', 'emailSmtpPass', 'whatsappVpsSecret', 'metaWebhookVerifyToken',
-  'gmbClientSecret',
+  'gmbClientSecret', 'dynadotApiKey', 'googlePlacesApiKey',
 ] as const;
 
 /**

@@ -47,7 +47,10 @@ const TaskReminderSection: React.FC<TaskReminderSectionProps> = ({ task, readOnl
     if (!hasDeadline) return;
     await onUpdate(task.id, setByMe(setReminderPatch(task, { offsetMinutes: minutes })));
   };
-  const handleReminderClear = async () => { await onUpdate(task.id, clearReminderPatch()); };
+  // "Asnjë" on a task that has no reminder is a no-op (it used to write the
+  // clear patch — and bump `updatedAt` — for nothing).
+  const hasReminder = !!reminderAt || task.reminderOffsetMinutes != null || !!task.reminderSetByUserId;
+  const handleReminderClear = async () => { if (hasReminder) await onUpdate(task.id, clearReminderPatch()); };
   const handleReminderCustomDate = async (date: Date | undefined) => {
     if (!date) return;
     const at = new Date(date);

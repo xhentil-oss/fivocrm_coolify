@@ -139,6 +139,19 @@ describe('attentionList', () => {
     ...over,
   }) as any;
 
+  it('puts a self-serve signup waiting for its modules at the top, whatever its billing state', () => {
+    const items = attentionList([
+      biz({ id: 'ending', status: 'trialing', trialEndsAt: new Date('2026-08-01T00:00:00Z') }),
+      biz({ id: 'fresh', status: 'trialing', moduleSetup: 'pending', trialEndsAt: new Date('2026-08-14T00:00:00Z') }),
+      biz({ id: 'console-made', status: 'trialing', moduleSetup: 'done', trialEndsAt: new Date('2026-08-14T00:00:00Z') }),
+    ], now);
+    const fresh = items.filter(i => i.businessId === 'fresh');
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0].severity).toBe('high');
+    expect(fresh[0].reason).toContain('modulet');
+    expect(items.some(i => i.businessId === 'console-made')).toBe(false);
+  });
+
   it('ranks a paying-but-silent tenant as high severity', () => {
     const items = attentionList([
       biz({ id: 'paying-dead', status: 'active', usage: { lastActivityAt: new Date('2026-05-01T00:00:00Z') } }),

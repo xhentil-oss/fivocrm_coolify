@@ -27,7 +27,8 @@ import { parseTaskDate } from '../../lib/taskReminders';
 import type { Task } from '../../types';
 import { approvalBadge } from '../../lib/taskApproval';
 import { assigneeSeenLabel, isAssigneeSeen } from '../../lib/taskReceipts';
-import { formatDateCompact, hashColor, isOverdueDate, taskPropsEqual } from './taskListUtils';
+import { isTaskOverdue, taskDeadline, localDateOfZonedDay } from '../../lib/taskDue';
+import { formatDateCompact, hashColor, taskPropsEqual } from './taskListUtils';
 
 export interface TaskRowProps {
   task: Task;
@@ -46,6 +47,10 @@ export interface TaskRowProps {
   assigneeName: string;
   /** Viewer (canEdit=false) is read-only. */
   canEdit: boolean;
+  /** May this person close / re-open THIS task? False for a recurring series
+   *  the viewer neither owns nor manages (`seriesActionBlocked`) — the rules
+   *  deny the engine-flag write, so the toggle and the quick action are off. */
+  canChangeStatus?: boolean;
   /** Edit rights + manager rank or owning the task (creator/assignee). */
   canDelete: boolean;
   // Callbacks MUST be stable (see TasksView) or the memo is pointless.
@@ -78,6 +83,7 @@ const TaskRowInner: React.FC<TaskRowProps> = ({
   commentCount,
   assigneeName,
   canEdit: canEditRow,
+  canChangeStatus = true,
   canDelete: canDeleteRow,
   onSelect,
   onToggleChecked,
@@ -88,8 +94,11 @@ const TaskRowInner: React.FC<TaskRowProps> = ({
   onCopy,
   onRequestDelete,
 }) => {
-  const dateInfo = formatDateCompact(new Date(task.endDate as any), task.status);
-  const isOverdue = isOverdueDate(task.endDate) && task.status !== 'Done';
+  // The deadline through the ONE definition (`endDate ?? dueDate`, taskDue.ts) —
+  // the row used to read `endDate` alone and say "Pa afat" for a legacy task
+  // the "Të vonuara" group was already listing.
+  const dateInfo = formatDateCompact(taskDeadline(task), task.status);
+  const isOverdue = isTaskOverdue(task);
   const subtaskInfo = subtaskTotal !== undefined ? { done: subtaskDone ?? 0, total: subtaskTotal } : undefined;
   const initials = assigneeName.slice(0, 2).toUpperCase();
   const approval = approvalBadge(task);
@@ -137,15 +146,16 @@ const TaskRowInner: React.FC<TaskRowProps> = ({
           visual, comfortable tap area, satisfying fill-and-check on complete. */}
       <button
         type="button"
-        disabled={!canEditRow}
+        disabled={!canEditRow || !canChangeStatus}
+        title={canEditRow && !canChangeStatus ? 'Vetëm përgjegjësi ose menaxheri mund ta mbyllë këtë seri' : undefined}
         aria-label={task.status === 'Done' ? 'Shëno si të pabërë' : 'Shëno si të përfunduar'}
         aria-pressed={task.status === 'Done'}
         onClick={async (e) => {
           e.stopPropagation();
-          if (!canEditRow) return;
+          if (!canEditRow || !canChangeStatus) return;
           await onToggleDone(task);
         }}
-        className="group/check mt-0.5 -m-1 p-1 flex items-center justify-center shrink-0 active:scale-90 transition-transform"
+        className="group/check mt-0.5 -m-1 p-1 flex items-center justify-center shrink-0 active:scale-90 transition-transform disabled:cursor-not-allowed"
       >
         <span
           className={`flex items-center justify-center w-5 h-5 rounded-full border-2 transition-all duration-200 ${
@@ -281,7 +291,10 @@ const TaskRowInner: React.FC<TaskRowProps> = ({
           >
             {dateInfo.overdue && <AlertTriangle className="w-3 h-3" />}
             {dateInfo.text}
-            {parseTaskDate(task.reminderAt) && !task.reminderSentAt && task.status !== 'Done' && (
+            {/* The bell means "a reminder is still to come": a delivered one
+                (`reminderSentAt`) AND a consumed/missed one (`reminderSkippedAt`,
+                the cron's "no recipient" / "task closed" mark) are both over. */}
+            {parseTaskDate(task.reminderAt) && !task.reminderSentAt && !task.reminderSkippedAt && task.status !== 'Done' && (
               <ReminderBellIcon className="w-3 h-3 text-primary" aria-label="Ka kujtesë" />
             )}
           </button>
@@ -289,7 +302,9 @@ const TaskRowInner: React.FC<TaskRowProps> = ({
         <PopoverContent className="w-auto p-0" align="end" onClick={(e) => e.stopPropagation()}>
           <Calendar
             mode="single"
-            selected={task.endDate ? new Date(task.endDate) : undefined}
+            // The highlighted day is the deadline's TIRANE day (a 23:30Z deadline
+            // is the next day there), not the machine-local one.
+            selected={localDateOfZonedDay(taskDeadline(task))}
             onSelect={async (d) => {
               if (!d) return;
               await onReschedule(task, d);
@@ -305,11 +320,12 @@ const TaskRowInner: React.FC<TaskRowProps> = ({
       >
         {/* Mark Done */}
         <button
-          title="Shëno si Përfunduar"
-          className="px-1.5 py-1 rounded text-xs hover:bg-muted text-emerald-600"
+          title={canChangeStatus ? 'Shëno si Përfunduar' : 'Vetëm përgjegjësi ose menaxheri mund ta mbyllë këtë seri'}
+          disabled={!canChangeStatus}
+          className="px-1.5 py-1 rounded text-xs hover:bg-muted text-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed"
           onClick={async (e) => {
             e.stopPropagation();
-            if (task.status === 'Done') return;
+            if (task.status === 'Done' || !canChangeStatus) return;
             await onMarkDone(task);
           }}
         >

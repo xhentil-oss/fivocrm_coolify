@@ -12,6 +12,7 @@ import WhatsAppStatusBadge from './WhatsAppStatusBadge';
 import { resolveLeadParams } from '../lib/whatsappTemplates';
 import { safeExternalUrl } from '../lib/safeUrl';
 import WaOptOutControl from './WaOptOutControl';
+import AgentThreadBanner from './salesAgent/AgentThreadBanner';
 import type { WhatsAppMessage, WhatsAppTemplate, Lead, Customer } from '../types';
 
 /** Albanian label for a machine-sent row (`automationKind`). */
@@ -523,6 +524,14 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
                     : 'bg-white dark:bg-card text-foreground rounded-tl-none'
                 }`}
               >
+                {(msg as any).mediaType === 'sticker' && safeExternalUrl((msg as any).mediaUrl) && (
+                  <img
+                    src={safeExternalUrl((msg as any).mediaUrl) ?? undefined}
+                    alt="sticker"
+                    className="h-28 w-28 mb-1 object-contain"
+                    loading="lazy"
+                  />
+                )}
                 {(msg as any).mediaType === 'image' && safeExternalUrl((msg as any).mediaUrl) && (
                   <a href={safeExternalUrl((msg as any).mediaUrl) ?? undefined} target="_blank" rel="noopener noreferrer">
                     <img
@@ -617,6 +626,8 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
             <WhatsAppStatusBadge variant="banner" />
           </div>
         )}
+        {/* Ana (sales agent) holds / handed off this thread — read defensively, legacy threads have no `agent`. */}
+        <AgentThreadBanner agent={conversation?.agent} conversationId={convId} />
         {optedOut && (
           <div className="mb-2 px-3 py-2 rounded-md bg-red-500/10 border border-red-500/30 text-[11px] text-red-700 dark:text-red-400 leading-snug space-y-1.5">
             <p className="flex items-start gap-1.5">

@@ -21,6 +21,9 @@ interface TaskListViewProps {
   /** Title shown in the drag overlay (null = no drag running). */
   dragOverlayTitle: string | null | undefined;
   showOverlay: boolean;
+  /** Whether the viewer may create tasks (`permissions.canEdit`) — the
+   *  "Krijo detyrën e parë" link opens a dialog that is not mounted for a Viewer. */
+  canCreate: boolean;
   onCreateFirst: () => void;
   renderRow: (task: Task) => React.ReactNode;
 }
@@ -36,6 +39,7 @@ const TaskListView: React.FC<TaskListViewProps> = ({
   onDragEnd,
   dragOverlayTitle,
   showOverlay,
+  canCreate,
   onCreateFirst,
   renderRow,
 }) => {
@@ -55,9 +59,11 @@ const TaskListView: React.FC<TaskListViewProps> = ({
             {isEmpty && (
               <div className="text-center py-12 text-muted-foreground">
                 <p>Asnjë detyrë</p>
-                <Button variant="link" className="mt-2" onClick={onCreateFirst}>
-                  Krijo detyrën e parë
-                </Button>
+                {canCreate && (
+                  <Button variant="link" className="mt-2" onClick={onCreateFirst}>
+                    Krijo detyrën e parë
+                  </Button>
+                )}
               </div>
             )}
           </div>

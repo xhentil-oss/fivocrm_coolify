@@ -21,7 +21,7 @@ import { MODULES, MODULE_GROUP_ORDER, PLAN_LABELS, planIncludes, type ModuleDef,
  */
 const ModulesSettingsPanel: React.FC = () => {
   const { toast } = useToast();
-  const { plan, disabledModules, lockedModules, canManage, isEnabled, blockReason, setModuleEnabled, loading } = useModules();
+  const { plan, disabledModules, lockedModules, canManage, isEnabled, blockReason, setModuleEnabled, loading, moduleSetupPending } = useModules();
   const [pending, setPending] = useState<string | null>(null);
 
   const grouped = useMemo(() => {
@@ -80,6 +80,16 @@ const ModulesSettingsPanel: React.FC = () => {
           )}
         </div>
       </Card>
+
+      {moduleSetupPending && (
+        <div className="flex items-start gap-2 rounded-lg border border-primary/30 bg-accent-soft/40 p-3">
+          <Lock className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+          <p className="text-xs text-foreground">
+            Modulet e këtij workspace-i po aktivizohen nga FivoCRM sipas kontratës suaj. Derisa të
+            përfundojë, çdo modul shfaqet si i kyçur — do të njoftoheni me email sapo të jenë gati.
+          </p>
+        </div>
+      )}
 
       {!canManage && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">

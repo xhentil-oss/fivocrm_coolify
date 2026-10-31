@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
-import { completeTask, hasLiveSeriesSibling, startOfRecurrenceDay } from '../lib/recurringUtils';
+import { completeTask, hasLiveSeriesSibling } from '../lib/recurringUtils';
+import { isTaskOverdue, taskDeadline, deadlineOnPickedDay } from '../lib/taskDue';
+import { seriesActionBlocked, isPermissionDenied, SERIES_DENIED_TITLE, SERIES_DENIED_MESSAGE } from '../lib/taskSeriesAccess';
+import { useTodayKey } from '../hooks/useTodayKey';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -34,20 +37,16 @@ import TaskListHeader, { type TaskViewMode } from '../components/tasks/TaskListH
 import TaskFilters, { type TaskGroupBy } from '../components/tasks/TaskFilters';
 import { TaskDeleteConfirmDialog, TaskBulkDeleteDialog } from '../components/tasks/TaskDeleteDialogs';
 import { useTaskDragSensors } from '../components/tasks/taskDnd';
-import { TASKS_PAGE_SIZE as PAGE_SIZE, TASK_BOARD_COLUMNS as columns, isOverdueDate } from '../components/tasks/taskListUtils';
+import { TASKS_PAGE_SIZE as PAGE_SIZE, TASK_BOARD_COLUMNS as columns, tasksShallowEqual } from '../components/tasks/taskListUtils';
 
 const TasksView: React.FC = () => {
   const { user } = useAuth();
-  // Rows are memoized, so "Sot/Nesër/vonuar" labels would freeze across
-  // midnight on a page left open: remount the list once per Tirane day.
-  const [todayKey, setTodayKey] = useState(() => startOfRecurrenceDay(new Date()));
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      const k = startOfRecurrenceDay(new Date());
-      setTodayKey(prev => (prev === k ? prev : k));
-    }, 60_000);
-    return () => window.clearInterval(id);
-  }, []);
+  // Start of today's Tirane day — changes at the Tirane midnight. Every
+  // "vonuar / Sot" memo below takes it as `now` AND as a dependency; the rows
+  // and board cards are memoized, so the list/board are also remounted on it
+  // (`key={todayKey}`) and their "Sot/Nesër/vonuar" labels never freeze on a
+  // page left open overnight.
+  const todayKey = useTodayKey();
   const permissions = usePermissions();
   const logActivity = useActivityLogger();
   // Persisted view preferences (Asana-style: the view/filter you left is remembered).
@@ -112,9 +111,17 @@ const TasksView: React.FC = () => {
   // person who belongs to several teams isn't listed (or rendered) multiple times.
   const uniqueTeamMembers = useUniqueTeamMembers(teamMembers);
 
-  // Get all active time entries to show who's working on what
+  // Open timers (the "Duke punuar" dot) — `endTime == null` evaluated on the
+  // SERVER (`teamScopedWhere`), with a cap. Without the opt-in the where is a
+  // client-side filter over the business-scoped listener, i.e. every visit to
+  // /app/tasks downloaded and kept live the tenant's whole hours ledger
+  // (thousands of rows a year) to find a handful of running timers. Equality
+  // on `businessId` + `endTime` needs no composite index (Firestore merges the
+  // single-field indexes), and the rules prove the list by `businessId`.
   const { data: activeTimeEntries } = useCollection<TimeEntry>('timeEntries', {
-    where: [{ field: 'endTime', operator: '==', value: null }]
+    where: [{ field: 'endTime', operator: '==', value: null }],
+    teamScopedWhere: true,
+    limit: 100,
   });
 
   // Get tasks that are currently being worked on
@@ -151,11 +158,14 @@ const TasksView: React.FC = () => {
     return userId.includes('@') ? userId.split('@')[0] : userId.slice(0, 8);
   }, [user, profileByUserId, memberByUserId]);
 
-  // Helper: get subtask counts per task
+  // Helper: get subtask counts per task — from the UNFILTERED workspace list:
+  // the role filter hides a colleague's subtasks, so a Member read "1/1" on a
+  // task that really has four.
   const subtaskCounts = useMemo(() => {
-    if (!allTasks) return {};
+    const source = rawTasks || allTasks;
+    if (!source) return {};
     const counts: Record<string, { total: number; done: number }> = {};
-    for (const t of allTasks) {
+    for (const t of source) {
       if (t.parentTaskId) {
         if (!counts[t.parentTaskId]) counts[t.parentTaskId] = { total: 0, done: 0 };
         counts[t.parentTaskId].total++;
@@ -163,7 +173,7 @@ const TasksView: React.FC = () => {
       }
     }
     return counts;
-  }, [allTasks]);
+  }, [rawTasks, allTasks]);
 
   // Compute which tasks are blocked (have unfinished dependsOn).
   // The blocker lookup uses the UNFILTERED workspace list: for Member/Viewer the
@@ -196,10 +206,47 @@ const TasksView: React.FC = () => {
     return projectNameById.get(projectId) || null;
   }, [projects, projectNameById]);
 
+  // Who I am for the series rules: closing / re-opening a RECURRING task writes
+  // the engine flag `nextCycleCreated`, which the rules let only the assignee,
+  // the creator, Admin/Manager or a super-admin change (src/lib/taskSeriesAccess.ts).
+  const seriesActor = useMemo(() => ({
+    uid: user?.uid, email: user?.email,
+    isAdmin: permissions.isAdmin, isManager: permissions.isManager,
+    isOwner: permissions.isOwner, isSuperAdmin: permissions.isSuperAdmin,
+  }), [user, permissions.isAdmin, permissions.isManager, permissions.isOwner, permissions.isSuperAdmin]);
+  const toastSeriesDenied = () => toast({ title: SERIES_DENIED_TITLE, description: SERIES_DENIED_MESSAGE, variant: 'destructive' });
+
   // Mutations
   const taskMutation = useMutation<Task>('tasks');
   const notificationMutation = useMutation<Notification>('notifications');
   const collaboratorMutation = useMutation<TaskCollaborator>('taskCollaborators');
+
+  // Assignee filter options — team members of the active business, labelled by
+  // display name (falling back to the email local-part), sorted alphabetically.
+  const assigneeOptions = React.useMemo(() => {
+    return (teamMembers || [])
+      .filter((m: any) => m.userId && (!businessId || !m.businessId || m.businessId === businessId))
+      .map((m: any) => ({
+        userId: m.userId as string,
+        label: m.displayName || (m.email ? m.email.split('@')[0] : m.userId),
+        email: m.email || '',
+      }))
+      .filter((m: any, i: number, arr: any[]) => arr.findIndex(x => x.userId === m.userId) === i)
+      .sort((a: any, b: any) => a.label.localeCompare(b.label));
+  }, [teamMembers, businessId]);
+
+  // The ids the selected person's tasks may carry: the uid AND their email —
+  // legacy teamMembers rows keyed by email leaked email values into
+  // `assignedToUserId`. The "Të miat" chip filtered on the uid alone while its
+  // count (`myTasks`) matched both, so "3 të miat" listed 2.
+  const assigneeAliasIds = React.useMemo(() => {
+    if (filterAssignee === 'all' || filterAssignee === 'unassigned') return null;
+    const ids = new Set<string>([filterAssignee]);
+    if (user?.uid === filterAssignee && user.email) ids.add(user.email);
+    const opt = assigneeOptions.find(o => o.userId === filterAssignee);
+    if (opt?.email) ids.add(opt.email);
+    return ids;
+  }, [filterAssignee, user, assigneeOptions]);
 
   // Filter tasks - exclude subtasks from main list
   // Base list: parentTasks + searchQuery (used for stats AND for filtered display)
@@ -209,10 +256,10 @@ const TasksView: React.FC = () => {
     // Assignee filter applies before stats so the status counts (and every view)
     // reflect the selected person — picking Elton shows Elton's tasks broken down
     // by status, on the list, board, calendar and timeline alike.
-    if (filterAssignee !== 'all') {
-      filtered = filterAssignee === 'unassigned'
-        ? filtered.filter(t => !t.assignedToUserId)
-        : filtered.filter(t => t.assignedToUserId === filterAssignee);
+    if (filterAssignee === 'unassigned') {
+      filtered = filtered.filter(t => !t.assignedToUserId);
+    } else if (assigneeAliasIds) {
+      filtered = filtered.filter(t => !!t.assignedToUserId && assigneeAliasIds.has(t.assignedToUserId));
     }
     if (filterLabel !== 'all') {
       filtered = filtered.filter(t => ((t as any).labels as string[] | undefined)?.includes(filterLabel));
@@ -228,31 +275,19 @@ const TasksView: React.FC = () => {
       );
     }
     return filtered;
-  }, [allTasks, searchQuery, filterAssignee, filterLabel, getProjectName]);
+  }, [allTasks, searchQuery, filterAssignee, assigneeAliasIds, filterLabel, getProjectName]);
 
   // Final tasks list: additionally filtered by status for the displayed list.
-  // 'overdue' is a computed pseudo-status (past due date and not yet Done).
+  // 'overdue' is a computed pseudo-status (deadline DAY passed, not yet Done) —
+  // `isTaskOverdue` reads `endDate ?? dueDate`, the same definition the groups
+  // and MyTasks use, judged at `todayKey` so the filter follows midnight.
   const tasks = React.useMemo(() => {
     if (filterStatus === 'all') return baseTasksForStats;
     if (filterStatus === 'overdue') {
-      return baseTasksForStats.filter(t => isOverdueDate(t.endDate) && t.status !== 'Done');
+      return baseTasksForStats.filter(t => isTaskOverdue(t, todayKey));
     }
     return baseTasksForStats.filter(t => t.status === filterStatus);
-  }, [baseTasksForStats, filterStatus]);
-
-  // Assignee filter options — team members of the active business, labelled by
-  // display name (falling back to the email local-part), sorted alphabetically.
-  const assigneeOptions = React.useMemo(() => {
-    return (teamMembers || [])
-      .filter((m: any) => m.userId && (!businessId || !m.businessId || m.businessId === businessId))
-      .map((m: any) => ({
-        userId: m.userId as string,
-        label: m.displayName || (m.email ? m.email.split('@')[0] : m.userId),
-        email: m.email || '',
-      }))
-      .filter((m: any, i: number, arr: any[]) => arr.findIndex(x => x.userId === m.userId) === i)
-      .sort((a: any, b: any) => a.label.localeCompare(b.label));
-  }, [teamMembers, businessId]);
+  }, [baseTasksForStats, filterStatus, todayKey]);
 
   const myTasks = React.useMemo(() => {
     if (!user || !allTasks) return [];
@@ -272,9 +307,9 @@ const TasksView: React.FC = () => {
       inProgress: baseTasksForStats.filter(t => t.status === 'In Progress').length,
       review: baseTasksForStats.filter(t => t.status === 'Review').length,
       done: baseTasksForStats.filter(t => t.status === 'Done').length,
-      overdue: baseTasksForStats.filter(t => isOverdueDate(t.endDate) && t.status !== 'Done').length,
+      overdue: baseTasksForStats.filter(t => isTaskOverdue(t, todayKey)).length,
     };
-  }, [baseTasksForStats, allTasks]);
+  }, [baseTasksForStats, allTasks, todayKey]);
 
   // Open task from URL param (Dashboard link, or a comment notification which also
   // carries `comment=<id>` so the panel can scroll straight to that comment).
@@ -286,13 +321,25 @@ const TasksView: React.FC = () => {
     // filtered out of `allTasks` by the role filter, and the link must still open.
     const taskToSelect = (allTasks || []).find(t => t.id === taskIdParam)
       || (rawTasks || []).find(t => t.id === taskIdParam);
-    if (!taskToSelect) return;
-    setSelectedTask(taskToSelect);
-    const commentParam = searchParams.get('comment');
-    setFocusComment(commentParam ? { taskId: taskToSelect.id, commentId: commentParam } : null);
-    // Clean up the URL params after selecting
-    setSearchParams({}, { replace: true });
-  }, [searchParams, allTasks, rawTasks, setSearchParams]);
+    if (!taskToSelect) {
+      // Not here yet: wait for the list. Once it has arrived, a task that is
+      // still missing (deleted, or not readable by this role) is reported ONCE
+      // and the param is dropped — leaving it in the URL re-ran this effect on
+      // every snapshot, forever.
+      if (tasksLoading) return;
+      toast({ title: 'Detyra nuk u gjet', description: 'Mund të jetë fshirë, ose nuk ke akses në të.', variant: 'destructive' });
+    } else {
+      setSelectedTask(taskToSelect);
+      const commentParam = searchParams.get('comment');
+      setFocusComment(commentParam ? { taskId: taskToSelect.id, commentId: commentParam } : null);
+    }
+    // Drop ONLY the deep-link params; `?new=1` and any other query state survive.
+    const next = new URLSearchParams(searchParams);
+    next.delete('taskId');
+    next.delete('task');
+    next.delete('comment');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, allTasks, rawTasks, tasksLoading, setSearchParams]);
 
   // `?new=1` (Command palette "Krijo Detyrë të Re") opens the create form, then
   // drops ONLY that param. Waits for the permission bootstrap: the form exists
@@ -309,10 +356,12 @@ const TasksView: React.FC = () => {
   // Keep selectedTask in sync with live Firestore data. From the RAW list: a
   // task opened by deep link outside the role filter (rawTasks fallback) never
   // re-synced from the filtered one, so the panel showed pre-edit values.
+  // Field-by-field equality (the row memo comparator) instead of serialising
+  // both snapshots on every change to any task while the panel is open.
   useEffect(() => {
     if (selectedTask && rawTasks) {
       const updated = rawTasks.find(t => t.id === selectedTask.id);
-      if (updated && JSON.stringify(updated) !== JSON.stringify(selectedTask)) {
+      if (updated && !tasksShallowEqual(updated, selectedTask)) {
         setSelectedTask(updated);
       }
     }
@@ -367,14 +416,14 @@ const TasksView: React.FC = () => {
     }
 
     // Board: dropped either over a column (empty area) or over another card.
+    // A board drag is a STATUS change only — it is never persisted as order.
+    // Dropping onto a card of another column used to call `applyReorder` too,
+    // silently rewriting the whole team's list order (or toasting "u ruajt
+    // vetëm për ty" at a Member) as a side effect of moving a card.
     const overTask = tasks.find(t => t.id === overId);
     const targetStatus = overTask?.status
       || columns.find(c => c.status === overId)?.status;
     if (!targetStatus) return;
-
-    // Persist manual order within the column when dropped over a specific card,
-    // so cards keep their position instead of jumping to the end.
-    if (overTask && taskId !== overId) void applyReorder(taskId, overId);
 
     const task = tasks.find(t => t.id === taskId);
     if (task && task.status !== targetStatus) {
@@ -384,7 +433,7 @@ const TasksView: React.FC = () => {
         // status (a raw status write silently killed recurring series).
         await markTaskDone(task);
       } else {
-        await taskMutation.update(taskId, reopenPatch(task, targetStatus as Task['status']));
+        await reopenTask(task, targetStatus as Task['status']);
       }
     }
   };
@@ -403,18 +452,32 @@ const TasksView: React.FC = () => {
   // the blocker guard, the recurring next-cycle spawn and follower notifications
   // can never be skipped. Returns true when the task actually closed.
   const markTaskDone = React.useCallback(async (task: Task, opts?: { silent?: boolean }) => {
-    const outcome = await completeTask(task, {
-      createTask: (data) => taskMutation.create(data as any),
-      updateTask: (id, data) => taskMutation.update(id, data),
-      // The blocker guard must see the FULL workspace (rawTasks): the role
-      // filter narrows Member/Viewer to their own tasks, so a blocker assigned
-      // to a colleague would look "missing" — i.e. closed — to the guard.
-      allTasks: rawTasks || [],
-      // An archived/cancelled project stops the series (no next cycle).
-      projects: projects || [],
-      claimNextCycle: claimTaskNextCycle,
-      releaseNextCycle: releaseTaskNextCycle,
-    });
+    // A recurring series is closed by its assignee/creator or a manager only
+    // (the claim transaction writes `nextCycleCreated`, which the rules deny
+    // to anyone else) — refuse up front instead of throwing mid-way.
+    if (seriesActionBlocked(task, seriesActor)) { toastSeriesDenied(); return false; }
+    let outcome: Awaited<ReturnType<typeof completeTask>>;
+    try {
+      outcome = await completeTask(task, {
+        createTask: (data) => taskMutation.create(data as any),
+        updateTask: (id, data) => taskMutation.update(id, data),
+        // The blocker guard must see the FULL workspace (rawTasks): the role
+        // filter narrows Member/Viewer to their own tasks, so a blocker assigned
+        // to a colleague would look "missing" — i.e. closed — to the guard.
+        allTasks: rawTasks || [],
+        // An archived/cancelled project stops the series (no next cycle).
+        projects: projects || [],
+        claimNextCycle: claimTaskNextCycle,
+        releaseNextCycle: releaseTaskNextCycle,
+      });
+    } catch (err: any) {
+      // The claim (or the status write) was refused — nothing was closed, so
+      // say why instead of leaving the row looking half-done.
+      console.error('[Tasks] mbyllja dështoi:', err);
+      if (isPermissionDenied(err)) toastSeriesDenied();
+      else toast({ title: 'Detyra nuk u mbyll', description: err?.message, variant: 'destructive' });
+      return false;
+    }
     if (outcome.kind === 'blocked') {
       toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
       return false;
@@ -427,6 +490,12 @@ const TasksView: React.FC = () => {
         toast({ title: '✅ Detyrë e kryer', description: 'Cikli i fundit i përsëritjes — nuk u krijua tjetër.' });
       } else if (outcome.kind === 'recurring-stopped') {
         toast({ title: '✅ Detyrë e kryer', description: outcome.reason === 'project-archived' ? 'Projekti është i arkivuar — përsëritja ndalon derisa të kthehet nga Arkiva.' : 'Projekti është anuluar — nuk u krijua cikël tjetër.' });
+      } else if (outcome.kind === 'error') {
+        // The task closed but the next cycle could not be created (the claim
+        // was released, the cron backstop spawns it) — same wording as MyTasks;
+        // this used to fall through to a plain "Statusi u ndryshua ✓".
+        console.error('[Tasks] cikli i ri nuk u krijua:', outcome.error);
+        toast({ title: '✅ Detyrë e përfunduar', description: 'Detyra u mbyll, por cikli i ri nuk u krijua — do ta krijojë sistemi automatikisht.' });
       } else {
         toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
       }
@@ -434,7 +503,7 @@ const TasksView: React.FC = () => {
     logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
     return true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawTasks, projects, taskMutation, user]);
+  }, [rawTasks, projects, taskMutation, user, seriesActor]);
 
   // Re-opening a Done task: a recurring tip gets its spawn flag back ONLY when
   // the series has no live occurrence left (child deleted by mistake → revive).
@@ -445,6 +514,23 @@ const TasksView: React.FC = () => {
     task.status === 'Done' && task.isRecurring && !hasLiveSeriesSibling(task, rawTasks)
       ? { status, nextCycleCreated: false, completedAt: null }
       : { status, completedAt: null };
+
+  // Re-open / move a task out of Done (row toggle, kanban drag): a RECURRING
+  // tip is re-opened by its assignee/creator or a manager only (same rule as
+  // closing it — the patch may write `nextCycleCreated` back). A refused write
+  // is reported, never left as a card that snapped back silently.
+  const reopenTask = async (task: Task, status: Task['status']): Promise<boolean> => {
+    if (seriesActionBlocked(task, seriesActor)) { toastSeriesDenied(); return false; }
+    try {
+      await taskMutation.update(task.id, reopenPatch(task, status));
+      return true;
+    } catch (err: any) {
+      console.error('[Tasks] rihapja dështoi:', err);
+      if (isPermissionDenied(err)) toastSeriesDenied();
+      else toast({ title: 'Statusi nuk u ndryshua', description: err?.message, variant: 'destructive' });
+      return false;
+    }
+  };
 
   // Apply saved manual order for the list view
   const orderedTasks = useMemo(() => sortByOrder(tasks), [tasks, sortByOrder]);
@@ -481,7 +567,7 @@ const TasksView: React.FC = () => {
   );
 
   // Groups over the WHOLE ordered list, then the page window (useTaskGroups).
-  const taskGroups = useTaskGroups(groupBy, orderedTasks, page, PAGE_SIZE, getUserName, getProjectName);
+  const taskGroups = useTaskGroups(groupBy, orderedTasks, page, PAGE_SIZE, getUserName, getProjectName, todayKey);
 
   // Bulk multi-select (Asana/Monday) — list view — and the ONE delete rule for
   // the row menu and the bulk bar (src/hooks/useTaskBulkActions.ts).
@@ -533,8 +619,9 @@ const TasksView: React.FC = () => {
     const checked = task.status !== 'Done';
     if (!checked) {
       // Un-completing — flip back to Todo (and re-arm a recurring tip).
-      await taskMutation.update(task.id, reopenPatch(task, 'Todo'));
-      toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Për të bërë` });
+      if (await reopenTask(task, 'Todo')) {
+        toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Për të bërë` });
+      }
       return;
     }
     await markTaskDone(task);
@@ -544,9 +631,10 @@ const TasksView: React.FC = () => {
     void taskMutation.update(task.id, { priority });
   });
   const onRowReschedule = useStableCallback(async (task: Task, d: Date) => {
-    const nd = new Date(d);
-    const cur = task.endDate ? new Date(task.endDate) : null;
-    nd.setHours(cur?.getHours() ?? 9, cur?.getMinutes() ?? 0, 0, 0);
+    // The picked DAY at the deadline's Tirane time of day (17:00 for a task that
+    // had none) — `deadlineOnPickedDay`, never a local `setHours`: a browser
+    // outside Albania stored the day a few hours off, i.e. one day late.
+    const nd = deadlineOnPickedDay(d, taskDeadline(task));
     // A moved deadline re-arms the due/overdue alerts (the cron
     // skips flagged tasks, so a postponed task never alerted again)
     // and carries a relative "Më kujto" reminder with it.
@@ -562,7 +650,8 @@ const TasksView: React.FC = () => {
     // reminderSetByUserId, goes with it). The work-cycle carry-over
     // stamps and the completion instant describe the ORIGINAL's
     // history — a fresh copy was never carried and is not done.
-    const { id, isRecurring, recurringFrequency, recurringInterval, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, recurringEndDate, nextRecurringDate, nextCycleCreated, seriesId, recurringSkippedReason, dueNotificationSent, overdueNotificationSent, reminderAt, reminderOffsetMinutes, reminderSentAt, reminderSetByUserId, carriedOverFromPeriod, carriedOverCount, completedAt, parentTaskId, dependsOn, attachments, value, valueAppliedToBudget, collaboratorIds, createdByUserId, seriesCreatedByUserId, cycleAnchorStartDay, cycleAnchorEndDay, clientApproval, clientApprovalHistory, assigneeSeenAt, assigneeSeenFor, ...rest } = task as any;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { id, isRecurring, recurringFrequency, recurringInterval, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, recurringEndDate, nextRecurringDate, nextCycleCreated, nextCycleTaskId, recurringClaimRepairedAt, recurringOccurrencesRolled, recurringOccurrencesRolledAt, seriesId, recurringSkippedReason, dueNotificationSent, overdueNotificationSent, reminderAt, reminderOffsetMinutes, reminderSentAt, reminderSkippedAt, reminderSkippedReason, reminderSetByUserId, carriedOverFromPeriod, carriedOverCount, workCycleAppliedPeriodKey, completedAt, parentTaskId, dependsOn, attachments, value, valueAppliedToBudget, collaboratorIds, createdByUserId, seriesCreatedByUserId, cycleAnchorStartDay, cycleAnchorEndDay, cycleAnchorDueDay, clientApproval, clientApprovalHistory, assigneeSeenAt, assigneeSeenFor, ...rest } = task as any;
     // The copy is MINE (rules: created as yourself), and without the
     // assign right it can only be assigned to me — the rules refuse
     // handing a colleague work through a copy.
@@ -594,6 +683,7 @@ const TasksView: React.FC = () => {
         commentCount={commentCountByTask.get(task.id) || 0}
         assigneeName={getUserName(task.assignedToUserId)}
         canEdit={permissions.canEdit}
+        canChangeStatus={!seriesActionBlocked(task, seriesActor)}
         canDelete={!!canDeleteTask(task)}
         onSelect={onRowSelect}
         onToggleChecked={onRowToggleChecked}
@@ -707,6 +797,7 @@ const TasksView: React.FC = () => {
               onDragEnd={handleDragEnd}
               dragOverlayTitle={activeDragTitle}
               showOverlay={!!activeTaskId && viewMode === 'list'}
+              canCreate={permissions.canEdit}
               onCreateFirst={() => setIsCreateDialogOpen(true)}
               renderRow={renderTaskRow}
             />

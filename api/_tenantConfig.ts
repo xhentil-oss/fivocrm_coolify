@@ -31,6 +31,8 @@ export const SECRET_FIELDS = [
   'gmbClientSecret',
   /** Dynadot registrar API key (hosting & domains module). */
   'dynadotApiKey',
+  /** Google Places API (New) key — the sales agent's Maps prospecting (api/_placesClient.ts). */
+  'googlePlacesApiKey',
 ] as const;
 
 /** Public boolean markers mirrored onto teamSettings so the UI can say "configured". */
@@ -43,6 +45,7 @@ export const SECRET_FLAGS: Record<string, string> = {
   metaChannelTokens: 'hasMetaChannelTokens',
   gmbClientSecret: 'hasGmbClientSecret',
   dynadotApiKey: 'hasDynadotApiKey',
+  googlePlacesApiKey: 'hasGooglePlacesApiKey',
 };
 
 export interface TeamConfig extends Record<string, any> {}

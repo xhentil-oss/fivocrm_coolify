@@ -32,7 +32,8 @@ export type AutoReplyBlockReason =
   | 'reply-to-automated'   // the contact is answering one of OUR automated messages (invoice reminder, campaign…)
   | 'no-phone'             // sender-side: only a WhatsApp LID is known, no deliverable phone yet
   | 'meta-window-closed'   // sender-side: Meta's 24h customer-service window is shut
-  | 'no-channel';          // sender-side: no Meta token / VPS available to send with
+  | 'no-channel'           // sender-side: no Meta token / VPS available to send with
+  | 'agent-active';        // the virtual sales agent (Ana) owns this channel — she answers, not the static text
 
 export interface AutoReplySettings {
   waAutoReplyEnabled?: boolean;
@@ -129,6 +130,7 @@ export const AUTO_REPLY_BLOCK_LABELS: Record<AutoReplyBlockReason, string> = {
   'no-phone': 'Numri i telefonit nuk dihet ende (vetëm LID e WhatsApp)',
   'meta-window-closed': 'Dritarja 24-orëshe e Meta është e mbyllur',
   'no-channel': 'S\'ka kanal dërgimi (token Meta / VPS) të konfiguruar',
+  'agent-active': 'Agjentja virtuale e shitjeve (Ana) është aktive për WhatsApp — përgjigjet ajo, jo teksti statik',
 };
 
 const MS_PER_HOUR = 3_600_000;

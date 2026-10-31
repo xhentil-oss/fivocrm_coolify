@@ -2,6 +2,60 @@ import type { Task } from '../types';
 import { startOfRecurrenceDay, addZonedDays, zonedDate, zonedParts } from './recurringUtils';
 import { taskDateMs, taskDueMs, taskCompletedMs } from './taskSort';
 
+// ── The ONE definition of a task's deadline ──────────────────────────────────
+//
+// `endDate`, falling back to the legacy `dueDate`. Every list surface (the
+// Vonuar chip, the `overdue` filter, the row text, the "Sipas afatit" groups,
+// the calendar, MyTasks) reads the deadline through `taskDeadline` /
+// `taskDueMs` — the chip used to read `endDate` alone while the groups read
+// `endDate ?? dueDate`, so a legacy task with only `dueDate` sat under
+// "Të vonuara" but was missing from the Vonuar count and read "Pa afat".
+
+/** The deadline as stored (`endDate` ?? `dueDate`), or null when undated. */
+export function taskDeadline(task: Pick<Task, 'endDate' | 'dueDate'>): unknown {
+  return task.endDate ?? task.dueDate ?? null;
+}
+
+/**
+ * Today's Tirane day KEY — `startOfRecurrenceDay` of `now`, the value
+ * `useTodayKey()` ticks across midnight and the calendar compares its cells to.
+ * It is also a valid `now` for every helper in this module (the views pass it
+ * as such): Europe/Tirane is UTC+1/+2, so the key read back as an instant is
+ * 01:00–02:00 of the same Tirane day (tested).
+ */
+export function todayKeyOf(now: number = Date.now()): number {
+  return startOfRecurrenceDay(new Date(now));
+}
+
+/**
+ * The Tirane calendar day of a stored instant, as a machine-LOCAL midnight Date
+ * (what a day-picker's `selected` understands). Undated/invalid → undefined.
+ */
+export function localDateOfZonedDay(v: unknown): Date | undefined {
+  const ms = taskDateMs(v);
+  if (ms === null) return undefined;
+  const p = zonedParts(new Date(ms));
+  return new Date(p.year, p.month, p.day);
+}
+
+/**
+ * A deadline on the DAY a picker returned (its machine-local calendar fields
+ * are the day the user clicked), at the previous deadline's Tirane time of day
+ * — or `defaultHour` (17:00, the end of the working day: midnight read as
+ * overdue from the first minute) when the task had none. Never `setHours`:
+ * local 09:00 on a browser outside Albania is not 09:00 in Tirane.
+ */
+export function deadlineOnPickedDay(
+  pickedDay: Date,
+  previous: unknown,
+  defaultHour = 17,
+  defaultMinute = 0,
+): Date {
+  const prevMs = taskDateMs(previous);
+  const t = prevMs === null ? { hours: defaultHour, minutes: defaultMinute } : zonedParts(new Date(prevMs));
+  return zonedDate(pickedDay.getFullYear(), pickedDay.getMonth(), pickedDay.getDate(), t.hours, t.minutes);
+}
+
 // ── "Is this overdue / due today?" — one answer, in Europe/Tirane days ────────
 //
 // A deadline is a calendar promise ("by Friday"), so every surface compares

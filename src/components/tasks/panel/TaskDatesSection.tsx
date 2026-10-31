@@ -3,6 +3,7 @@ import { CalendarDays, Clock } from 'lucide-react';
 import { Calendar } from '../../ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover';
 import { IconTile, SheetRow, dayTimeLabel, formatDateCompact, pillCls, pillInputCls, rowBodyCls, timeStr } from './panelShared';
+import { isDueUrgent } from './panelLogic';
 
 // Quick-date pills (design): Sot / Nesër / Kjo javë (e premtja) / Javën tjetër
 // (e hëna) / 📅 datë e lirë.
@@ -25,22 +26,21 @@ const quickDate = (k: string) => {
   return d;
 };
 
-const isPastDay = (d: Date) => d.getTime() < Date.now();
-const isTodayDay = (d: Date) => d.toDateString() === new Date().toDateString();
-
 /** "Afati" row (Koha card) — deadline pills, free date and time-of-day. The
- *  tile and the value turn red for an overdue/today deadline. */
+ *  tile and the value turn red for an overdue/today deadline of a LIVE task
+ *  (a Done task is finished, not late). */
 export const TaskDueDateRow: React.FC<{
   readOnly: boolean;
+  done: boolean;
   endDate: Date | null;
   onDateChange: (date: Date | undefined) => void | Promise<void>;
   onTimeChange: (e: React.ChangeEvent<HTMLInputElement>) => void | Promise<void>;
   open: boolean;
   onToggle: () => void;
-}> = ({ readOnly, endDate, onDateChange, onTimeChange, open, onToggle }) => {
+}> = ({ readOnly, done, endDate, onDateChange, onTimeChange, open, onToggle }) => {
   // 'none' matches no pill: an undated task must not light up "Sot".
   const dueKey = endDate ? dayKeyOf(endDate) : 'none';
-  const urgent = !!endDate && (isPastDay(endDate) || isTodayDay(endDate));
+  const urgent = isDueUrgent(endDate, done ? 'Done' : 'Todo');
   return (
     <>
       <SheetRow
@@ -76,22 +76,25 @@ export const TaskDueDateRow: React.FC<{
   );
 };
 
-/** "Fillimi" row (Koha card) — start pills, free date and time-of-day. */
+/** "Fillimi" row (Koha card) — start pills, free date and time-of-day. A task
+ *  without a start date says "Pa datë" (it used to show the current time as
+ *  if it were a fact). */
 export const TaskStartDateRow: React.FC<{
   readOnly: boolean;
-  startDate: Date;
+  startDate: Date | null;
   onDateChange: (date: Date | undefined) => void | Promise<void>;
   onTimeChange: (e: React.ChangeEvent<HTMLInputElement>) => void | Promise<void>;
   open: boolean;
   onToggle: () => void;
 }> = ({ readOnly, startDate, onDateChange, onTimeChange, open, onToggle }) => {
-  const startKey = dayKeyOf(startDate);
+  const startKey = startDate ? dayKeyOf(startDate) : 'none';
   return (
     <>
       <SheetRow
         tile={<IconTile tone="brand"><Clock className="h-[17px] w-[17px]" strokeWidth={2} /></IconTile>}
         label="Fillimi"
-        value={dayTimeLabel(startDate)}
+        value={startDate ? dayTimeLabel(startDate) : 'Pa datë'}
+        valueClassName={`text-[15px] ${startDate ? 'text-foreground/80' : 'text-muted-foreground'}`}
         open={open}
         disabled={readOnly}
         onToggle={onToggle}
@@ -105,13 +108,15 @@ export const TaskStartDateRow: React.FC<{
           ))}
           <Popover>
             <PopoverTrigger asChild>
-              <button type="button" className={pillCls(startKey === 'date' || startKey === 'javentjeter')}>📅 {formatDateCompact(startDate)}</button>
+              <button type="button" className={pillCls(startKey === 'date' || startKey === 'javentjeter')}>📅 {startDate ? formatDateCompact(startDate) : 'Zgjidh datën'}</button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="start">
-              <Calendar mode="single" selected={startDate} onSelect={onDateChange} />
+              <Calendar mode="single" selected={startDate ?? undefined} onSelect={onDateChange} />
             </PopoverContent>
           </Popover>
-          <input type="time" value={timeStr(startDate)} onChange={onTimeChange} className={pillInputCls} aria-label="Ora e fillimit" />
+          {startDate && (
+            <input type="time" value={timeStr(startDate)} onChange={onTimeChange} className={pillInputCls} aria-label="Ora e fillimit" />
+          )}
         </div>
       )}
     </>
