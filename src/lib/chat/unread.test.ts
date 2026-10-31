@@ -56,6 +56,11 @@ describe('group unread (per member)', () => {
     expect(isUnreadGroupMessageForMe({ id: '1', senderId: 'a', channelId: 'g1', isRead: true, readBy: ['b'] }, me, groups)).toBe(true);
     expect(isUnreadGroupMessageForMe({ id: '1', senderId: 'a', channelId: 'g1', isRead: false, readBy: ['b', me] }, me, groups)).toBe(false);
   });
+  it('a task-chat row is never a group or client unread — nothing can ever mark it read', () => {
+    expect(isUnreadGroupMessageForMe({ id: '1', senderId: 'a', channelId: 'g1', taskId: 't1', readBy: [] }, me, groups)).toBe(false);
+    expect(isUnreadGroupMessageForMe({ id: '2', senderId: 'a', taskId: 't1', isRead: false }, me, groups)).toBe(false);
+    expect(isUnreadClientMessage({ id: '3', senderId: 'c', channelId: 'client-1', taskId: 't1', senderType: 'client', isRead: false }, me)).toBe(false);
+  });
   it('only my groups, never my own or deleted messages', () => {
     expect(isUnreadGroupMessageForMe({ id: '1', senderId: 'a', channelId: 'g9', readBy: [] }, me, groups)).toBe(false);
     expect(isUnreadGroupMessageForMe({ id: '1', senderId: me, channelId: 'g1', readBy: [] }, me, groups)).toBe(false);

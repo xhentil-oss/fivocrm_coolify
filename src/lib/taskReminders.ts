@@ -6,7 +6,14 @@
 //   `reminderOffsetMinutes` — when the reminder was chosen RELATIVE to the
 //                             deadline ("1 orë para"), how far before `endDate`.
 //                             null/undefined = a custom absolute date/time.
-//   `reminderSentAt`        — idempotency: written by the cron once delivered.
+//   `reminderSentAt`        — idempotency: written by the cron once DELIVERED —
+//                             never for a reminder nobody received.
+//   `reminderSkippedAt` +   — the cron CONSUMED the reminder without sending it
+//   `reminderSkippedReason`   ('task-done': the task was closed before the
+//                             moment came; 'no-recipient': nobody to remind).
+//                             A consumed reminder does not fire late when the
+//                             task is reopened inside the look-back window, and
+//                             the panel never says "U dërgua" for it.
 //
 // The offset is what makes a moved deadline behave like Asana: postponing the
 // task carries the reminder with it (recomputed from the new `endDate`) and
@@ -40,8 +47,24 @@ export type ReminderBlockReason =
   | 'no-reminder'
   | 'invalid-date'
   | 'already-sent'
+  /** Consumed by the cron without a send (`reminderSkippedReason` says why). */
+  | 'skipped'
   | 'task-done'
-  | 'not-yet';
+  | 'not-yet'
+  /** Older than the look-back window: missed by an outage, not owed any more.
+   *  The cron never even reads it; without this reason the panel showed it as
+   *  pending forever. */
+  | 'stale';
+
+/** Why the cron consumed a reminder instead of sending it. */
+export type ReminderSkippedReason = 'task-done' | 'no-recipient';
+
+/** The consumed-without-send fields (not on the shared Task type yet). */
+export type ReminderSkipFields = { reminderSkippedAt?: unknown; reminderSkippedReason?: ReminderSkippedReason | string | null };
+
+/** The patch that re-ARMS a reminder: nothing delivered, nothing consumed. */
+const REARMED: { reminderSentAt: null; reminderSkippedAt: null; reminderSkippedReason: null } =
+  { reminderSentAt: null, reminderSkippedAt: null, reminderSkippedReason: null };
 
 export function parseTaskDate(v: unknown): Date | null {
   if (!v) return null;
@@ -72,7 +95,7 @@ export function setReminderPatch(
   choice: { offsetMinutes: number } | { at: Date } | null,
   setByUserId?: string | null,
 ): Partial<Task> {
-  const cleared: Partial<Task> = { reminderAt: null, reminderOffsetMinutes: null, reminderSentAt: null, reminderSetByUserId: null };
+  const cleared: Partial<Task> = { reminderAt: null, reminderOffsetMinutes: null, ...REARMED, reminderSetByUserId: null };
   if (choice === null) return cleared;
   const by = setByUserId || null;
   if ('offsetMinutes' in choice) {
@@ -81,11 +104,11 @@ export function setReminderPatch(
     return {
       reminderAt: reminderAtFromOffset(end, choice.offsetMinutes),
       reminderOffsetMinutes: choice.offsetMinutes,
-      reminderSentAt: null,
+      ...REARMED,
       reminderSetByUserId: by,
     };
   }
-  return { reminderAt: choice.at, reminderOffsetMinutes: null, reminderSentAt: null, reminderSetByUserId: by };
+  return { reminderAt: choice.at, reminderOffsetMinutes: null, ...REARMED, reminderSetByUserId: by };
 }
 
 /**
@@ -116,12 +139,15 @@ export function reminderPatchForDeadline(
   const at = reminderAtFromOffset(newEndDate, offset);
   const current = parseTaskDate(task.reminderAt);
   if (current && current.getTime() === at.getTime()) return {};
-  return { reminderAt: at, reminderSentAt: null };
+  return { reminderAt: at, ...REARMED };
 }
 
-/** Why this task should NOT be reminded right now; null = send it. */
+/**
+ * Why this task should NOT be reminded right now; null = send it.
+ * MIRRORED in api/cron/run.ts (`taskReminderBlockReason`) — keep in sync.
+ */
 export function taskReminderBlockReason(
-  task: Pick<Task, 'reminderAt' | 'reminderSentAt' | 'status'>,
+  task: Pick<Task, 'reminderAt' | 'reminderSentAt' | 'status'> & ReminderSkipFields,
   now: Date = new Date(),
 ): ReminderBlockReason | null {
   if (task.reminderAt === null || task.reminderAt === undefined) return 'no-reminder';
@@ -129,7 +155,9 @@ export function taskReminderBlockReason(
   if (!at) return 'invalid-date';
   if (task.status === 'Done') return 'task-done';
   if (task.reminderSentAt) return 'already-sent';
+  if (task.reminderSkippedAt) return 'skipped';
   if (at.getTime() > now.getTime()) return 'not-yet';
+  if (now.getTime() - at.getTime() > REMINDER_LOOKBACK_MS) return 'stale';
   return null;
 }
 
@@ -155,13 +183,20 @@ export function formatReminderMoment(at: Date, now: Date = new Date()): string {
 
 /** One-line state of the reminder for the detail panel. */
 export function describeReminder(
-  task: Pick<Task, 'reminderAt' | 'reminderOffsetMinutes' | 'reminderSentAt'>,
+  task: Pick<Task, 'reminderAt' | 'reminderOffsetMinutes' | 'reminderSentAt'> & ReminderSkipFields,
   now: Date = new Date(),
 ): string {
   const at = parseTaskDate(task.reminderAt);
   if (!at) return 'Pa kujtesë';
   const when = formatReminderMoment(at, now);
   if (task.reminderSentAt) return `U dërgua ${when}`;
+  // Consumed or missed — never "pending" for a moment that will not come.
+  if (task.reminderSkippedAt) {
+    return task.reminderSkippedReason === 'no-recipient'
+      ? `Nuk u dërgua ${when} (pa marrës)`
+      : `U anulua ${when} (detyra u mbyll)`;
+  }
+  if (now.getTime() - at.getTime() > REMINDER_LOOKBACK_MS) return `Kaloi pa u dërguar ${when}`;
   const preset = activeReminderPreset(task);
   return preset && preset.minutes > 0 ? `${preset.label} · ${when}` : when;
 }

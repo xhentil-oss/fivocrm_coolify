@@ -1,6 +1,8 @@
 // Pure helpers shared by the Tasks list, board and row components (extracted
 // verbatim from TasksView — no behaviour change).
-import { startOfRecurrenceDay } from '../../lib/recurringUtils';
+import { zonedParts } from '../../lib/recurringUtils';
+import { taskDateMs } from '../../lib/taskSort';
+import { dayDiffFromToday } from '../../lib/taskDue';
 import type { Task } from '../../types';
 
 /** Page size of the list view (flat and grouped). */
@@ -14,18 +16,9 @@ export const TASK_BOARD_COLUMNS = [
   { id: 'Done', title: 'Përfunduar', status: 'Done' },
 ] as const;
 
-/** A task is overdue only if its due DAY is before today (calendar-day, ignoring
- * time-of-day) — consistent with the "Sot/Nesër" labels now that tasks carry
- * intra-day times. Undated/invalid → not overdue. */
-export function isOverdueDate(endDate: any): boolean {
-  if (!endDate) return false;
-  const d = new Date(endDate);
-  if (isNaN(d.getTime())) return false;
-  // Calendar-day comparison in Europe/Tirane (the zone every deadline is a
-  // promise in) — machine-local midnight made a travelling browser and the
-  // cron disagree about "vonuar".
-  return startOfRecurrenceDay(d) < startOfRecurrenceDay(new Date());
-}
+// "Is this overdue?" lives in src/lib/taskDue.ts (`isTaskOverdue`): the chip,
+// the filter, the row, the board card and the groups all read the deadline
+// through `taskDeadline` there — this module no longer has its own definition.
 
 /** Generate a deterministic HSL background colour from a name string */
 export function hashColor(name: string): string {
@@ -35,23 +28,26 @@ export function hashColor(name: string): string {
   return `hsl(${h}, 55%, 42%)`;
 }
 
-// Format date compactly — always show actual date; flag overdue with ⚠️
-export const formatDateCompact = (date: Date, status?: Task['status']) => {
-  if (!date || isNaN(new Date(date).getTime())) {
+// Format a deadline compactly — always show the actual date; flag overdue with ⚠️.
+// `deadline` is the STORED value (`taskDeadline(task)`: Date / Timestamp / ISO),
+// `now` the instant (or `todayKey`) the Sot / Nesër / vonuar judgement is made at.
+export const formatDateCompact = (deadline: unknown, status?: Task['status'], now: number = Date.now()) => {
+  const ms = taskDateMs(deadline);
+  if (ms === null) {
     return { text: 'Pa afat', overdue: false, className: 'text-muted-foreground' };
   }
-  const now = new Date();
-  const taskDate = new Date(date);
+  // Day and month read in Europe/Tirane — the zone every deadline is a promise
+  // in — so a 23:30Z deadline is "20 Tet" on every browser, not "19 Tet" abroad.
+  const p = zonedParts(new Date(ms));
   // Albanian month names — the UI is sq-AL, "May 5" amid Albanian labels was a leak.
   const months = ['Jan', 'Shk', 'Mar', 'Pri', 'Maj', 'Qer', 'Kor', 'Gush', 'Sht', 'Tet', 'Nën', 'Dhj'];
-  const dateStr = `${taskDate.getDate()} ${months[taskDate.getMonth()]}`;
+  const dateStr = `${p.day} ${months[p.month]}`;
   // A finished task is never "vonuar": it used to render red with ⚠️ in the
   // Përfunduar column because only the calendar day was looked at.
   if (status === 'Done') return { text: dateStr, overdue: false, className: 'text-muted-foreground' };
   // Compare CALENDAR days (ignore time-of-day) so a task due later today isn't
   // labeled "Nesër" — intra-day times made the hour-based diff round up.
-  // Days are Europe/Tirane days (see isOverdueDate).
-  const diffDays = Math.round((startOfRecurrenceDay(taskDate) - startOfRecurrenceDay(now)) / (1000 * 60 * 60 * 24));
+  const diffDays = dayDiffFromToday(ms, now)!;
   if (diffDays < 0) return { text: dateStr, overdue: true, className: 'text-destructive font-medium' };
   if (diffDays === 0) return { text: 'Sot · ' + dateStr, overdue: false, className: 'text-warning font-medium' };
   if (diffDays === 1) return { text: 'Nesër · ' + dateStr, overdue: false, className: 'text-warning' };

@@ -161,6 +161,8 @@ const teamScopedCollections = new Set([
   'crmAutomationRules', 'crmAutomationRuns',
   'socialAccounts', 'socialSnapshots',
   'gmbAccounts', 'gmbReviews', 'gmbPosts',
+  // Virtual sales agent (Ana): prospects, searches, knowledge, runs, digests, senders, usage.
+  'prospects', 'prospectSearches', 'salesKnowledge', 'salesAgentRuns', 'salesAgentDigests', 'salesAgentSenders', 'salesAgentUsage',
   // Reporting & accountability module. Portal reads (published client reports and
   // their non-internal comments) pass skipTeamFilter and scope by businessId +
   // customerId explicitly, so membership here mainly enforces teamId on create.
@@ -212,6 +214,7 @@ const businessIsolatedAlways = new Set<string>([
   'crmAutomationRules', 'crmAutomationRuns',
   'socialAccounts', 'socialSnapshots',
   'gmbAccounts', 'gmbReviews', 'gmbPosts',
+  'prospects', 'prospectSearches', 'salesKnowledge', 'salesAgentRuns', 'salesAgentDigests', 'salesAgentSenders', 'salesAgentUsage',
   // Reporting module. Reports carry client-facing AND internal content plus employee
   // accountability data, so cross-tenant leakage here is the worst case in the
   // product — every one of these is business-isolated even when a view passes
@@ -699,12 +702,19 @@ export function useMutation<T = DocumentData>(collectionName: string) {
       // portal needs customerId on these collections, which have no customerId of
       // their own — pull it from the parent. Skipped when the caller already set it.
       let derivedCustomerId = (data as any)?.customerId as string | undefined;
-      if (!derivedCustomerId) {
+      // An explicit `customerId: null` is a decision ("not client-visible"), not
+      // an absence — it must not be overridden by the derivation below.
+      const customerIdExplicitlyNull = (data as any)?.customerId === null;
+      if (!derivedCustomerId && !customerIdExplicitlyNull) {
         try {
           const d = data as any;
           if (collectionName === 'invoiceItems' && d.invoiceId) {
             derivedCustomerId = (await getDoc(doc(db, 'invoices', d.invoiceId))).data()?.customerId;
-          } else if ((collectionName === 'tasks' || collectionName === 'projectComments') && d.projectId) {
+          } else if ((collectionName === 'tasks' || collectionName === 'projectComments') && d.projectId && !d.parentTaskId) {
+            // A SUBTASK never gets customerId: the field IS the portal-visibility
+            // switch and the portal never shows subtasks (it filters
+            // `!parentTaskId`), so deriving it here only published every
+            // subtask document (description, attachments, value) to the client.
             derivedCustomerId = (await getDoc(doc(db, 'projects', d.projectId))).data()?.customerId;
           }
           // taskComments are deliberately NOT auto-derived: customerId on a task

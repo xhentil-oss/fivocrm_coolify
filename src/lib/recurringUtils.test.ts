@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { buildNextRecurringTask, completeTask, recurrenceHasEnded, addFrequency, startOfRecurrenceDay, projectRecurrenceBlockReason, RECURRENCE_STOPPING_PROJECT_STATUSES, hasLiveSeriesSibling, remapDependsOnForNextCycle, recurringOccurrencesInMonth, zonedParts, reopenTaskPatch, seriesAnchorDay } from './recurringUtils';
+import { buildNextRecurringTask, completeTask, recurrenceHasEnded, addFrequency, startOfRecurrenceDay, projectRecurrenceBlockReason, RECURRENCE_STOPPING_PROJECT_STATUSES, hasLiveSeriesSibling, remapDependsOnForNextCycle, recurringOccurrencesInMonth, zonedParts, reopenTaskPatch, seriesAnchorDay, sameSeries, normalizeSeriesTitle, nextCycleClaimIsStale, RECURRING_SKIPPED_REASONS } from './recurringUtils';
+import type { NextCyclePlan } from './recurringUtils';
 import { TERMINAL_PROJECT_STATUSES } from './finance/recurringBilling';
 import type { Task } from '../types';
 
@@ -144,6 +145,103 @@ describe('completeTask — no duplicate cycle', () => {
     const outcome = await completeTask(baseTask({ dependsOn: ['b1'] }), { ...d, allTasks: [blocker] } as any);
     expect(outcome.kind).toBe('blocked');
     expect(d.created).toHaveLength(0);
+  });
+});
+
+// C16: the claim, the child and the Done used to be three writes. A closed tab
+// between the first and the second left a Todo tip with `nextCycleCreated: true`
+// and no child — the cron skipped it and a second Done did nothing. The claim now
+// receives the whole plan and writes it in ONE transaction ('done'); the lib
+// then creates nothing itself.
+describe('completeTask — atomic claim plan (C16)', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-08-09T12:00:00Z')); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const atomic = () => {
+    const plans: NextCyclePlan[] = [];
+    const created: any[] = [];
+    const updates: Array<{ id: string; d: any }> = [];
+    return {
+      plans, created, updates,
+      createTask: async (d: any) => { created.push(d); return {}; },
+      updateTask: async (id: string, d: any) => { updates.push({ id, d }); return {}; },
+      claimNextCycle: (async (_id: string, plan?: NextCyclePlan) => { if (plan) plans.push(plan); return 'done'; }) as (id: string, plan?: NextCyclePlan) => Promise<boolean | 'done'>,
+      releaseNextCycle: async () => { throw new Error('must not release a done claim'); },
+    };
+  };
+
+  it('hands the child to the claim and creates nothing itself when the claim wrote everything', async () => {
+    const d = atomic();
+    const outcome = await completeTask(baseTask(), d as any);
+    expect(outcome.kind).toBe('recurring-created');
+    expect(d.plans).toHaveLength(1);
+    expect(d.plans[0].child).toMatchObject({ title: 'Mirembajtje webi', status: 'Todo', isRecurring: true, seriesId: 't1' });
+    expect(d.plans[0].rearm).toBe(false);
+    expect(d.plans[0].expectedChildId).toBeNull();
+    expect(d.created).toHaveLength(0);
+    // The Done write is repeated through updateTask for the caller's side effects only.
+    expect(d.updates).toHaveLength(1);
+    expect(d.updates[0].d).toMatchObject({ status: 'Done', nextCycleCreated: true });
+  });
+
+  it('an ended series hands over no child and names the reason', async () => {
+    const d = atomic();
+    const outcome = await completeTask(baseTask({ recurringEndDate: new Date('2026-08-05T00:00:00Z') }), d as any);
+    expect(outcome.kind).toBe('recurring-ended');
+    expect(d.plans[0].child).toBeNull();
+    expect(d.plans[0].skippedReason).toBe('series-ended');
+    expect(RECURRING_SKIPPED_REASONS).toContain('series-ended');
+  });
+
+  it('a failing side-effect write after a done claim does not undo the completion', async () => {
+    const d = atomic();
+    d.updateTask = async () => { throw new Error('offline'); };
+    const outcome = await completeTask(baseTask(), d as any);
+    expect(outcome.kind).toBe('recurring-created');
+  });
+
+  it('a claim-only reservation (true) still creates the child and marks Done afterwards', async () => {
+    const d = atomic();
+    d.claimNextCycle = async () => true;
+    const outcome = await completeTask(baseTask(), d as any);
+    expect(outcome.kind).toBe('recurring-created');
+    expect(d.created).toHaveLength(1);
+    expect(d.updates[d.updates.length - 1].d).toMatchObject({ status: 'Done', nextCycleCreated: true });
+  });
+
+  it('a Todo tip with a claim nothing stands behind is re-armed when completed again', async () => {
+    // The broken state the old sequence left behind: claimed, no child, no reason.
+    const stuck = baseTask({ nextCycleCreated: true, nextCycleTaskId: 'ghost' } as any);
+    const d = atomic();
+    const outcome = await completeTask(stuck, { ...d, allTasks: [stuck] } as any);
+    expect(outcome.kind).toBe('recurring-created');
+    expect(d.plans[0].rearm).toBe(true);
+    expect(d.plans[0].expectedChildId).toBe('ghost');
+  });
+
+  it('a claimed tip whose recorded child (or any live sibling) exists is NOT re-armed', async () => {
+    const d = atomic();
+    const tip = baseTask({ nextCycleCreated: true, nextCycleTaskId: 'c1', seriesId: 's1' } as any);
+    const child = baseTask({ id: 'c1', status: 'Todo', seriesId: 's1' });
+    expect(nextCycleClaimIsStale(tip, [tip, child])).toBe(false);
+    // Child id unknown (legacy claim) but the series has a live row: not stale either.
+    const legacy = baseTask({ nextCycleCreated: true, seriesId: 's1' });
+    expect(nextCycleClaimIsStale(legacy, [legacy, child])).toBe(false);
+    // Without a task list nothing can be proved: never stale.
+    expect(nextCycleClaimIsStale(tip, undefined)).toBe(false);
+    const outcome = await completeTask(tip, { ...d, allTasks: [tip, child] } as any);
+    expect(outcome.kind).toBe('completed');
+    expect(d.plans).toHaveLength(0);
+  });
+});
+
+describe('legacy series identity normalises the title (both engines agree)', () => {
+  it('case and whitespace do not fork a legacy series', () => {
+    const a = baseTask({ id: 'a', title: 'Postim  Instagram ' });
+    const b = baseTask({ id: 'b', title: 'postim instagram' });
+    expect(normalizeSeriesTitle(a.title)).toBe('postim instagram');
+    expect(sameSeries(a, b)).toBe(true);
+    expect(sameSeries(a, baseTask({ id: 'c', title: 'Postim Facebook' }))).toBe(false);
   });
 });
 

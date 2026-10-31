@@ -11,6 +11,10 @@ interface TaskPanelHeaderProps {
   /** Toggles the status menu and closes the other pickers. */
   onToggleStatus: () => void;
   onPickStatus: (status: string) => void;
+  /** Statuses the rules would refuse (a recurring series the user may not
+   *  drive) — rendered disabled, with `lockNote` under the list. */
+  lockedStatuses?: string[];
+  lockNote?: string;
   /** True once the body scrolled past the big title — the header shows it. */
   scrolled: boolean;
   activeWorkersCount: number;
@@ -36,6 +40,8 @@ const TaskPanelHeader: React.FC<TaskPanelHeaderProps> = ({
   statusOpen,
   onToggleStatus,
   onPickStatus,
+  lockedStatuses,
+  lockNote,
   scrolled,
   activeWorkersCount,
   onExpand,
@@ -83,18 +89,26 @@ const TaskPanelHeader: React.FC<TaskPanelHeaderProps> = ({
               className="absolute left-0 top-[44px] z-40 flex w-[210px] flex-col rounded-xl border border-border bg-popover/90 p-1.5 shadow-[0_18px_48px_rgba(12,27,51,.18)] backdrop-blur-2xl"
               onClick={(e) => e.stopPropagation()}
             >
-              {STATUS_OPTS.map(s => (
+              {STATUS_OPTS.map(s => {
+                const locked = !!lockedStatuses?.includes(s.v);
+                return (
                 <button
                   key={s.v}
                   type="button"
+                  disabled={locked}
+                  title={locked ? lockNote : undefined}
                   onClick={() => onPickStatus(s.v)}
-                  className="grid h-10 grid-cols-[8px_1fr_auto] items-center gap-2.5 rounded-lg px-2.5 text-left text-[15px] text-foreground transition-colors hover:bg-muted"
+                  className="grid h-10 grid-cols-[8px_1fr_auto] items-center gap-2.5 rounded-lg px-2.5 text-left text-[15px] text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
                 >
                   <span className="h-2 w-2 rounded-full" style={{ background: s.dot }} />
                   <span>{s.label}</span>
                   {task.status === s.v && <Check className="h-4 w-4 text-primary" strokeWidth={2.6} />}
                 </button>
-              ))}
+                );
+              })}
+              {lockNote && (lockedStatuses?.length ?? 0) > 0 && (
+                <div className="px-2.5 pb-1 pt-1.5 text-[12px] leading-snug text-muted-foreground">{lockNote}</div>
+              )}
             </div>
           )}
         </div>

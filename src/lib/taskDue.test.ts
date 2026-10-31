@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   dayDiffFromToday, isOverdueDate, isDueTodayDate, isTaskOverdue, isTaskDueToday,
-  isTaskCompletedToday, zonedDayRange,
+  isTaskCompletedToday, zonedDayRange, taskDeadline, todayKeyOf, localDateOfZonedDay,
+  deadlineOnPickedDay,
 } from './taskDue';
 import { zonedParts } from './recurringUtils';
 
@@ -37,6 +38,42 @@ describe('taskDue — Europe/Tirane calendar days', () => {
     expect(isTaskCompletedToday({ status: 'Done', completedAt: '2026-10-12T10:00:00Z', updatedAt: '2026-10-19T09:00:00Z' } as any, NOW)).toBe(false);
     expect(isTaskCompletedToday({ status: 'Done', completedAt: '2026-10-19T06:00:00Z' } as any, NOW)).toBe(true);
     expect(isTaskCompletedToday({ status: 'Todo', completedAt: '2026-10-19T06:00:00Z' } as any, NOW)).toBe(false);
+  });
+  it('taskDeadline is endDate, else the legacy dueDate, else null — one definition for every surface', () => {
+    const end = new Date('2026-10-20T15:00:00Z');
+    const due = new Date('2026-10-21T15:00:00Z');
+    expect(taskDeadline({ endDate: end, dueDate: due } as any)).toBe(end);
+    expect(taskDeadline({ dueDate: due } as any)).toBe(due);
+    expect(taskDeadline({} as any)).toBeNull();
+    // The chip/filter/row predicate and the grouping predicate agree on a dueDate-only task.
+    expect(isTaskOverdue({ status: 'Todo', dueDate: '2026-10-18T09:00:00Z' } as any, NOW)).toBe(true);
+    expect(isOverdueDate(taskDeadline({ dueDate: '2026-10-18T09:00:00Z' } as any), NOW)).toBe(true);
+  });
+  it('todayKeyOf is the Tirane day key (same form as startOfRecurrenceDay) and changes only at Tirane midnight', () => {
+    expect(todayKeyOf(NOW)).toBe(Date.UTC(2026, 9, 19));
+    // 23:59 Tirane on the 19th (21:59Z) is still the 19th; 22:00Z is the 20th there.
+    expect(todayKeyOf(Date.parse('2026-10-19T21:59:00Z'))).toBe(todayKeyOf(NOW));
+    expect(todayKeyOf(Date.parse('2026-10-19T22:00:00Z'))).toBe(Date.UTC(2026, 9, 20));
+    // A day key is itself a valid `now` for every helper here (what the views
+    // pass from useTodayKey): it resolves to the same day as the real instant.
+    for (const v of ['2026-10-18T22:30:00Z', '2026-10-19T23:59:00+02:00', '2026-10-26T09:00:00+01:00', '2026-10-17T09:00:00+02:00']) {
+      expect(dayDiffFromToday(v, todayKeyOf(NOW))).toBe(dayDiffFromToday(v, NOW));
+    }
+    expect(isTaskOverdue({ status: 'Todo', endDate: '2026-10-18T09:00:00Z' } as any, todayKeyOf(NOW))).toBe(true);
+    expect(isTaskDueToday({ status: 'Todo', endDate: '2026-10-19T15:00:00Z' } as any, todayKeyOf(NOW))).toBe(true);
+  });
+  it('localDateOfZonedDay / deadlineOnPickedDay round-trip the Tirane day, whatever the machine zone', () => {
+    // 23:30Z on the 19th = 20 Oct 01:30 Tirane → the picker must highlight the 20th.
+    const sel = localDateOfZonedDay('2026-10-19T23:30:00Z')!;
+    expect([sel.getFullYear(), sel.getMonth(), sel.getDate()]).toEqual([2026, 9, 20]);
+    expect(localDateOfZonedDay(null)).toBeUndefined();
+    // Picking the 22nd keeps the old deadline's Tirane time (01:30), not a local setHours.
+    const moved = deadlineOnPickedDay(new Date(2026, 9, 22), '2026-10-19T23:30:00Z');
+    expect(zonedParts(moved)).toMatchObject({ year: 2026, month: 9, day: 22, hours: 1, minutes: 30 });
+    // An undated task lands at 17:00 Tirane (= 15:00Z in October).
+    expect(deadlineOnPickedDay(new Date(2026, 9, 22), null).toISOString()).toBe('2026-10-22T15:00:00.000Z');
+    // Across the DST switch the wall-clock hour is kept (26 Oct is UTC+1).
+    expect(deadlineOnPickedDay(new Date(2026, 9, 26), null).toISOString()).toBe('2026-10-26T16:00:00.000Z');
   });
   it('zonedDayRange steps calendar days across DST at local midnight', () => {
     const days = zonedDayRange(new Date('2026-10-23T15:00:00Z'), 5);

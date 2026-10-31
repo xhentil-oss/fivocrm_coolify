@@ -1,7 +1,20 @@
 import { addDoc, collection, doc, increment, updateDoc } from 'firebase/firestore';
 import { db, getNextInvoiceNumber } from '../firebase';
 import { getGlobalBusinessId } from '../../hooks/useFirestore';
+import { zonedDate, zonedParts } from '../recurringUtils';
 import type { Project } from '../../types';
+
+/**
+ * Due date of a task's draft invoice: the last instant of the issue month in
+ * Europe/Tirane. The machine-local month end a browser outside Albania
+ * produced landed on a different calendar day than the finance engines (which
+ * key every period in the recurrence zone) read. `Date.UTC(y, m + 1, 0)` is
+ * the month's last day, so no overflow.
+ */
+export function taskInvoiceDueDate(issuedAt: Date): Date {
+  const p = zonedParts(issuedAt);
+  return zonedDate(p.year, p.month + 1, 0, 23, 59, 59, 999);
+}
 
 // ── Valued tasks (task.value) — one financial meaning everywhere ─────────────
 //
@@ -96,7 +109,7 @@ export async function applyValuedTaskSideEffects(opts: {
     ? await getNextInvoiceNumber(scopeId)
     : `TASK-${Date.now().toString(36).toUpperCase()}`;
   const issuedAt = new Date();
-  const due = new Date(issuedAt.getFullYear(), issuedAt.getMonth() + 1, 0, 23, 59, 59, 999);
+  const due = taskInvoiceDueDate(issuedAt);
 
   const invoiceRef = await addDoc(collection(db, 'invoices'), stripUndefined({
     invoiceNumber,

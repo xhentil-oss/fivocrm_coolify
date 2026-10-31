@@ -67,6 +67,10 @@
       "destination": "/api/email?type=nazmije"
     },
     {
+      "source": "/api/sales-agent",
+      "destination": "/api/email?type=sales-agent"
+    },
+    {
       "source": "/api/sync-claims",
       "destination": "/api/email?type=sync-claims"
     },

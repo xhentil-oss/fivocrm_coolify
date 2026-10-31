@@ -5,6 +5,7 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   generateMessageIDV2,
+  downloadMediaMessage,
 } from 'baileys';
 import { Boom } from '@hapi/boom';
 import admin from 'firebase-admin';
@@ -1202,6 +1203,119 @@ function extractContent(c: any): { text: string; kind: 'text' | 'media' } {
   return { text: '[Media]', kind: 'media' };
 }
 
+// ── Inbound media (photos, videos, voice notes, documents, stickers) ──────────
+// Until Oct 2026 a photo reached the CRM as the text "[Foto]" and nothing else:
+// the stanza was classified as media but never downloaded. Now the bytes are
+// fetched from WhatsApp's CDN AFTER the row is created (a slow or failed download
+// must never delay the message or its notification), stored under the same
+// policy as /upload (allow-listed extension + magic-byte check, unguessable
+// name) and the row gets `mediaType` / `mediaUrl` so WhatsAppChatPanel renders it.
+const MEDIA_MAX_BYTES = 15 * 1024 * 1024; // same cap as /upload
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 45_000;
+/** Public origin of /files when there is no request to derive it from (background download). */
+const FILES_PUBLIC_URL = (process.env.PUBLIC_URL || 'https://vps.fivocrm.com').replace(/\/$/, '');
+if (!process.env.PUBLIC_URL) console.warn('[media] PUBLIC_URL nuk është vendosur — mediat do të lidhen te ' + FILES_PUBLIC_URL);
+
+type InboundMediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker';
+interface MediaDescriptor { mediaType: InboundMediaType; mime: string; fileName: string; fileLength: number }
+
+/** Which media node a (already unwrapped) content object carries, or null for text/others. */
+function describeMedia(c: any): MediaDescriptor | null {
+  const s = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : '');
+  // fileLength arrives as a protobuf Long in Baileys 7 (toNumber()), a number, or a string.
+  const n = (v: unknown) => {
+    const x = Number(v !== null && typeof v === 'object' && typeof (v as any).toNumber === 'function' ? (v as any).toNumber() : v);
+    return Number.isFinite(x) && x > 0 ? x : 0;
+  };
+  if (c.imageMessage) return { mediaType: 'image', mime: s(c.imageMessage.mimetype) || 'image/jpeg', fileName: '', fileLength: n(c.imageMessage.fileLength) };
+  if (c.videoMessage) return { mediaType: 'video', mime: s(c.videoMessage.mimetype) || 'video/mp4', fileName: '', fileLength: n(c.videoMessage.fileLength) };
+  if (c.ptvMessage) return { mediaType: 'video', mime: s(c.ptvMessage.mimetype) || 'video/mp4', fileName: '', fileLength: n(c.ptvMessage.fileLength) };
+  if (c.documentMessage) return { mediaType: 'document', mime: s(c.documentMessage.mimetype), fileName: s(c.documentMessage.fileName) || s(c.documentMessage.title), fileLength: n(c.documentMessage.fileLength) };
+  if (c.audioMessage) return { mediaType: 'audio', mime: s(c.audioMessage.mimetype) || 'audio/ogg', fileName: '', fileLength: n(c.audioMessage.fileLength) };
+  if (c.stickerMessage) return { mediaType: 'sticker', mime: s(c.stickerMessage.mimetype) || 'image/webp', fileName: '', fileLength: n(c.stickerMessage.fileLength) };
+  return null;
+}
+
+/** Sniffed family → the extension we store it under (the content decides, not the declared mime). */
+const SNIFF_EXT: Record<NonNullable<ReturnType<typeof sniffType>>, string> = {
+  png: 'png', jpeg: 'jpg', gif: 'gif', webp: 'webp', pdf: 'pdf', wav: 'wav', ogg: 'ogg',
+  mp3: 'mp3', mp4: 'mp4', webm: 'webm', aac: 'aac', amr: 'amr',
+};
+
+/**
+ * Pick the stored extension for downloaded bytes: the declared mime/filename
+ * extension when the magic bytes agree with it, else the sniffed family's own
+ * extension (a "jpeg" that is really a PNG is stored as .png), else — for
+ * office/text types that have no signature — the declared extension as long as
+ * it is allow-listed and needs no signature. Returns '' when nothing is safe.
+ */
+function mediaExtension(buf: Buffer, mime: string, fileName: string): string {
+  const declared = uploadExtension(fileName, mime);
+  const family = sniffType(buf);
+  if (declared && !FORBIDDEN_UPLOAD_EXT.has(declared) && UPLOAD_EXT_MIME[declared]) {
+    const wanted = EXT_SNIFF[declared];
+    if (!wanted) return family ? '' : declared;           // office/text: only when the bytes are not a known binary
+    if (family && wanted.includes(family)) return declared;
+  }
+  if (family) return SNIFF_EXT[family];
+  return '';
+}
+
+/**
+ * Download one media message and attach it to its row. Never throws: a failure is
+ * recorded on the row as `mediaError` and the "[Foto]" text stays as the fallback.
+ */
+async function attachInboundMedia(agent: AgentState, msg: any, content: any, desc: MediaDescriptor, docId: string): Promise<void> {
+  const ref = db.collection('whatsappMessages').doc(docId);
+  // Baileys' assertMediaContent knows image/video/audio/document/sticker only, so the
+  // download is run on our already-unwrapped content (view-once, ephemeral, captioned
+  // document peeled) with a round video note (ptvMessage) presented as a videoMessage.
+  const dlMsg = { key: msg.key, message: content.ptvMessage && !content.videoMessage ? { videoMessage: content.ptvMessage } : content };
+  const fail = async (why: string) => {
+    console.warn(`[${agent.config.id}] media ${desc.mediaType} për ${docId} nuk u ruajt: ${why}`);
+    try { await ref.update({ mediaError: why, updatedAt: nowTs() }); } catch { /* row may be gone */ }
+  };
+  if (!agent.config.teamId) { await fail('agjenti pa teamId'); return; }
+  if (desc.fileLength > MEDIA_MAX_BYTES) { await fail(`skedari ${Math.round(desc.fileLength / 1024 / 1024)} MB kalon kufirin 15 MB`); return; }
+  let buf: Buffer;
+  try {
+    const sock = agent.sock;
+    const dl = downloadMediaMessage(dlMsg as any, 'buffer', {}, {
+      logger: pino({ level: 'silent' }) as any,
+      // A stale CDN url (media older than a few hours) is re-uploaded by the phone on request.
+      reuploadRequest: sock ? sock.updateMediaMessage : (async (m: any) => m),
+    });
+    const out = await Promise.race([dl, sleep(MEDIA_DOWNLOAD_TIMEOUT_MS).then(() => null)]);
+    if (!out) { await fail('shkarkimi kaloi ' + MEDIA_DOWNLOAD_TIMEOUT_MS / 1000 + ' s'); return; }
+    buf = out as Buffer;
+  } catch (e: any) {
+    await fail('shkarkimi dështoi: ' + String(e?.message || e).slice(0, 200));
+    return;
+  }
+  if (!buf?.length) { await fail('skedar bosh'); return; }
+  if (buf.length > MEDIA_MAX_BYTES) { await fail('skedari kalon kufirin 15 MB'); return; }
+  const ext = mediaExtension(buf, desc.mime, desc.fileName);
+  if (!ext) { await fail(`tip i papranuar (${desc.mime || 'pa mime'})`); return; }
+  const safeName = `${randomUUID()}.${ext}`;
+  const relPath = `${agent.config.teamId}/whatsapp-media/${safeName}`;
+  try {
+    const absDir = join(UPLOAD_DIR, agent.config.teamId, 'whatsapp-media');
+    mkdirSync(absDir, { recursive: true });
+    writeFileSync(join(absDir, safeName), buf);
+  } catch (e: any) { await fail('ruajtja në disk dështoi: ' + String(e?.message || e).slice(0, 200)); return; }
+  try {
+    await ref.update({
+      mediaType: desc.mediaType,
+      mediaUrl: `${FILES_PUBLIC_URL}/files/${relPath}`,
+      mediaMime: UPLOAD_EXT_MIME[ext][0],
+      mediaFilename: desc.fileName || safeName,
+      mediaSize: buf.length,
+      mediaError: admin.firestore.FieldValue.delete(),
+      updatedAt: nowTs(),
+    });
+  } catch (e: any) { console.error(`[${agent.config.id}] media row update failed for ${docId}:`, e); }
+}
+
 /** A reaction updates `reactions.me|contact` on the row it reacts to (if we have it) — never a new row. */
 async function applyReaction(agent: AgentState, reaction: any, isFromMe: boolean): Promise<void> {
   const targetId = reaction?.key?.id;
@@ -1636,6 +1750,14 @@ async function handleUpsertMessage(agent: AgentState, msg: any, type: string): P
     // ALREADY_EXISTS: our own /send echo, or a redelivery/replay — the row is there, leave it alone.
     if (e?.code === 6 || /already exists/i.test(String(e?.message))) return;
     throw e;
+  }
+
+  // Photos / videos / voice notes / documents: fetch the bytes in the background
+  // and attach them to the row just created. Both directions — a photo the staff
+  // sent from the PHONE belongs in the CRM thread too.
+  if (kind === 'media') {
+    const desc = describeMedia(content);
+    if (desc) void attachInboundMedia(agent, msg, content, desc, docId);
   }
 
   // Track last inbound for 24h-window awareness (baileys side).
@@ -2840,6 +2962,16 @@ function startCronSchedulers(): void {
   scheduleDailyInZone(CRON_LOCAL_TZ, 8, 45, () => { void triggerCronJob('nazmije-morning'); });
   scheduleDailyInZone(CRON_LOCAL_TZ, 16, 0, () => { void triggerCronJob('nazmije-afternoon'); });
   scheduleDailyInZone(CRON_LOCAL_TZ, 16, 30, () => { void triggerCronJob('nazmije-weekly'); }); // the job answers not-friday on other days
+  // ── Ana, the virtual sales agent (api/_salesAgentJobs.ts) — NOT in run-all ──
+  // Prospecting spends Google Places requests (metered per tenant) and cold WhatsApp
+  // messages real people under the plan's law 7 (≤10/day, ≥1h gap per number, office
+  // window — the job itself refuses outside it, so a 15-min tick is cheap). Nudges and
+  // the handoff-SLA escalation are hourly; the digest is a wall-clock promise.
+  setInterval(() => { void triggerCronJob('sales-agent-prospecting'); }, 15 * MIN);
+  setInterval(() => { void triggerCronJob('sales-agent-cold-wa'); }, 15 * MIN);
+  setInterval(() => { void triggerCronJob('sales-agent-nudges'); }, 60 * MIN);
+  scheduleDailyInZone(CRON_LOCAL_TZ, 8, 15, () => { void triggerCronJob('sales-agent-digest'); });
+  scheduleDailyInZone(CRON_LOCAL_TZ, 3, 30, () => { void triggerCronJob('sales-agent-prospect-ttl'); });
 
   // Kick the frequent set shortly after boot so a restart doesn't stall a broadcast.
   setTimeout(() => { void triggerCronJob('whatsapp-broadcasts'); }, MIN);

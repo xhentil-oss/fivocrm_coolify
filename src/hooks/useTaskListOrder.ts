@@ -2,8 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { arrayMove } from '@dnd-kit/sortable';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { useGlobalTeamId } from './useFirestore';
-import { useTeamSettingsData, saveTeamSettings } from './useTeamSettings';
+import { useTeamSettingsDoc, saveTeamSettings } from './useTeamSettings';
 import { toast } from './use-toast';
 import { sortByManualOrder, pruneManualOrder, doneLast } from '../lib/taskSort';
 import type { Task } from '../types';
@@ -18,23 +17,28 @@ import type { Task } from '../types';
 export function useTaskListOrder(allTasks: Task[], rawTasks: Task[] | undefined | null) {
   const { user } = useAuth();
   const permissions = usePermissions();
-  const teamId = useGlobalTeamId();
-  const teamSettingsData = useTeamSettingsData();
+  // The settings AND the team they belong to: `settings` resets to null while a
+  // new team loads, and `teamId` here is the one the loaded order is for.
+  const { settings: teamSettingsData, teamId } = useTeamSettingsDoc();
 
   const [listOrder, setListOrder] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('tasks_list_order') || '[]'); } catch { return []; }
   });
-  const listOrderLoaded = React.useRef(false);
+  // The team whose order is currently loaded (`undefined` = nothing loaded yet).
+  // A plain "loaded once" boolean never reset, so after a team switch the list
+  // kept the OLD team's order until a reload.
+  const listOrderLoadedFor = React.useRef<string | undefined>(undefined);
   const canWriteSharedOrder = !!(permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin);
   const personalOrderKey = user?.uid ? `tasks_list_order:${user.uid}` : null;
   const personalOrderNoticeShown = React.useRef(false);
-  // Load the order once: a writer gets the shared Firestore order (it takes
-  // priority over localStorage); a non-writer gets their own saved order first —
-  // otherwise every reload clobbered their drags with the shared one.
+  // Load the order once PER TEAM: a writer gets the shared Firestore order (it
+  // takes priority over localStorage); a non-writer gets their own saved order
+  // first — otherwise every reload clobbered their drags with the shared one.
   useEffect(() => {
-    if (listOrderLoaded.current) return;
-    if (teamSettingsData === null || permissions.isLoading) return;
-    listOrderLoaded.current = true;
+    if (teamSettingsData === null || !teamId || permissions.isLoading) return;
+    if (listOrderLoadedFor.current === teamId) return;
+    const isTeamSwitch = listOrderLoadedFor.current !== undefined;
+    listOrderLoadedFor.current = teamId;
     if (!canWriteSharedOrder && personalOrderKey) {
       try {
         const own = JSON.parse(localStorage.getItem(personalOrderKey) || 'null');
@@ -43,8 +47,13 @@ export function useTaskListOrder(allTasks: Task[], rawTasks: Task[] | undefined 
     }
     if (teamSettingsData.taskListOrder && teamSettingsData.taskListOrder.length > 0) {
       setListOrder(teamSettingsData.taskListOrder);
+      return;
     }
-  }, [teamSettingsData, permissions.isLoading, canWriteSharedOrder, personalOrderKey]);
+    // The new team has no saved order: drop the previous team's, or its drag
+    // order would silently apply to this team's tasks. (First load keeps the
+    // localStorage copy, exactly as before.)
+    if (isTeamSwitch) setListOrder([]);
+  }, [teamSettingsData, teamId, permissions.isLoading, canWriteSharedOrder, personalOrderKey]);
 
   // Shared manual-order map (used by both the list view and board columns).
   const orderMap = useMemo(() => new Map(listOrder.map((id, i) => [id, i])), [listOrder]);
@@ -65,7 +74,9 @@ export function useTaskListOrder(allTasks: Task[], rawTasks: Task[] | undefined 
     // into the saved (team-shared) order moved every completed task to the end
     // for good, so re-opening one never brought it back to its slot.
     const full = sortByManualOrder(allTasks, orderMap).map(t => t.id);
-    for (const id of listOrder) if (!full.includes(id)) full.push(id);
+    // Indexed once: `full.includes` inside the loop was O(order × tasks) per drop.
+    const present = new Set(full);
+    for (const id of listOrder) if (!present.has(id)) { present.add(id); full.push(id); }
     const oldIndex = full.indexOf(taskId);
     const newIndex = full.indexOf(overId);
     if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return;

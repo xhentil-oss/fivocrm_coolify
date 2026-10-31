@@ -19,6 +19,11 @@ Rules:
 <!-- Add tasks here only when there are real next steps. -->
 
 <todo>
+Commit + push rregullimet e auditimit Tasks (23 tetor), pastaj pull + restart ne VPS
+69 skedare te pa-commit-uar (rules 225/225 DHE index-i jane deploy-uar; 12 nen-detyra u riparuan me scripts/strip-subtask-customer-id.mjs --apply). Pas push-it: `ssh -i ~/.ssh/fivocrm_vps root@65.109.132.203 "cd /root/fivocrm && git reset -q && git pull && cd vps && npm run prod"` (cron-i i ri: claim ne transaksion, task_overdue pas dites, reminderSkipped*, portal_fu_<cid>_<day>).
+</todo>
+
+<todo>
 Firestore "Quota exceeded" (RESOURCE_EXHAUSTED) eshte AKTIV ne VPS - kaloje projektin ne Blaze
 Pare 13 Tetor 16:45 UTC ne /root/.pm2/logs/server-error.log (742 MB, 3 520 goditje "Quota exceeded", te fundit pas restart-it te dites: "Error updating receipt" nga agjenti WhatsApp). Kuota ditore e planit Spark (50K lexime) mbaron brenda dites, keshtu qe cdo pune cron ne Vercel qe prek Firestore pas asaj ore deshton heshtazi. Hapat: (1) Firebase Console -> Usage -> Blaze; (2) `pm2 install pm2-logrotate` ne VPS qe logu te mos rritet pa fund; (3) pasi te kaloje, kontrollo `platformJobRuns` per punet e sotme.
 </todo>

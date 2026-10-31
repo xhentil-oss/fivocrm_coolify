@@ -261,17 +261,25 @@ const QuickTaskForm: React.FC<{
   const unitLabels = { dite: 'ditë', jave: 'javë', muaj: 'muaj' } as const;
   const pickedDayNames = [1, 2, 3, 4, 5, 6, 0].filter(d => recDays.includes(d)).map(d => SQ_DOW[d]);
   // The engine can express "several days EVERY week" (daily + days-of-week) or
-  // "one day every N weeks" (weekly + interval) — but not both. The summary must
-  // describe what will actually be stored, not what was clicked (it used to show
-  // every picked day while only the first one survived).
-  const multiDayDropped = rec === 'custom' && recUnit === 'jave' && recInterval > 1 && recDays.length > 1;
-  const effectiveDayNames = multiDayDropped ? pickedDayNames.slice(0, 1) : pickedDayNames;
+  // "one day every N weeks" (weekly + interval) — but not both. With an interval
+  // above 1 the day picker is therefore SINGLE-select (the extra days used to be
+  // dropped silently at submit, keeping only the first one) and says so.
+  const singleDayMode = rec === 'custom' && recUnit === 'jave' && recInterval > 1;
   const recSummary =
     rec === 'weekly' ? 'çdo javë, ditën e zgjedhur'
     : rec === 'monthly' ? 'çdo muaj, në të njëjtën datë'
     : rec === 'custom'
-      ? `çdo ${recInterval > 1 ? `${recInterval} ` : ''}${unitLabels[recUnit]}${recUnit === 'jave' && effectiveDayNames.length ? ` (${effectiveDayNames.join(', ')})` : ''}${multiDayDropped ? ' — me interval >1 javë mbahet vetëm dita e parë' : ''}`
+      ? `çdo ${recInterval > 1 ? `${recInterval} ` : ''}${unitLabels[recUnit]}${recUnit === 'jave' && pickedDayNames.length ? ` (${pickedDayNames.join(', ')})` : ''}`
       : '';
+  const singleDayNotice = singleDayMode
+    ? `Çdo ${recInterval} javë mbështet vetëm NJË ditë në javë — zgjidh ditën${recDays.length ? ` (${pickedDayNames[0]})` : ''}.`
+    : '';
+  // Entering single-day mode (interval stepped above 1, or the unit switched to
+  // weeks with several days still picked) trims the pick to its first day in
+  // the open, with the notice above — instead of silently at submit.
+  useEffect(() => {
+    if (singleDayMode && recDays.length > 1) setRecDays(prev => prev.slice(0, 1));
+  }, [singleDayMode, recDays.length]);
 
   const canCreate = title.trim().length > 0;
 
@@ -413,7 +421,14 @@ const QuickTaskForm: React.FC<{
         <button
           key={d}
           type="button"
-          onClick={() => setRecDays(prev => (on ? prev.filter(x => x !== d) : [...prev, d].sort((a, b) => a - b)))}
+          aria-pressed={on}
+          title={singleDayMode ? 'Me interval >1 javë zgjidhet vetëm një ditë' : undefined}
+          // Single-day mode (every N>1 weeks): a click REPLACES the selection —
+          // the engine has no "several days every N weeks", so a second day
+          // could only ever be dropped at submit.
+          onClick={() => setRecDays(prev => (on
+            ? prev.filter(x => x !== d)
+            : singleDayMode ? [d] : [...prev, d].sort((a, b) => a - b)))}
           className={`${size === 'sm' ? 'h-[26px] w-[28px] rounded-lg text-[10.5px]' : 'h-10 rounded-[10px] text-xs'} border-[1.5px] font-extrabold transition-colors ${
             on ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-muted-foreground hover:border-primary/50'
           }`}
@@ -660,6 +675,7 @@ const QuickTaskForm: React.FC<{
             {rec === 'custom' && recUnit === 'jave' && (
               <div className="mt-2 grid grid-cols-7 gap-1.5">{dayPills('lg')}</div>
             )}
+            {singleDayNotice && <div className="mt-2">{warnBanner(singleDayNotice)}</div>}
             {rec !== 'never' && (
               <div className="mt-2 flex items-center gap-2">
                 <span className="text-[11.5px] font-semibold text-muted-foreground">Përsërit deri</span>
@@ -871,6 +887,7 @@ const QuickTaskForm: React.FC<{
               <span className="text-[11.5px] font-semibold text-muted-foreground/80">→ {recSummary}</span>
             )}
           </div>
+          {singleDayNotice && <div className="mt-2">{warnBanner(singleDayNotice)}</div>}
 
           <div className="mt-3.5 flex flex-wrap items-center gap-2">
             <span className="mr-0.5 text-xs font-bold text-muted-foreground">Kujtesë</span>

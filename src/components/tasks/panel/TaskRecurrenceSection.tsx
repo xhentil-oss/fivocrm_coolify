@@ -5,11 +5,16 @@ import { parseTaskDate } from '../../../lib/taskReminders';
 import { toast } from '../../../hooks/use-toast';
 import { Button } from '../../ui/button';
 import type { Task } from '../../../types';
-import { IconTile, SheetRow, chipCls, pillCls, rowBodyCls } from './panelShared';
+import { IconTile, SheetRow, chipCls, pillCls, rowBodyCls, formatDateCompact } from './panelShared';
+import { SERIES_LOCK_NOTE, describeRecurrence } from './panelLogic';
 
 interface TaskRecurrenceSectionProps {
   task: Task;
   readOnly: boolean;
+  /** Assignee / creator / Admin-Manager (canDriveTaskSeries): the only ones
+   *  the rules let re-arm `nextCycleCreated` — reviving an ended series or
+   *  re-arming on enable is refused for anyone else. */
+  canDriveSeries: boolean;
   allTasks?: Task[];
   onUpdate: (id: string, data: any) => Promise<any>;
   open: boolean;
@@ -17,32 +22,11 @@ interface TaskRecurrenceSectionProps {
 }
 
 const WEEK_CHIPS = [{ v: 1, l: 'Hën' }, { v: 2, l: 'Mar' }, { v: 3, l: 'Mër' }, { v: 4, l: 'Enj' }, { v: 5, l: 'Pre' }, { v: 6, l: 'Sht' }, { v: 0, l: 'Die' }];
-const DAY_NAMES_SHORT = ['Die', 'Hën', 'Mar', 'Mër', 'Enj', 'Pre', 'Sht'];
-const DAY_NAMES = ['Diel', 'Hënë', 'Martë', 'Mërkurë', 'Enjte', 'Premte', 'Shtunë'];
-
-/** Human description of the series ("Çdo javë, Hënë"). */
-const describeRecurrence = (task: Task) => {
-  const n = task.recurringInterval ?? 1;
-  switch (task.recurringFrequency) {
-    case 'daily': {
-      const days = (task as any).recurringDaysOfWeek as number[] | undefined;
-      return days && days.length > 0 && days.length < 7 ? `Çdo ${days.map(d => DAY_NAMES_SHORT[d]).join(', ')}` : 'Çdo ditë';
-    }
-    case 'weekly':
-      return `Çdo ${n > 1 ? `${n} javë` : 'javë'}, ${DAY_NAMES[(task as any).recurringDayOfWeek ?? 0]}`;
-    case 'monthly':
-      return `Çdo ${n > 1 ? `${n} muaj` : 'muaj'}, ditën ${(task as any).recurringDayOfMonth ?? 1}`;
-    case 'yearly':
-      return `Çdo ${n > 1 ? `${n} vite` : 'vit'}`;
-    default:
-      return 'Përsëritet';
-  }
-};
 
 /** "Përsëritje" row (Koha card) — frequency pills, day editor and "Deri më".
  *  Always mounted (renders nothing when hidden) so its draft state survives
  *  like it did when it lived in the panel. */
-const TaskRecurrenceSection: React.FC<TaskRecurrenceSectionProps> = ({ task, readOnly, allTasks, onUpdate, open, onToggle }) => {
+const TaskRecurrenceSection: React.FC<TaskRecurrenceSectionProps> = ({ task, readOnly, canDriveSeries, allTasks, onUpdate, open, onToggle }) => {
   // Recurring edit state
   const [editingRecurring, setEditingRecurring] = useState(false);
   const [recurringDayOfWeek, setRecurringDayOfWeek] = useState<number>((task as any).recurringDayOfWeek ?? 1);
@@ -82,8 +66,10 @@ const TaskRecurrenceSection: React.FC<TaskRecurrenceSectionProps> = ({ task, rea
       ? addFrequency(new Date(), freq, dow, dom, 1, defaultDays)
       : rawNext;
     // Re-arm the spawn flag only when the series has no live occurrence —
-    // same guard as re-opening (see hasLiveSeriesSibling).
-    const mayRearm = task.status !== 'Done' || !hasLiveSeriesSibling(task, allTasks);
+    // same guard as re-opening (see hasLiveSeriesSibling) — and only for
+    // someone the rules let change the flag (the write is refused otherwise;
+    // the cron's self-heal still picks the series up).
+    const mayRearm = canDriveSeries && (task.status !== 'Done' || !hasLiveSeriesSibling(task, allTasks));
     await onUpdate(task.id, {
       isRecurring: true,
       recurringFrequency: freq,
@@ -113,6 +99,10 @@ const TaskRecurrenceSection: React.FC<TaskRecurrenceSectionProps> = ({ task, rea
       && !hasLiveSeriesSibling(task, allTasks)
       && recurrenceHasEnded(task)
       && !recurrenceHasEnded({ ...task, recurringEndDate: nd } as Task);
+    if (extendsEndedSeries && !canDriveSeries) {
+      toast({ title: 'Seri e përfunduar', description: SERIES_LOCK_NOTE });
+      return;
+    }
     try {
       await onUpdate(task.id, {
         recurringEndDate: nd,
@@ -136,9 +126,22 @@ const TaskRecurrenceSection: React.FC<TaskRecurrenceSectionProps> = ({ task, rea
         value={task.isRecurring ? describeRecurrence(task) : 'Asnjëherë'}
         valueClassName={`text-[15px] ${task.isRecurring ? 'text-foreground/80' : 'text-muted-foreground'}`}
         open={open}
-        disabled={readOnly}
+        // A read-only viewer may still OPEN a recurring row to see the series
+        // days and "Deri më" — only editing is hidden.
+        disabled={readOnly && !task.isRecurring}
         onToggle={onToggle}
       />
+      {open && readOnly && task.isRecurring && (
+        <div className={`${rowBodyCls} flex-col items-stretch gap-2`} onClick={(e) => e.stopPropagation()}>
+          <div className="text-[13px] text-muted-foreground">{describeRecurrence(task)} · Europe/Tirane</div>
+          <div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+            <span>Deri më:</span>
+            {(() => { const d = parseTaskDate((task as any).recurringEndDate); return d
+              ? <span className="font-mono text-foreground">{formatDateCompact(d)} {d.getFullYear()}</span>
+              : <span className="text-muted-foreground/70">pa fund</span>; })()}
+          </div>
+        </div>
+      )}
       {open && !readOnly && (
         <div className={`${rowBodyCls} flex-col items-stretch gap-3`} onClick={(e) => e.stopPropagation()}>
           <div className="flex flex-wrap gap-2">
@@ -214,6 +217,9 @@ const TaskRecurrenceSection: React.FC<TaskRecurrenceSectionProps> = ({ task, rea
                   ? <button type="button" onClick={() => changeRecurringEndDate(null)} className="text-[13px] font-semibold text-muted-foreground underline underline-offset-2 hover:text-foreground">Hiq</button>
                   : <span className="text-[13px] text-muted-foreground/70">pa fund</span>}
               </div>
+              {!canDriveSeries && task.status === 'Done' && recurrenceHasEnded(task) && (
+                <div className="text-[12px] leading-snug text-muted-foreground">{SERIES_LOCK_NOTE}</div>
+              )}
             </>
           )}
         </div>

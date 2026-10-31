@@ -107,6 +107,16 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   whatsapp_send_failed: 'system',
   whatsapp_disconnected: 'system',
   content_reported: 'system',
+  platform_tenant_signup: 'system',
+  modules_configured: 'system',
+  // virtual sales agent
+  sales_agent_handoff: 'messages',
+  sales_agent_qualified: 'messages',
+  sales_agent_meeting_booked: 'messages',
+  prospects_ready: 'system',
+  sales_agent_daily_digest: 'system',
+  sales_agent_paused: 'system',
+  sales_agent_budget: 'system',
 };
 
 /** Category of a type, or null for a legacy/unknown value (never muted). */

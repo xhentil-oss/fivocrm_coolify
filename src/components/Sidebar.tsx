@@ -38,6 +38,7 @@ import {
   BellRing,
   Server as ServerIcon,
   Clock,
+  Bot,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { isPathEnabled, type PlanKey } from '../lib/modules';
@@ -113,6 +114,7 @@ const allSections: NavSection[] = [
       { path: '/app/follow-ups', label: 'Ndjekjet', icon: BellRing, permissionKey: 'canAccessCRM' },
       { path: '/app/crm', label: 'CRM Leads', icon: Users, permissionKey: 'canAccessCRM' },
       { path: '/app/deals', label: 'Marrëveshjet', icon: Handshake, permissionKey: 'canAccessCRM' },
+      { path: '/app/sales-agent', label: 'Agjentja Ana', icon: Bot, permissionKey: 'canAccessSalesAgent' },
       { path: '/app/customers', label: 'Klientët', icon: Users, permissionKey: 'canAccessCustomers' },
       { path: '/app/service-inquiries', label: 'Kërkesat', icon: FileText, permissionKey: 'canAccessCRM' },
       { path: '/app/contracts', label: 'Kontratat', icon: ScrollText, permissionKey: 'canAccessInvoices' },

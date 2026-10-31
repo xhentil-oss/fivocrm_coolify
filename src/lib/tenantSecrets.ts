@@ -23,6 +23,8 @@ export interface TenantSecretsInput {
   gmbClientSecret?: string;
   /** Dynadot registrar API key (hosting & domains module) */
   dynadotApiKey?: string;
+  /** Google Places API key (sales agent prospecting) */
+  googlePlacesApiKey?: string;
 }
 
 export async function saveTenantSecrets(teamId: string, secrets: TenantSecretsInput): Promise<void> {

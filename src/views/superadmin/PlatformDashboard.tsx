@@ -196,6 +196,11 @@ const PlatformDashboard: React.FC = () => {
                 <div className="hidden xl:block text-xs text-muted-foreground w-24">{fmtDate(b.createdAt)}</div>
                 <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
                   <Badge className={`${meta.cls} border-0 text-[10px]`}>{meta.label}</Badge>
+                  {b.moduleSetup === 'pending' && (
+                    <span className="text-[10px] text-amber-600" title="Vetë-regjistruar: çdo modul është i kyçur derisa t'i hapësh nga faqja e tenantit.">
+                      modulet në pritje
+                    </span>
+                  )}
                   {trialLeft !== null && (
                     <span className={`text-[10px] ${trialLeft < 0 ? 'text-destructive' : trialLeft <= 7 ? 'text-amber-600' : 'text-muted-foreground'}`}>
                       {trialLeft < 0 ? `skadoi ${-trialLeft}d më parë` : `${trialLeft}d provë`}

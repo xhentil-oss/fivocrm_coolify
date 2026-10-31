@@ -1,21 +1,16 @@
 import React, { useMemo } from 'react';
 import { Activity } from 'lucide-react';
-import { useCollection } from '../../../hooks/useFirestore';
 import { IconTile, SheetRow, cardCls, dayLabel, timeStr } from './panelShared';
 
 /** "Aktiviteti" card — per-task activity history (Jira-style audit trail),
- *  collapsed into one row ("N ngjarje") that opens the list. */
+ *  collapsed into one row ("N ngjarje") that opens the list. The rows are
+ *  loaded by the panel (the footer reads the same list for "Ndryshuar nga …"). */
 const TaskActivityTab: React.FC<{
-  taskId: string;
+  activities: any[] | null | undefined;
   getUserDisplayName: (userId: string) => string;
   open: boolean;
   onToggle: () => void;
-}> = ({ taskId, getUserDisplayName, open, onToggle }) => {
-  // Per-task activity history (Jira-style audit tab). Single where = index-free.
-  const { data: rawTaskActivities } = useCollection<any>('activities', {
-    skip: !taskId,
-    where: [{ field: 'entityId', operator: '==', value: taskId }],
-  });
+}> = ({ activities: rawTaskActivities, getUserDisplayName, open, onToggle }) => {
   const taskActivities = useMemo(() => {
     const ms = (d: any) => d instanceof Date ? d.getTime() : (d?.toMillis?.() ?? 0);
     return [...(rawTaskActivities || [])].sort((a, b) => ms(b.createdAt) - ms(a.createdAt)).slice(0, 30);

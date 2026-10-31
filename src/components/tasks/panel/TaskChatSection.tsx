@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Loader2, MessageSquare, Send } from 'lucide-react';
-import { useCollection, useMutation } from '../../../hooks/useFirestore';
+import { useCollection, useMutation, getGlobalBusinessId } from '../../../hooks/useFirestore';
 import { useAuth } from '../../../contexts/AuthContext';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
@@ -15,17 +15,26 @@ const TaskChatSection: React.FC<{
   const messageMutation = useMutation<any>('messages');
   const [chatMessageText, setChatMessageText] = useState('');
   const [showChat, setShowChat] = useState(false);
+  const [sending, setSending] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const businessId = getGlobalBusinessId();
 
   const { data: taskMessages, loading: isLoadingMessages } = useCollection<any>('messages', {
-    where: [{ field: 'taskId', operator: '==', value: taskId }],
+    // `businessId` makes the list PROVABLE under the rules (rules are not
+    // filters): `messages` is not business-isolated by the hook, and a bare
+    // `taskId == X` query matched none of the read clauses
+    // (businessId / senderId / receiverId / channelId) — so the listener was
+    // DENIED for everyone but a super-admin. Index: messages
+    // (businessId, taskId, createdAt).
+    where: [
+      { field: 'businessId', operator: '==', value: businessId },
+      { field: 'taskId', operator: '==', value: taskId },
+    ],
     orderBy: { field: 'createdAt', direction: 'asc' },
-    // Query server-side by taskId (uses messages: taskId,createdAt index) instead of
-    // downloading the whole team's messages and filtering client-side.
     skipTeamFilter: true,
     // Only listen while the panel is actually open. It used to subscribe on every
     // task open, so most tasks paid for a listener nobody looked at.
-    skip: !showChat,
+    skip: !showChat || !businessId,
   });
 
   // Reset the draft ONLY when switching to a different task.
@@ -40,20 +49,33 @@ const TaskChatSection: React.FC<{
     }
   }, [taskMessages, showChat]);
 
+  // In-flight guard: a second Enter/tap while the first send is pending used
+  // to create a second row.
+  const sendingRef = useRef(false);
   const handleSendChatMessage = async () => {
-    if (!chatMessageText.trim() || !user) return;
+    if (!chatMessageText.trim() || !user || sendingRef.current) return;
+    sendingRef.current = true;
+    setSending(true);
 
     try {
       await messageMutation.create({
         content: chatMessageText,
         senderId: user.uid,
         taskId,
-        isRead: false,
+        // A task-chat row is not a DM, a client thread or a group message:
+        // nothing ever marks it read, so `isRead: false` only parked it forever
+        // in the tenant-wide `isRead == false` window that feeds the GROUP
+        // unread count (useUnreadChat) — crowding real group messages out of
+        // that window. (`unread.ts` also ignores `taskId` rows outright.)
+        isRead: true,
       });
       setChatMessageText('');
     } catch (err) {
       console.error('Failed to send message:', err);
       // Message stays in input so user can retry
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
     }
   };
 
@@ -139,10 +161,10 @@ const TaskChatSection: React.FC<{
             <Button
               size="icon"
               onClick={handleSendChatMessage}
-              disabled={!chatMessageText.trim()}
+              disabled={!chatMessageText.trim() || sending}
               aria-label="Dërgo mesazhin"
             >
-              <Send className="w-4 h-4" />
+              {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </Button>
           </div>
         </div>

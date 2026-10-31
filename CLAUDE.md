@@ -222,6 +222,18 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   the registry wires all of them.
 - Firestore rules only let the business **owner** write `businesses/{id}`, so a
   non-owner admin gets a read-only module manager.
+- **A self-serve signup gets NO modules until the super-admin opens them** (27 Oct
+  2026). `createTenant.ts` writes `lockedModules: signupLockedModulePaths()` (every
+  optional module) + `moduleSetup: 'pending'`; the `trial` plan ranks above every tier,
+  so before this a fresh signup saw the whole product. `/api/sync-claims` (the
+  signup's only server hop) notifies every `SUPER_ADMIN_EMAILS` account once
+  (`platform_tenant_signup`, deep link `/superadmin/tenants/<id>`, stamp
+  `moduleSetupNotifiedAt`); the console lists the tenant in "Kërkojnë veprim" and on
+  the tenant page; `set-modules` writes `moduleSetup: 'done'` and notifies the owner
+  (`modules_configured`). Rules: a signup may lock anything but can never be born
+  `'done'`, and the owner cannot touch `moduleSetup*` (tests 60a/60c). The owner
+  sees `ModuleSetupBanner` + "po aktivizohet" copy in `ModuleGate`/Modulet instead
+  of "nuk përfshihet në kontratën tuaj". A console-created tenant is `'done'` at birth.
 
 ### Shop / Products module (`id: 'shop'`, `minPlan: 'pro'`, off by default)
 - Staff: `/app/products` (catalog, inventory, taxonomy tabs) + `/app/shop-orders`.
@@ -730,7 +742,8 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
   settled invoice; teamSettings `bankAccounts`/`financeSettings`/`rateCard` (owner/Admin).
   The UI hides what the rules deny (ProjectsView `financeFields`, InvoicesView
   `invoiceEditLocked`/`invoiceDeleteLocked`, `canEditFinanceSettings`, `taskValue`
-  `canEditBudget`). Adding a money field? → add it to the key list + a test.
+  `canEditBudget`; `tasks.value` / `valueAppliedToBudget` via `taskMoneyAllowed`,
+  test 84b). Adding a money field? → add it to the key list + a test.
 - **Salary rows are unreadable for non-approvers.** Rules are not filters: every
   `expenses` query a non-approver runs must carry `category != 'Salary'`
   (`expenseListQueryOptions(isApprover)`; `deleteCascade` always adds it). In rules use
@@ -900,6 +913,17 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
   (≥1.2s), LID resolved via `senderPn`, LID lookups ≤ once/24h, `getMessage`,
   `markOnlineOnConnect: false`. `npm run prod` now BUILDS first — the old
   `dist/server.js` was months stale.
+- **Inbound media is DOWNLOADED, not described** (26 Oct 2026). Until then a photo
+  reached the CRM as the text "[Foto]" — the stanza was classified `media` and never
+  fetched, on both channels. `attachInboundMedia` (`vps/server.ts`) runs AFTER the
+  row's `create()` (never delays the message or its notification), both directions
+  (a photo the staff sent from the phone belongs in the thread), only for
+  image/video/ptv/audio/document/sticker, ≤ 15 MB, 45 s timeout, and stores under
+  the SAME policy as `/upload` (allow-listed extension chosen by the magic bytes,
+  UUID name, `<UPLOAD_DIR>/<teamId>/whatsapp-media/`), URL base `PUBLIC_URL`
+  (fallback `https://vps.fivocrm.com`). Row gets `mediaType/mediaUrl/mediaMime/
+  mediaFilename/mediaSize`; a failure is `mediaError` on the row and the text stays.
+  Meta inbound media is still not downloaded (no phone, needs the Graph media API).
 - **Baileys 7 (`7.0.0-rc14`, pinned exactly) since 23 Oct 2026.** 6.7.x cannot
   encrypt 1:1 for LID-migrated contacts → "Waiting for this message". Inbound
   resolves LID via `remoteJidAlt` → Baileys' `signalRepository.lidMapping` →
@@ -1027,6 +1051,56 @@ action and "actions with confirmation" are open).
   500. Per-user opt-out: `userPreferences.nazmijeOptOut` (Cilësimet → Njoftimet).
 - The StaffDashboard "quote of the day" IS her saying (`sayingForDay`); the portal
   keeps its own quotes — she never speaks to clients.
+
+### Ana — the virtual SALES agent (talks to CLIENTS; module `sales-agent`)
+
+Runbook: `workspace/SALES_AGENT.md`; plan + laws: `workspace/SALES_AGENT_PLAN.md`.
+Built 31 Oct 2026. `minPlan: 'business'`, `defaultOff`, permission `canAccessSalesAgent`.
+Nazmije speaks to staff, Ana speaks to clients — they never merge.
+
+- **`src/lib/salesAgent/core.ts` decides, `api/_salesAgent.ts` executes.** Core +
+  `prospecting.ts` are import-free; `api/_salesAgentCore.ts` / `api/_salesAgentProspecting.ts`
+  are **byte-identical copies** (test-enforced). Numbers never come from the model:
+  prices/hours/policies are FACTS (`renderSalesFacts`: `services` + `salesKnowledge` +
+  `waAiContext`); a price the facts do not state → handoff `custom-price`.
+- **Autonomy opens in LEVELS** (`teamSettings.salesAgent.autonomy`, capped at
+  `SALES_AGENT_MAX_AUTONOMY` = 2 — env `SALES_AGENT_MAX_AUTONOMY` raises it): 0 =
+  drafts only (default; the old "no auto-send" decision), 1 = FAQ answers outside
+  office hours / after `humanSilenceMinutes`, 2 = qualifies + books + sequences.
+  `decideDelivery()` is the ONE send/draft/handoff decision (deterministic triggers →
+  model handoff → custom price → no-progress → level → intent allow-list →
+  confidence 0.8/0.4). `ensureDisclosure()` puts "asistentja virtuale" on the first
+  message (law 8, not switchable).
+- **Every non-action is a named `SalesAgentBlockReason` / `ColdWaBlockReason` /
+  `HandoffReason`** with an Albanian label, written to `salesAgentRuns` (`create()`
+  BEFORE acting — the idempotency doc, `write: if false`) and tallied in
+  `teamSettings.salesAgent.lastRun`; `/app/sales-agent?tab=today` shows "Pse nuk veproi".
+- **Inbound**: `_waInbound.ts` step 7 answers `agent-active` (legacy auto-reply off)
+  and step 8 calls `runSalesAgentOnInbound` instead of `draftWaReply` when the module
+  is on. Sends carry `automated: true, automationKind: 'sales-agent', source:
+  'sales-agent', idempotencyKey 'sa_<conv>_<msg>'`; state in `conversations.agent`
+  (server-only; staff handoff/resume ONLY via the endpoint) and `leads.agent*`
+  (server-only, `leadAgentKeys*()` in the rules).
+- **Cold WhatsApp is allowed but metered PER SENDER NUMBER** (owner decision):
+  `coldWaBlockReason()` — ≤ `perDay` (max 10), ≥ `minGapMinutes` (min 60), window +
+  weekdays, warm-up (3/day for a young number), never on the registration day,
+  `onWhatsApp`-verified, opt-out; 1 failure/24h halves the quota, 2 pause the sender
+  7 days (`salesAgentSenders/{bid}_{agentId}`, `sales_agent_paused`). ONE attempt per
+  sender per 15-min tick. A human "send now" goes through the same gate.
+- **Google Places (New) Text Search bills per REQUEST (≤ 20 results)**, Enterprise SKU
+  ($35/1 000, 1 000 free/month per Google project). Only `placeId` is stored
+  indefinitely; unregistered `prospects` expire after 30 days (`sales-agent-prospect-ttl`).
+  Budget per tenant in requests (`placesMonthlyBudget`, usage in
+  `salesAgentUsage/{bid}_{YYYY-MM}`); `searchBlockReason` refuses over budget.
+  Registering a prospect goes through `_contactIdentity` (law: one person, one pair).
+- Jobs (`api/_salesAgentJobs.ts`, VPS, NOT in run-all): `sales-agent-prospecting` +
+  `sales-agent-cold-wa` every 15 min, `sales-agent-nudges` hourly (+ handoff SLA
+  escalation), `sales-agent-digest` 08:15 local, `sales-agent-prospect-ttl` 03:30
+  (platform-only). Manual runs scoped to `bid`; suspended tenants skipped.
+- Adding an action? → `api/_salesAgent.ts` switch (load record, compare `businessId`
+  with claims) + `src/lib/salesAgent/api.ts`. Adding a collection? → the usual six
+  places (tests 85a–85h are the pattern). Open: `meeting.book`, `quote.draft`, cold
+  EMAIL drain, portal/landing channels, level 3.
 
 ### Daily staff report (mandatory, 16:50)
 
@@ -1447,6 +1521,11 @@ Full runbook: `workspace/FOLLOW_UP.md`.
   (TaskDetailPanel's four handlers, TasksView's inline calendar) spreads
   `reminderPatchForDeadline`. `buildNextRecurringTask` and its cron mirror carry
   the offset into the next occurrence, never the absolute date.
+- **A reminder consumed without a send says why**: `reminderSkippedAt` +
+  `reminderSkippedReason` (`task-done`, `no-recipient`; older than 48h = `stale`),
+  never `reminderSentAt` for nobody. `setReminderPatch` / `reminderPatchForDeadline`
+  clear the skip marks on re-arm; a snooze UNDO carries the previous delivery marks
+  back so a delivered reminder is never re-armed.
 - **Delivery is `task-reminders`** in `api/cron/run.ts`, every 5 min from the VPS
   (`vps/server.ts`), NOT in `run-all` — "15:00" is a wall-clock promise. It reads
   only `reminderAt ∈ [now − 48h, now]` (same-field range, no index) and goes
@@ -1493,6 +1572,27 @@ Full runbook: `workspace/FOLLOW_UP.md`.
   as well as for guests — and the rules now deny Viewer writes (`isViewerRole()`,
   test 39d); a portal project MEMBER reads its tasks by projectId
   (`isPortalProjectMember`, test 39e).
+- **The claim, the child and the Done write are ONE transaction** (audit 23 Oct
+  2026): `claimTaskNextCycle(taskId, plan)` (`src/lib/taskRecurrenceClaim.ts`) writes
+  the next occurrence, `nextCycleCreated`, `nextCycleTaskId`, `status: 'Done'` and
+  `completedAt` together — a claim can no longer exist without its child (the old
+  three-round-trip sequence left Todo tips with `nextCycleCreated: true` and a dead
+  series). `nextCycleClaimIsStale()` re-arms a legacy broken row on re-complete; the
+  cron stamps `'child-missing'` and never re-spawns (deleting the live occurrence is
+  how a user stops a series). Every non-spawn is a `RecurringSkippedReason`
+  (`duplicate-occurrence` / `series-ended` / `child-missing`). Engine flags
+  (`nextCycleCreated`, `nextCycleTaskId`, `recurringSkippedReason`, `reminderSentAt`,
+  `reminderSkippedAt/Reason`, `dueNotificationSent`, `overdueNotificationSent`) are
+  rules-gated to the ASSIGNEE / CREATOR / Admin / Manager (`taskEngineFlagsAllowed`,
+  test 84f); other staff may only re-arm them. The UI mirrors that with
+  `canManageTaskSeries()` (`src/lib/taskSeriesAccess.ts`) / `canDriveTaskSeries()`
+  (panel): a colleague cannot Done / re-open / "Deri më" someone else's RECURRING task.
+- **One deadline, one "overdue"**: `taskDeadline(task)` = `endDate ?? dueDate` and
+  `isTaskOverdue(task, todayKey)` in `src/lib/taskDue.ts` are the only definitions
+  (list chip, filter, row text, groups, MyTasks, calendar, SmartSuggestions, and the
+  cron's `task_overdue` — overdue once the Tirane DAY has passed, never the instant).
+  "Today" comes from `useTodayKey()` (Tirane day key, re-evaluated at midnight and
+  on focus) — never computed inside a memo without it.
 - **The task jobs skip suspended tenants and archived/cancelled projects, and a
   manual run is one tenant** (`task-deadline-alerts`, `project-completion-reminder`,
   `recurring-project-reset` all take `{ businessId }` from `manualScopeId`).
@@ -1676,6 +1776,7 @@ META_ACCESS_TOKEN        — Meta WhatsApp API
 - `workspace/SECURITY_AUDIT_2026_09.md` — Full-platform security audit (rules, api, cron, VPS, client, secrets): what shipped, operator actions (secret rotation), what was left
 - `workspace/FINANCE_AUDIT_2026_09_30.md` — Finance audit 30 Sep 2026 (~40 findings, all fixed) + why the 25 Sep retainer invoices did not bill (run-all kill / Part 1 error / prior claim) and the read-only diagnosis script
 - `workspace/CLIENT_PROFITABILITY.md` — Client & project profitability (hours × cost rate, earned revenue, gross→net, plan vs actual, month close): model, capture paths, cron, deploy
+- `workspace/SALES_AGENT.md` / `workspace/SALES_AGENT_PLAN.md` — Ana, the virtual sales agent (autonomy levels, Google Maps prospecting, metered cold WhatsApp, handoff): runbook + the 10 laws, phases and owner decisions
 
 ---
 

@@ -50,6 +50,8 @@ export type UserPermissions = {
   canAccessProducts?: boolean;
   /** Hosting & domains module (packages, cPanel accounts, registrar). Optional for legacy records. */
   canAccessHosting?: boolean;
+  /** Virtual sales agent module (Ana). Optional for legacy records. */
+  canAccessSalesAgent?: boolean;
   canAccessExpenses: boolean;
   canAccessMarketing?: boolean;
   canAccessProfile: boolean;
@@ -86,6 +88,7 @@ const fullAccessPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canAccessServices: true,
   canAccessProducts: true,
   canAccessHosting: true,
+  canAccessSalesAgent: true,
   canAccessExpenses: true,
   canAccessMarketing: true,
   canAccessProfile: true,
@@ -114,6 +117,7 @@ const restrictedPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canAccessServices: false,
   canAccessProducts: false,
   canAccessHosting: false,
+  canAccessSalesAgent: false,
   canAccessExpenses: false,
   canAccessMarketing: false,
   canAccessProfile: true,
@@ -389,6 +393,7 @@ export function usePermissions(): UserPermissions {
         canAccessServices: false,
         canAccessProducts: false,
         canAccessHosting: false,
+        canAccessSalesAgent: false,
         canAccessExpenses: false,
         canAccessProfile: true,
         canAccessTimeTracking: false,
@@ -429,6 +434,7 @@ export function usePermissions(): UserPermissions {
         // Sales sells whatever the tenant sells — services and products alike.
         canAccessProducts: true,
         canAccessHosting: true,
+        canAccessSalesAgent: true,
         canAccessExpenses: membership.canAccessExpenses === true,
         canAccessMarketing: true,
         canAccessProfile: true,
@@ -474,6 +480,7 @@ export function usePermissions(): UserPermissions {
         canAccessServices: membership.canAccessServices === true || membership.canAccessInvoices === true,
         canAccessProducts: membership.canAccessProducts === true || membership.canAccessServices === true,
         canAccessHosting: membership.canAccessHosting === true,
+        canAccessSalesAgent: membership.canAccessSalesAgent === true,
         canAccessExpenses: membership.canAccessExpenses === true || membership.canAccessInvoices === true,
         canAccessProfile: true,
         canAccessTimeTracking: true,
@@ -514,6 +521,7 @@ export function usePermissions(): UserPermissions {
         canAccessServices: true,
         canAccessProducts: true,
         canAccessHosting: true,
+        canAccessSalesAgent: true,
         canAccessExpenses: false,
         canAccessMarketing: true,
         canAccessProfile: true,
@@ -557,6 +565,7 @@ export function usePermissions(): UserPermissions {
       canAccessServices: membership.canAccessServices === true || membership.canAccessInvoices === true,
       canAccessProducts: membership.canAccessProducts === true || membership.canAccessServices === true,
       canAccessHosting: membership.canAccessHosting === true,
+      canAccessSalesAgent: membership.canAccessSalesAgent === true,
       canAccessExpenses: membership.canAccessExpenses === true || membership.canAccessInvoices === true,
       canAccessProfile: true,
       canAccessTimeTracking: !isViewer ? true : membership.canAccessTasks === true,

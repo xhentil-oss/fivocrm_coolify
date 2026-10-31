@@ -1,13 +1,29 @@
 import React, { useRef, useState } from 'react';
 import { Cloud, Download, FileText, Loader2, Paperclip, Upload, X } from 'lucide-react';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../../../lib/firebase';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useGoogleApi, DriveFile } from '../../../contexts/GoogleApiContext';
 import { useFileUpload } from '../../../hooks/useFileUpload';
 import { batchLabel } from '../../../lib/uploadQueue';
+import { safeExternalUrl } from '../../../lib/safeUrl';
 import { toast } from '../../../hooks/use-toast';
 import GoogleDrivePicker from '../../GoogleDrivePicker';
 import { Button } from '../../ui/button';
 import type { Task } from '../../../types';
+
+type AttachmentRow = { name?: string; url?: string; uploadedAt?: string; [k: string]: unknown };
+
+const parseAttachments = (raw: unknown, taskId: string): AttachmentRow[] => {
+  if (!raw || typeof raw !== 'string') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.error('Corrupted attachments JSON for task', taskId, e);
+    return [];
+  }
+};
 
 /** "Materiale" — uploads (VPS, 3 in parallel), Google Drive links, list. */
 const TaskAttachmentsSection: React.FC<{
@@ -23,15 +39,23 @@ const TaskAttachmentsSection: React.FC<{
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Parse attachments from JSON
-  const attachments = React.useMemo(() => {
-    if (!task.attachments) return [];
+  const attachments = React.useMemo<AttachmentRow[]>(() => parseAttachments(task.attachments, task.id), [task.attachments, task.id]);
+
+  // Every attachments write is a read-modify-write of ONE JSON string, so two
+  // people attaching at once lost one of the lists. Re-reading the document
+  // right before the update narrows that window to the round-trip itself —
+  // it is still NOT atomic (a transaction would be; the mutation layer has
+  // none), but the panel's own snapshot could be minutes old.
+  const writeAttachments = async (mutate: (fresh: AttachmentRow[]) => AttachmentRow[]) => {
+    let fresh = attachments;
     try {
-      return JSON.parse(task.attachments);
-    } catch (e) {
-      console.error('Corrupted attachments JSON for task', task.id, e);
-      return [];
+      const snap = await getDoc(doc(db, 'tasks', task.id));
+      if (snap.exists()) fresh = parseAttachments(snap.data()?.attachments, task.id);
+    } catch (err) {
+      console.warn('[Tasks] leximi i freskët i materialeve dështoi — përdoret snapshot-i i panelit:', err);
     }
-  }, [task.attachments]);
+    await onUpdate(task.id, { attachments: JSON.stringify(mutate(fresh)) });
+  };
 
   // Materials: images, PDF and office docs (both Office generations), max 15 MB
   // each. Must stay a subset of the VPS ALLOWED_UPLOAD filter (vps/server.ts) —
@@ -78,7 +102,7 @@ const TaskAttachmentsSection: React.FC<{
           uploadedBy: user?.uid,
           uploadedAt: new Date().toISOString(),
         }));
-        await onUpdate(task.id, { attachments: JSON.stringify([...attachments, ...added]) });
+        await writeAttachments(fresh => [...fresh, ...added]);
       }
       if (failed.length) {
         toast({
@@ -95,17 +119,31 @@ const TaskAttachmentsSection: React.FC<{
     }
   };
 
+  // "Hiq materialin" removes the row from the task only. The VPS has no delete
+  // endpoint for uploads (vps/server.ts exposes POST /upload and static
+  // /files, nothing that removes a file), so the file itself stays on the
+  // server until one exists — a URL nobody references any more.
   const handleRemoveAttachment = async (index: number) => {
     const removed = attachments[index];
-    if (removed?.url?.startsWith('blob:')) {
+    if (!removed) return;
+    if (removed.url?.startsWith('blob:')) {
       URL.revokeObjectURL(removed.url);
     }
-    const newAttachments = attachments.filter((_: any, i: number) => i !== index);
-    await onUpdate(task.id, { attachments: JSON.stringify(newAttachments) });
+    // Match the row by identity (url + uploadedAt), not by index: the fresh
+    // list may have grown since the panel's snapshot.
+    const same = (a: AttachmentRow) => a.url === removed.url && a.uploadedAt === removed.uploadedAt && a.name === removed.name;
+    try {
+      await writeAttachments(fresh => {
+        const i = fresh.findIndex(same);
+        return i >= 0 ? fresh.filter((_, k) => k !== i) : fresh;
+      });
+    } catch (err: any) {
+      toast({ title: 'Materiali nuk u hoq', description: err?.message, variant: 'destructive' });
+    }
   };
 
   const handleDriveFileSelect = async (file: DriveFile) => {
-    const newAttachments = [...attachments, {
+    const row: AttachmentRow = {
       name: file.name,
       size: file.size ? parseInt(file.size, 10) : 0,
       type: file.mimeType,
@@ -114,8 +152,12 @@ const TaskAttachmentsSection: React.FC<{
       driveFileId: file.id,
       uploadedBy: user?.uid,
       uploadedAt: new Date().toISOString(),
-    }];
-    await onUpdate(task.id, { attachments: JSON.stringify(newAttachments) });
+    };
+    try {
+      await writeAttachments(fresh => [...fresh, row]);
+    } catch (err: any) {
+      toast({ title: 'Materiali nuk u ruajt', description: err?.message, variant: 'destructive' });
+    }
     setShowDrivePicker(false);
   };
 
@@ -159,42 +201,53 @@ const TaskAttachmentsSection: React.FC<{
       {attachments.length > 0 && (
         <div className="space-y-2">
           {attachments.map((file: any, index: number) => {
+            // `task.attachments` is JSON any member writes: every href/src goes
+            // through safeExternalUrl (http/https only; the thumbnail may also be
+            // a blob: created by this page). An unsafe URL renders as plain
+            // text, never as a link — a `javascript:` row used to run on click.
+            const href = safeExternalUrl(file.url);
+            const src = safeExternalUrl(file.url, { allowBlob: true });
             const isImage = typeof file.type === 'string'
               ? file.type.startsWith('image/')
-              : /\.(png|jpe?g|gif|webp|bmp)(\?.*)?$/i.test(file.url || '');
-            const isPdf = file.type === 'application/pdf' || /\.pdf(\?.*)?$/i.test(file.url || '');
+              : /\.(png|jpe?g|gif|webp|bmp)(\?.*)?$/i.test(href || '');
+            const isPdf = file.type === 'application/pdf' || /\.pdf(\?.*)?$/i.test(href || '');
             const sizeLabel = file.size
               ? (file.size >= 1024 * 1024 ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(file.size / 1024))} KB`)
               : '';
+            const name = String(file.name || 'Material');
             return (
               <div key={index} className="flex items-center justify-between gap-2 p-2 bg-muted/50 rounded text-sm">
                 <div className="flex items-center gap-2 min-w-0">
-                  {isImage && file.url ? (
-                    <a href={file.url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
-                      <img src={file.url} alt={file.name} loading="lazy" className="w-10 h-10 rounded object-cover border border-border/40" />
-                    </a>
+                  {isImage && src ? (
+                    href ? (
+                      <a href={href} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+                        <img src={src} alt={name} loading="lazy" className="w-10 h-10 rounded object-cover border border-border/40" />
+                      </a>
+                    ) : (
+                      <img src={src} alt={name} loading="lazy" className="w-10 h-10 flex-shrink-0 rounded object-cover border border-border/40" />
+                    )
                   ) : (
                     <span className={`w-8 h-8 rounded flex items-center justify-center flex-shrink-0 ${isPdf ? 'bg-red-500/10 text-red-600' : 'bg-muted text-muted-foreground'}`}>
                       {file.source === 'google-drive' ? <Cloud className="w-4 h-4 text-blue-500" /> : isPdf ? <FileText className="w-4 h-4" /> : <Paperclip className="w-4 h-4" />}
                     </span>
                   )}
                   <div className="min-w-0">
-                    {file.url ? (
-                      <a href={file.url} target="_blank" rel="noopener noreferrer" className="block truncate text-blue-600 hover:underline">{file.name}</a>
+                    {href ? (
+                      <a href={href} target="_blank" rel="noopener noreferrer" className="block truncate text-blue-600 hover:underline">{name}</a>
                     ) : (
-                      <span className="block truncate">{file.name}</span>
+                      <span className="block truncate" title={file.url && !href ? 'Lidhje e papranuar' : undefined}>{name}</span>
                     )}
                     {sizeLabel && <span className="text-[11px] text-muted-foreground">{sizeLabel}</span>}
                   </div>
                 </div>
                 <div className="flex items-center gap-0.5 flex-shrink-0">
-                  {file.url && (
-                    <a href={file.url} download={file.name} target="_blank" rel="noopener noreferrer" title="Shkarko" aria-label={`Shkarko ${file.name}`} className="h-6 w-6 inline-flex items-center justify-center rounded hover:bg-accent text-muted-foreground hover:text-foreground">
+                  {href && (
+                    <a href={href} download={name} target="_blank" rel="noopener noreferrer" title="Shkarko" aria-label={`Shkarko ${name}`} className="h-6 w-6 inline-flex items-center justify-center rounded hover:bg-accent text-muted-foreground hover:text-foreground">
                       <Download className="w-3 h-3" />
                     </a>
                   )}
                   {!readOnly && (
-                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Hiq materialin" aria-label={`Hiq ${file.name}`} onClick={() => handleRemoveAttachment(index)}>
+                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Hiq materialin" aria-label={`Hiq ${name}`} onClick={() => handleRemoveAttachment(index)}>
                       <X className="w-3 h-3" />
                     </Button>
                   )}

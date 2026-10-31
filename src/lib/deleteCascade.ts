@@ -39,6 +39,8 @@ export interface TaskCascadeSummary {
   tasks: number;
   comments: number;
   collaborators: number;
+  /** Task-chat rows (`messages` with `taskId`) deleted with their task. */
+  chatMessages: number;
   timeEntriesUnlinked: number;
   draftInvoicesDeleted: number;
   invoicesUnlinked: number;
@@ -49,6 +51,7 @@ const emptySummary = (): TaskCascadeSummary => ({
   tasks: 0,
   comments: 0,
   collaborators: 0,
+  chatMessages: 0,
   timeEntriesUnlinked: 0,
   draftInvoicesDeleted: 0,
   invoicesUnlinked: 0,
@@ -89,12 +92,20 @@ async function cascadeOneTask(
   processedInvoices: Set<string>,
   timeOps: Op[],
 ) {
-  const [commentsSnap, collaboratorsSnap, timeSnap, invoicesSnap, dependantsSnap] = await Promise.all([
+  const [commentsSnap, collaboratorsSnap, timeSnap, invoicesSnap, dependantsSnap, chatSnap] = await Promise.all([
     getDocs(scoped('taskComments', businessId, 'taskId', taskId)),
     getDocs(scoped('taskCollaborators', businessId, 'taskId', taskId)),
     getDocs(scoped('timeEntries', businessId, 'taskId', taskId)),
     getDocs(scoped('invoices', businessId, 'taskId', taskId)),
     getDocs(query(collection(db, 'tasks'), where('businessId', '==', businessId), where('dependsOn', 'array-contains', taskId))),
+    // The task's chat thread (`messages` with `taskId`, business-scoped so the
+    // list is provable). A denied read here must not block the delete — the
+    // rows then stay behind as before, which is the lesser evil — so it is the
+    // one lookup that degrades instead of throwing.
+    getDocs(scoped('messages', businessId, 'taskId', taskId)).catch(err => {
+      console.warn('[deleteCascade] mesazhet e detyrës nuk u lexuan dot:', err);
+      return null;
+    }),
   ]);
   // Tasks that were BLOCKED by this one: drop the dead id, or their 🔒 chip
   // keeps pointing at nothing ("S'mund të përfundohet para varësisë" for a
@@ -105,6 +116,12 @@ async function cascadeOneTask(
   summary.timeEntriesUnlinked += timeSnap.size;
   ops.push(...commentsSnap.docs.map(d => () => deleteDoc(d.ref)));
   ops.push(...collaboratorsSnap.docs.map(d => () => deleteDoc(d.ref)));
+  // Chat rows are meaningless without their task (and an orphan with
+  // `isRead: false` sits in the group-unread window forever).
+  if (chatSnap) {
+    summary.chatMessages += chatSnap.size;
+    ops.push(...chatSnap.docs.map(d => () => deleteDoc(d.ref)));
+  }
   // Hours are payroll history: unlink the dead task, keep the row (and its
   // projectId — the project cascade clears that separately when relevant).
   // A RUNNING entry (endTime null/missing) is stopped first: the task panel was
@@ -233,7 +250,19 @@ export interface ProjectCascadeSummary extends TaskCascadeSummary {
  */
 export async function deleteProjectCascade(
   project: { id: string; name: string },
-  opts?: { businessId?: string | null },
+  opts?: {
+    businessId?: string | null;
+    /**
+     * May the caller read Salary rows (Admin/Manager/Owner — the predicate
+     * ExpensesView uses)? Rules are not filters: a non-approver's expense list
+     * MUST carry `category != 'Salary'` or it is denied outright — and that
+     * clause also drops rows with NO category, which then keep a dangling
+     * projectId. An approver's list is unconstrained, so every row of the
+     * project (uncategorised and Salary alike) is unlinked. Unset = the
+     * non-approver query, which is provable for everyone.
+     */
+    isExpenseApprover?: boolean;
+  },
 ): Promise<ProjectCascadeSummary> {
   const businessId = opts?.businessId ?? getGlobalBusinessId();
   const summary: ProjectCascadeSummary = { ...emptySummary(), expensesUnlinked: 0, projectComments: 0 };
@@ -242,10 +271,12 @@ export async function deleteProjectCascade(
   const [tasksSnap, invoicesSnap, expensesSnap, timeSnap, commentsSnap] = await Promise.all([
     getDocs(scoped('tasks', businessId, 'projectId', project.id)),
     getDocs(scoped('invoices', businessId, 'projectId', project.id)),
-    // `category != 'Salary'`: a non-approver may not read salary rows (rules), and
-    // rules are not filters — without the clause the whole query is denied. A
-    // Salary row keeps a dangling projectId, which no engine reads (payroll.ts).
-    getDocs(query(scoped('expenses', businessId, 'projectId', project.id), where('category', '!=', 'Salary'))),
+    // Same shape as `expenseListQueryOptions(isApprover)` (finance/expenseSeries.ts):
+    // approver → plain read; otherwise `category != 'Salary'`, the only
+    // provable non-approver list (it cannot express "no category OR not Salary").
+    getDocs(opts?.isExpenseApprover
+      ? scoped('expenses', businessId, 'projectId', project.id)
+      : query(scoped('expenses', businessId, 'projectId', project.id), where('category', '!=', 'Salary'))),
     getDocs(scoped('timeEntries', businessId, 'projectId', project.id)),
     getDocs(scoped('projectComments', businessId, 'projectId', project.id)),
   ]);

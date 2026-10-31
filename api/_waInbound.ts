@@ -15,6 +15,10 @@ import { notifyUser } from './_push.js';
 import { sendMetaText, sendBaileysText } from './_waSend.js';
 import { decideAutoReply, isOptOutMessage, isOptInMessage, DEFAULT_WA_TIMEZONE, type AutoReplyBlockReason } from './_waAutoReply.js';
 import { draftWaReply, type DraftBlockReason } from './_aiReply.js';
+// Ana, the virtual sales agent: when the module owns WhatsApp she replaces BOTH the
+// static auto-reply (step 7 → 'agent-active') and the legacy AI draft (step 8).
+import { runSalesAgentOnInbound, type SalesAgentInboundSummary } from './_salesAgent.js';
+import { resolveSalesAgentSettings } from './_salesAgentCore.js';
 import { resolvePlaybooks, matchPlaybookByKeywords, matchPlaybookByTags, enrollPlaybookPatch, withPlaybookTag, normalizeKeywordText } from './_playbooks.js';
 
 // `leadActivities.type` for the playbook enrolment row. A const (not an inline literal)
@@ -133,6 +137,8 @@ export interface WaInboundResult {
   aiDraft: { suggested: true; forMessageId: string | null; model: string } | { blocked: DraftBlockReason } | null;
   /** The lead was auto-enrolled into this follow-up playbook (id) by keyword / tag match. */
   playbookEnrolled?: string;
+  /** The virtual sales agent's decision for this message (api/_salesAgent.ts), when the module owns WhatsApp. */
+  salesAgent?: SalesAgentInboundSummary | null;
 }
 
 const DEFAULT_RESPONSE_SLA_MINUTES = 120;
@@ -1005,6 +1011,7 @@ export async function processWaEvent(rawEvent: WaEvent | Record<string, any>): P
     awaitingReply: true,
     lastInboundAt: tsStamp,
     lastInboundText: preview(event.text, event.kind),
+    lastInboundMessageId: event.waMessageId,
     // Never move lastMessageAt backwards (a replayed/late event must not reorder the inbox).
     lastMessageAt: ts.getTime() >= toMs(existing?.lastMessageAt) ? tsStamp : existing?.lastMessageAt,
     updatedAt: now,
@@ -1134,8 +1141,14 @@ export async function processWaEvent(rawEvent: WaEvent | Record<string, any>): P
   //    greeting is not. The newest OUTBOUND row decides `reply-to-automated`: a
   //    customer answering an invoice reminder ("e pagova sot") gets a person.
   let autoReply: WaInboundResult['autoReply'] = null;
+  // The sales agent OWNS WhatsApp when enabled for the channel: one decision-maker per
+  // inbound, never two motors answering the same message (static text + Ana).
+  const salesAgentSettings = resolveSalesAgentSettings(ctx.settings.salesAgent);
+  const agentOwnsWa = salesAgentSettings.enabled && salesAgentSettings.channels.whatsapp;
   if (lidOnly) {
     autoReply = { blocked: 'no-phone' };
+  } else if (agentOwnsWa) {
+    autoReply = { blocked: 'agent-active' };
   } else try {
     const waConvRef = adminDb.collection('whatsappConversations').doc(`${ctx.teamId}_${event.phone}`);
     const [waConvSnap, lastOut] = await Promise.all([
@@ -1241,7 +1254,21 @@ export async function processWaEvent(rawEvent: WaEvent | Record<string, any>): P
   //    checks `waAiAssist`, the key, the 60s burst guard and the team's daily cap
   //    itself, and never throws; it stores the text on `conversations/{id}.suggestedReply`.
   let aiDraft: WaInboundResult['aiDraft'] = null;
-  if (event.kind === 'text' && !optedOutNow && !optedInNow && !lidOnly && ctx.settings.waAiAssist !== 'off') {
+  let salesAgent: SalesAgentInboundSummary | null = null;
+  if (agentOwnsWa) {
+    // Ana decides (send / draft / handoff) — she gates opt-out, LID-only, media,
+    // reply-to-automated, caps and bursts herself and never throws.
+    salesAgent = await runSalesAgentOnInbound({
+      teamId: ctx.teamId, businessId: ctx.businessId, cfg: ctx.settings,
+      event: {
+        channel: event.channel, agentId: event.agentId ?? null, metaPhoneNumberId: event.metaPhoneNumberId ?? null,
+        phone: event.phone, jid: event.jid, channelPhone: event.channelPhone, text: event.text, kind: event.kind, waMessageId: event.waMessageId,
+      },
+      conversationId, leadId, customerId, lead, customer, contactName,
+      optedOut: optedOutNow || (!optedInNow && (lead?.waOptOut === true || customer?.waOptOut === true)),
+      lidOnly, conversationOwnerId: ownerId,
+    });
+  } else if (event.kind === 'text' && !optedOutNow && !optedInNow && !lidOnly && ctx.settings.waAiAssist !== 'off') {
     try {
       const r = await draftWaReply(ctx.teamId, conversationId, {
         settings: ctx.settings,
@@ -1272,6 +1299,7 @@ export async function processWaEvent(rawEvent: WaEvent | Record<string, any>): P
     ...(optChanged ? { optChanged } : {}),
     ...(lidOnly ? { lidOnly: true } : {}),
     aiDraft,
+    ...(salesAgent ? { salesAgent } : {}),
     ...(playbookEnrolled ? { playbookEnrolled } : {}),
   };
 }

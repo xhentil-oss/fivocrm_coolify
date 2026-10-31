@@ -54,6 +54,9 @@ import { businessMinutesBetween } from '../_followUpConfig.js';
 import { notifyUser, getUserPrefs, isDndActive, isSilenced, escapeHtml, BASE_URL, isValidEmail } from '../_push.js';
 import { runChatScheduled } from '../_chatScheduled.js';
 import { runNazmijeDigest } from '../_nazmije.js';
+import {
+  runSalesAgentColdWa, runSalesAgentDigest, runSalesAgentNudges, runSalesAgentProspectTtl, runSalesAgentProspecting,
+} from '../_salesAgentJobs.js';
 import { isTypeMutedByPrefs } from '../_notificationTypes.js';
 import { costRateFor, resolveFinanceSettings, budgetAlertsDue, type FinanceSettings } from '../_profitabilityCore.js';
 // `.js` is NOT optional here: package.json declares "type": "module", so the
@@ -80,12 +83,12 @@ import {
   nextBillingPeriodStart,
   nextWorkPeriodStart,
   projectWorkCycle,
-  resolveCycleAnchorDay,
   seedWorkPeriodKey,
-  shiftByWorkCycles,
+  shiftTaskDatesByWorkCycles,
   startOfCycleWeek,
   taskPeriodsBehind,
   workCycleBlockReason,
+  workCycleClaimUnfinished,
   workCycleTaskAction,
   workPeriodKey,
 } from '../_projectCycles.js';
@@ -606,7 +609,13 @@ async function runTaskDeadlineAlerts(opts?: { businessId?: string | null }) {
     const endDate: Date = task.endDate?.toDate ? task.endDate.toDate() : new Date(task.endDate);
     if (isNaN(endDate.getTime())) continue;
 
-    const isOverdue = endDate < now;
+    // MIRRORS isOverdueDate / isTaskOverdue in src/lib/taskDue.ts — keep in
+    // sync: a deadline is a calendar promise, so a task is "vonuar" only once
+    // its Tirane DAY has passed, never the instant `endDate < now`. The instant
+    // check pushed "e ka kaluar afatin sot" at 10:00 for a task due 09:00 the
+    // same day — while every screen still showed it as due today — and consumed
+    // the overdue flag, so the real overdue alert the next morning never came.
+    const isOverdue = startOfRecurrenceDay(endDate) < startOfRecurrenceDay(now);
     const isDueSoon = endDate <= alertThreshold;
     if (!isOverdue && !isDueSoon) continue;
 
@@ -623,8 +632,9 @@ async function runTaskDeadlineAlerts(opts?: { businessId?: string | null }) {
     // returned ≥1 for any future time-of-day, so "skadon sot" was unreachable
     // (a task due later today always said "për 1 ditë").
     const dayDiff = Math.round((startOfRecurrenceDay(endDate) - startOfRecurrenceDay(now)) / 86400000);
-    // A task due at 09:00 is overdue by 10:00 the same day — "prej 1 ditë" was a
-    // lie for it (`Math.max(1, …)`); it has passed its deadline TODAY.
+    // Overdue means the deadline DAY has passed (above), so this is >= 1 for
+    // every row flagged by this run; the "sot" wording below only still serves a
+    // row whose flag was set by the old instant check.
     const overdueByDays = Math.max(0, -dayDiff);
     const isOverdueAlert = stage === 'overdue';
     const notifTitle = isOverdueAlert ? `⚠️ Detyrë e skaduara: ${task.title}` : `⏰ Afati afrohet: ${task.title}`;
@@ -694,7 +704,13 @@ function taskReminderBlockReason(task: any, now: Date): string | null {
   if (!at || isNaN(at.getTime())) return 'invalid-date';
   if (task.status === 'Done') return 'task-done';
   if (task.reminderSentAt) return 'already-sent';
+  // Consumed without a send (task-done / no-recipient) — see below.
+  if (task.reminderSkippedAt) return 'skipped';
   if (at.getTime() > now.getTime()) return 'not-yet';
+  // Outside the look-back: missed by an outage, not owed. The query never
+  // returns such a row; the reason exists so the lib (and the panel) say the
+  // same thing instead of "pending" forever.
+  if (now.getTime() - at.getTime() > TASK_REMINDER_LOOKBACK_MS) return 'stale';
   return null;
 }
 
@@ -726,7 +742,16 @@ async function runTaskReminders(opts?: { businessId?: string | null }) {
     if (task.businessId && suspended.has(task.businessId)) { suspendedSkipped++; continue; }
     if (!(await remindersEnabledFor(task.teamId))) { toggledOffSkipped++; continue; }
     const reason = taskReminderBlockReason(task, now);
-    if (reason) { blocked[reason] = (blocked[reason] || 0) + 1; continue; }
+    if (reason) {
+      blocked[reason] = (blocked[reason] || 0) + 1;
+      // A reminder whose moment came while the task was already Done is
+      // CONSUMED — stamped as skipped, never as sent. Left alone, re-opening the
+      // task inside the look-back window fired it hours or days late.
+      if (reason === 'task-done' && !task.reminderSkippedAt) {
+        ops.push(doc.ref.update({ reminderSkippedAt: admin.firestore.Timestamp.now(), reminderSkippedReason: 'task-done' }));
+      }
+      continue;
+    }
 
     // MIRRORS taskReminderRecipient (src/lib/taskReminders.ts): "Më kujto" is
     // the reminder of the person who SET it — a manager reminding themselves to
@@ -734,9 +759,10 @@ async function runTaskReminders(opts?: { businessId?: string | null }) {
     const selfRequested = !!task.reminderSetByUserId;
     const recipientId = task.reminderSetByUserId || task.assignedToUserId || task.createdByUserId;
     if (!recipientId) {
-      // Nobody to remind — mark it so the row leaves the window instead of being
-      // re-read every 5 minutes for two days.
-      ops.push(doc.ref.update({ reminderSentAt: admin.firestore.Timestamp.now() }));
+      // Nobody to remind — CONSUME it (skipped, with the reason) so the row is
+      // not re-read every 5 minutes for two days. Never `reminderSentAt`: that
+      // made the panel say "U dërgua" about a reminder nobody received.
+      ops.push(doc.ref.update({ reminderSkippedAt: admin.firestore.Timestamp.now(), reminderSkippedReason: 'no-recipient' }));
       blocked['no-recipient'] = (blocked['no-recipient'] || 0) + 1;
       continue;
     }
@@ -1290,7 +1316,16 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
   let created = 0;
   let skippedDuplicate = 0;
   let claimedElsewhere = 0;
+  // Every non-spawn is counted under its name (never a silent `continue`).
+  let notDue = 0;
+  let notDone = 0;
+  let alreadyClaimed = 0;
+  let childMissing = 0;
+  let seriesEnded = 0;
+  let occurrencesRolled = 0;
   const ops: Promise<any>[] = [];
+  // MIRRORS RecurringSkippedReason in src/lib/recurringUtils.ts — keep in sync.
+  type RecurringSkippedReason = 'duplicate-occurrence' | 'series-ended' | 'child-missing';
 
   // Occurrence fingerprints that already exist. A recurring series that got
   // duplicated once (two parents Done and due) would otherwise have the cron
@@ -1316,8 +1351,11 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
   // Rows that predate `seriesId` are ALSO keyed by the legacy fingerprint, which
   // is what collapses two duplicated legacy parents into one child.
   const occurrenceKey = (t: any, id: string, start: Date) => ['s', seriesIdOf(t, id), dayKeyOf(start)].join('||');
+  // MIRRORS normalizeSeriesTitle (src/lib/recurringUtils.ts): the legacy
+  // identity compares titles case- and whitespace-insensitively in BOTH engines.
+  const normalizeSeriesTitle = (title: unknown) => (typeof title === 'string' ? title : '').toLowerCase().replace(/\s+/g, ' ').trim();
   const legacyOccurrenceKey = (t: any, start: Date) =>
-    [t.businessId || '-', (t.title || '').toLowerCase().replace(/\s+/g, ' ').trim(),
+    [t.businessId || '-', normalizeSeriesTitle(t.title),
      t.assignedToUserId || '-', t.projectId || '-', dayKeyOf(start)].join('||');
   const existingOccurrences = new Set<string>();
   const allRecurring: Array<{ id: string; data: any }> = [];
@@ -1330,30 +1368,16 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
       if (!t.seriesId) existingOccurrences.add(legacyOccurrenceKey(t, s));
     }
   }
-  // MIRRORS `remapDependsOnForNextCycle` (client): a Done recurring blocker is
-  // re-pointed to its live sibling, a Done one-off blocker is dropped, anything
-  // unknown/open is kept. This set holds recurring rows only, so a one-off
-  // blocker is "unknown" here and kept — harmless (Done ids never block).
-  // Children spawned in THIS run are added to the set before any dependsOn is
-  // remapped (two-phase loop below), so a blocker whose next cycle is created
-  // in the same run is followed to it instead of being dropped.
+  // MIRRORS `sameSeries` (src/lib/recurringUtils.ts): seriesId wins, legacy
+  // rows compare the normalised title + assignee + project.
   const sameSeries = (a: { id: string; data: any }, b: { id: string; data: any }) => {
     if (a.data.seriesId || b.data.seriesId) return seriesIdOf(a.data, a.id) === seriesIdOf(b.data, b.id);
-    return a.data.title === b.data.title &&
+    return normalizeSeriesTitle(a.data.title) === normalizeSeriesTitle(b.data.title) &&
       (a.data.assignedToUserId ?? '') === (b.data.assignedToUserId ?? '') &&
       (a.data.projectId ?? '') === (b.data.projectId ?? '');
   };
-  const remapDependsOn = (deps: string[] | null | undefined): string[] | null => {
-    if (!deps || deps.length === 0) return deps ?? null;
-    const out: string[] = [];
-    for (const id of deps) {
-      const dep = allRecurring.find(r => r.id === id);
-      if (!dep || dep.data.status !== 'Done') { out.push(id); continue; }
-      const live = allRecurring.find(r => r.id !== dep.id && r.data.status !== 'Done' && sameSeries(dep, r));
-      if (live && !out.includes(live.id)) out.push(live.id);
-    }
-    return out;
-  };
+  const hasLiveSibling = (id: string, data: any) =>
+    allRecurring.some(r => r.id !== id && r.data.status !== 'Done' && sameSeries({ id, data }, r));
   let skippedNoDates = 0;
 
   // MIRRORS RECURRENCE_STOPPING_PROJECT_STATUSES in src/lib/recurringUtils.ts —
@@ -1382,6 +1406,7 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
     task: any;
     childData: Record<string, any>;
     newNext: Date;
+    rolled: number;
   };
   const plans: SpawnPlan[] = [];
 
@@ -1413,10 +1438,31 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
     // this check and get its next cycle even when its (healed) tenant is suspended.
     if (task.businessId && suspended.has(task.businessId)) { suspendedSkipped++; continue; }
     if (!task.nextRecurringDate || !task.recurringFrequency) { if (task.status === 'Done' && !task.nextCycleCreated) skippedNoDates++; continue; }
-    // Skip if frontend already created the next cycle ("after completion" model)
-    if (task.nextCycleCreated) continue;
-    // Skip if the task hasn't been completed yet — no pile-up of duplicates
-    if (task.status !== 'Done') continue;
+    // Claimed: the browser (or an earlier run) produced the next cycle.
+    if (task.nextCycleCreated) {
+      // MIRRORS nextCycleClaimIsStale (src/lib/recurringUtils.ts). A Done tip
+      // whose RECORDED occurrence (`nextCycleTaskId`) is gone while the series
+      // has no live row is stamped 'child-missing' ONCE — a named reason on the
+      // row, never a silent skip. It is NOT re-spawned here: the browser writes
+      // the claim and the child in one transaction, so a recorded child that
+      // is missing was DELETED, and deleting the live occurrence is how people
+      // stop a series. Re-open / re-complete the tip re-arms it (user intent).
+      const recordedChild = typeof task.nextCycleTaskId === 'string' ? task.nextCycleTaskId : '';
+      if (task.status === 'Done' && recordedChild && task.recurringSkippedReason !== 'child-missing'
+          && !allRecurring.some(r => r.id === recordedChild) && !hasLiveSibling(doc.id, task)) {
+        const childSnap = await db.collection('tasks').doc(recordedChild).get();
+        if (!childSnap.exists) {
+          childMissing++;
+          const reason: RecurringSkippedReason = 'child-missing';
+          ops.push(doc.ref.update({ recurringSkippedReason: reason, updatedAt: admin.firestore.Timestamp.now() }));
+          continue;
+        }
+      }
+      alreadyClaimed++;
+      continue;
+    }
+    // Not completed yet — the "after completion" model waits for the Done.
+    if (task.status !== 'Done') { notDone++; continue; }
     // MIRRORS projectRecurrenceBlockReason (src/lib/recurringUtils.ts): an
     // archived/cancelled project spawns no next cycle. Checked only on Done
     // tips so a live series costs no project read.
@@ -1425,7 +1471,13 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
       if (project?.status && RECURRENCE_STOPPING_PROJECT_STATUSES.includes(project.status)) { projectTerminalSkipped++; continue; }
     }
     const nextRecurringDate: Date = task.nextRecurringDate?.toDate ? task.nextRecurringDate.toDate() : new Date(task.nextRecurringDate);
-    if (isNaN(nextRecurringDate.getTime()) || nextRecurringDate > now) continue;
+    if (isNaN(nextRecurringDate.getTime())) { skippedNoDates++; continue; }
+    // DAY comparison in the business zone — the same law as the roll-forward
+    // below and buildNextRecurringTask: an occurrence due later TODAY is due.
+    // The instant check (`nextRecurringDate > now`) made the 08:00 UTC tick skip
+    // a series due at 15:00, and the next day's tick then rolled straight past
+    // that day — the occurrence was lost without a trace.
+    if (startOfRecurrenceDay(nextRecurringDate) > startOfRecurrenceDay(now)) { notDue++; continue; }
     // Tolerate a missing date anchor the way the UI does (parseDate falls back):
     // a tip with only one of startDate/endDate used to be skipped here forever —
     // a silently dead series the user could never see or fix.
@@ -1456,10 +1508,15 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
     // Roll forward so a task completed (or picked up) late never spawns an
     // already-overdue occurrence — the next due date is always the first future
     // one (same behaviour as the client-side buildNextRecurringTask / Asana).
+    // Every occurrence rolled past is COUNTED and recorded on the parent
+    // (`recurringOccurrencesRolled`) when the child lands — a late series never
+    // loses days silently.
     const todayMs = startOfDayMs(now);
     let rollGuard = 0;
+    let rolled = 0;
     while (startOfDayMs(newStart) < todayMs && rollGuard++ < 500) {
       newStart = addFrequency(newStart, task.recurringFrequency, task.recurringDayOfWeek, dom ?? undefined, task.recurringInterval, task.recurringDaysOfWeek);
+      rolled++;
     }
 
     const newEnd = new Date(newStart.getTime() + spanMs);
@@ -1469,7 +1526,11 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
     // the series (mark done so it isn't reprocessed) without creating a new cycle.
     const recEnd: Date | null = task.recurringEndDate ? (task.recurringEndDate.toDate ? task.recurringEndDate.toDate() : new Date(task.recurringEndDate)) : null;
     if (recEnd && !isNaN(recEnd.getTime()) && startOfDayMs(newStart) > startOfDayMs(recEnd)) {
-      ops.push(doc.ref.update({ nextCycleCreated: true, updatedAt: admin.firestore.Timestamp.now() }));
+      // Named, visible reason — the row says the series is over, not merely
+      // "claimed" (which read as "a child exists somewhere").
+      const reason: RecurringSkippedReason = 'series-ended';
+      ops.push(doc.ref.update({ nextCycleCreated: true, nextCycleTaskId: null, recurringSkippedReason: reason, updatedAt: admin.firestore.Timestamp.now() }));
+      seriesEnded++;
       continue;
     }
 
@@ -1480,7 +1541,8 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
     if (existingOccurrences.has(key) || (legacyKey && existingOccurrences.has(legacyKey))) {
       // Named, visible reason (never a silent close): the row says why it has
       // no child of its own.
-      ops.push(doc.ref.update({ nextCycleCreated: true, recurringSkippedReason: 'duplicate-occurrence', updatedAt: admin.firestore.Timestamp.now() }));
+      const reason: RecurringSkippedReason = 'duplicate-occurrence';
+      ops.push(doc.ref.update({ nextCycleCreated: true, recurringSkippedReason: reason, updatedAt: admin.firestore.Timestamp.now() }));
       skippedDuplicate++;
       continue;
     }
@@ -1503,7 +1565,7 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
       projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null,
       labels: task.labels ?? null, section: task.section ?? null, collaboratorIds: task.collaboratorIds ?? null,
       estimatedHours: task.estimatedHours ?? null,
-      dependsOn: null, // phase 2 — remapDependsOn once every child of this run is known
+      dependsOn: null, // phase 2c — remapped once the children of this run have actually LANDED
       seriesId,
       startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd),
       isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1,
@@ -1526,20 +1588,20 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
       teamId: task.teamId ?? null, businessId: task.businessId ?? null, customerId: task.customerId ?? null,
       createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now(),
     };
-    plans.push({ parentRef: doc.ref, childRef, task, childData, newNext });
+    plans.push({ parentRef: doc.ref, childRef, task, childData, newNext, rolled });
   }
-
-  // Phase 2a: every child of this run is a live occurrence of its series.
-  for (const plan of plans) allRecurring.push({ id: plan.childRef.id, data: plan.childData });
 
   // Phase 2b: spawn. Child create + parent claim in ONE transaction — the parent
   // is re-read inside it, so a completion in the browser (which claims
   // `nextCycleCreated` first) and this backstop can never both produce a cycle,
   // and a child can never exist without its parent being marked (or vice versa).
+  // `dependsOn` is written in phase 2c, AFTER the spawns settle: remapping it
+  // before the transaction pointed a sibling's blockers at a planned
+  // `rec_task_…` that was never created when its spawn ended 'claimed-elsewhere'.
   const freqLabel: Record<string, string> = { daily: 'ditore', weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
+  const landed: SpawnPlan[] = [];
   const spawn = async (plan: SpawnPlan) => {
     const { task, childRef, parentRef } = plan;
-    plan.childData.dependsOn = remapDependsOn(task.dependsOn);
     let outcome: 'created' | 'duplicate' | 'claimed-elsewhere';
     try {
       outcome = await db.runTransaction(async (tx) => {
@@ -1547,23 +1609,36 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
         const parent = parentSnap.data();
         if (!parentSnap.exists || !parent || parent.nextCycleCreated === true || parent.status !== 'Done') return 'claimed-elsewhere' as const;
         if (childSnap.exists) {
-          tx.update(parentRef, { nextCycleCreated: true, recurringSkippedReason: 'duplicate-occurrence', updatedAt: admin.firestore.Timestamp.now() });
+          const reason: RecurringSkippedReason = 'duplicate-occurrence';
+          tx.update(parentRef, { nextCycleCreated: true, recurringSkippedReason: reason, updatedAt: admin.firestore.Timestamp.now() });
           return 'duplicate' as const;
         }
         tx.create(childRef, plan.childData);
-        tx.update(parentRef, { nextCycleCreated: true, nextRecurringDate: admin.firestore.Timestamp.fromDate(plan.newNext), updatedAt: admin.firestore.Timestamp.now() });
+        tx.update(parentRef, {
+          nextCycleCreated: true,
+          nextCycleTaskId: childRef.id,
+          recurringSkippedReason: null,
+          nextRecurringDate: admin.firestore.Timestamp.fromDate(plan.newNext),
+          // The occurrences passed over because they would have landed in the past
+          // (a late Done, an outage) — recorded, never silently dropped.
+          ...(plan.rolled > 0 ? { recurringOccurrencesRolled: plan.rolled, recurringOccurrencesRolledAt: admin.firestore.Timestamp.now() } : {}),
+          updatedAt: admin.firestore.Timestamp.now(),
+        });
         return 'created' as const;
       });
     } catch (e) {
       if (!isAlreadyExists(e)) throw e;
       // The occurrence landed between our read and our write: it exists, so the
       // parent is done — record it and move on, never a second child.
-      await parentRef.update({ nextCycleCreated: true, recurringSkippedReason: 'duplicate-occurrence', updatedAt: admin.firestore.Timestamp.now() });
+      const reason: RecurringSkippedReason = 'duplicate-occurrence';
+      await parentRef.update({ nextCycleCreated: true, recurringSkippedReason: reason, updatedAt: admin.firestore.Timestamp.now() });
       outcome = 'duplicate';
     }
     if (outcome === 'duplicate') { skippedDuplicate++; return; }
     if (outcome === 'claimed-elsewhere') { claimedElsewhere++; return; }
     created++;
+    occurrencesRolled += plan.rolled;
+    landed.push(plan);
     const notifRecipient = task.assignedToUserId || task.createdByUserId;
     if (notifRecipient) {
       const taskUrl = task.projectId
@@ -1575,9 +1650,52 @@ async function runRecurringTasks(opts?: { businessId?: string | null }) {
   for (const plan of plans) ops.push(spawn(plan));
 
   await settleAll(ops, 'recurring-tasks');
+
+  // Phase 2c: `dependsOn` of the children that actually LANDED.
+  // MIRRORS `remapDependsOnForNextCycle` (src/lib/recurringUtils.ts) exactly: a
+  // Done recurring blocker is re-pointed to its live sibling, a Done ONE-OFF
+  // blocker is dropped (satisfied forever), an open or unknown id is kept. The
+  // recurring set does not hold one-off rows, so the lib's "drop a Done
+  // one-off" used to be "keep it" here — the one-off blockers are loaded.
+  for (const plan of landed) allRecurring.push({ id: plan.childRef.id, data: plan.childData });
+  const depPlans = landed.filter(plan => Array.isArray(plan.task.dependsOn) && plan.task.dependsOn.length > 0);
+  if (depPlans.length > 0) {
+    const unknownDepIds = new Set<string>();
+    for (const plan of depPlans) {
+      for (const id of plan.task.dependsOn as unknown[]) {
+        if (typeof id === 'string' && id && !allRecurring.some(r => r.id === id)) unknownDepIds.add(id);
+      }
+    }
+    const oneOff = new Map<string, any>();
+    const ids = [...unknownDepIds];
+    for (let i = 0; i < ids.length; i += 100) {
+      const snaps = await db.getAll(...ids.slice(i, i + 100).map(id => db.collection('tasks').doc(id)));
+      for (const sn of snaps) if (sn.exists) oneOff.set(sn.id, sn.data());
+    }
+    const remapDependsOn = (deps: unknown[]): string[] => {
+      const out: string[] = [];
+      for (const raw of deps) {
+        if (typeof raw !== 'string' || !raw) continue;
+        const id = raw;
+        const dep = allRecurring.find(r => r.id === id) ?? (oneOff.has(id) ? { id, data: oneOff.get(id) } : null);
+        if (!dep || dep.data.status !== 'Done') { out.push(id); continue; }
+        if (!dep.data.isRecurring) continue; // a Done one-off: satisfied forever
+        const live = allRecurring.find(r => r.id !== dep.id && r.data.status !== 'Done' && sameSeries(dep, r));
+        if (live && !out.includes(live.id)) out.push(live.id);
+      }
+      return out;
+    };
+    const depOps = depPlans.map(plan => plan.childRef.update({ dependsOn: remapDependsOn(plan.task.dependsOn) }));
+    await settleAll(depOps, 'recurring-tasks:dependsOn');
+  }
+
   if (projectTerminalSkipped) console.log(`[recurring-tasks] ${projectTerminalSkipped} tip(s) inside archived/cancelled projects — no cycle spawned`);
   if (skippedNoDates) console.warn(`[recurring-tasks] ${skippedNoDates} Done tip(s) skipped: missing nextRecurringDate/frequency or both date anchors`);
-  return { created, skippedDuplicate, claimedElsewhere, toggledOffSkipped, projectTerminalSkipped, skippedNoDates, suspendedSkipped };
+  if (childMissing) console.warn(`[recurring-tasks] ${childMissing} Done tip(s) whose recorded occurrence was deleted — stamped child-missing, not re-spawned`);
+  return {
+    created, skippedDuplicate, claimedElsewhere, toggledOffSkipped, projectTerminalSkipped, skippedNoDates, suspendedSkipped,
+    notDue, notDone, alreadyClaimed, childMissing, seriesEnded, occurrencesRolled,
+  };
 }
 
 // ── helpers for recurring-invoices ───────────────────────────────────────────
@@ -2550,6 +2668,9 @@ async function runRecurringProjectReset(opts?: { businessId?: string | null }) {
   let reopenedTasks = 0;
   let carriedTasks = 0;
   let ownSeriesTasks = 0;
+  let subtasksOfSeries = 0;
+  let alreadyApplied = 0;
+  let resumed = 0;
   let seeded = 0;
   const blocked: Record<string, number> = {};
   const ops: Promise<any>[] = [];
@@ -2571,6 +2692,7 @@ async function runRecurringProjectReset(opts?: { businessId?: string | null }) {
       seeded++;
       stamp(projectDoc, project, 'seeded', {
         workCycleLastPeriodKey: workPeriodKey(cycle, now),
+        workCycleTasksAppliedKey: workPeriodKey(cycle, now),
         nextRecurringDate: admin.firestore.Timestamp.fromDate(nextWorkPeriodStart(cycle, now)),
       });
       continue;
@@ -2582,24 +2704,61 @@ async function runRecurringProjectReset(opts?: { businessId?: string | null }) {
       continue;
     }
 
-    const fromKey: string = project.workCycleLastPeriodKey || seedWorkPeriodKey(cycle, project, now);
     const currentKey = workPeriodKey(cycle, now);
 
     const tasksSnap = await db.collection('tasks').where('projectId', '==', projectDoc.id).get();
     if (tasksSnap.empty) {
       blocked['no-tasks'] = (blocked['no-tasks'] || 0) + 1;
       // Claim the period anyway: there is nothing to reopen until next time.
-      stamp(projectDoc, project, 'no-tasks', { workCycleLastPeriodKey: currentKey });
+      stamp(projectDoc, project, 'no-tasks', { workCycleLastPeriodKey: currentKey, workCycleTasksAppliedKey: currentKey });
       continue;
     }
 
-    const ts = (d: Date | null) => (d ? admin.firestore.Timestamp.fromDate(d) : null);
+    // The period is CLAIMED FIRST, in a transaction that fails when another run
+    // already holds it: two ticks racing (or a manual run next to the scheduled
+    // one) used to shift every task twice and double `carriedOverCount`. A claim
+    // whose task writes never completed (`workCycleTasksAppliedKey` still names
+    // an older period — the job died half-way) is RESUMED, and each task write
+    // is idempotent for the period through `workCycleAppliedPeriodKey`.
+    const claim = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(projectDoc.ref);
+      const p = snap.data();
+      if (!snap.exists || !p) return { outcome: 'gone' as const, fromKey: '' };
+      const resuming = workCycleClaimUnfinished(p, currentKey);
+      if (p.workCycleLastPeriodKey === currentKey && !resuming) return { outcome: 'already-cycled' as const, fromKey: '' };
+      const fromKey: string = resuming
+        ? (p.workCycleOpeningFromKey || p.workCycleTasksAppliedKey || currentKey)
+        : (p.workCycleLastPeriodKey || seedWorkPeriodKey(cycle, p, now));
+      tx.update(projectDoc.ref, {
+        workCycleLastPeriodKey: currentKey,
+        workCycleOpeningFromKey: fromKey,
+        workCycleClaimedAt: admin.firestore.Timestamp.now(),
+        // Behind the claim until the last task write lands (a string, so a death
+        // in between is detectable — see workCycleClaimUnfinished).
+        ...(resuming ? {} : { workCycleTasksAppliedKey: p.workCycleLastPeriodKey || '' }),
+      });
+      return { outcome: resuming ? 'resumed' as const : 'claimed' as const, fromKey };
+    });
+    if (claim.outcome === 'gone') continue;
+    if (claim.outcome === 'already-cycled') { blocked['already-cycled'] = (blocked['already-cycled'] || 0) + 1; continue; }
+    if (claim.outcome === 'resumed') resumed++;
+    const fromKey = claim.fromKey;
+
+    const ts = (d: Date) => admin.firestore.Timestamp.fromDate(d);
+    const byId = new Map<string, any>();
+    for (const taskDoc of tasksSnap.docs) byId.set(taskDoc.id, taskDoc.data());
     let reopened = 0;
     let carried = 0;
     for (const taskDoc of tasksSnap.docs) {
       const t = taskDoc.data();
-      const action = workCycleTaskAction(t);
+      const parent = t.parentTaskId ? byId.get(t.parentTaskId) ?? null : null;
+      const action = workCycleTaskAction(t, { parent, periodKey: currentKey });
       if (action === 'own-series') { ownSeriesTasks++; continue; }
+      // A subtask of a recurring tip belongs to that occurrence — reopening it
+      // put a Todo subtask under a Done parent whose series had moved on.
+      if (action === 'parent-own-series') { subtasksOfSeries++; continue; }
+      // Already reopened/carried into THIS period by the run that died.
+      if (action === 'applied') { alreadyApplied++; continue; }
       // Each task moves by ITS OWN lag (its deadline's period → the current
       // one), never by the project's gap: a task already dated in this (or a
       // later) period is not moved at all — shifting it pushed work planned for
@@ -2609,25 +2768,30 @@ async function runRecurringProjectReset(opts?: { businessId?: string | null }) {
       // An open task that is already dated in the current period is simply this
       // period's work — nothing to carry, nothing to write.
       if (action === 'carry' && periods === 0 && hasDates) continue;
-      // Month steps keep the ORIGINAL day (anchor stored on the task the first
-      // time it is cycled): 31 Jan → 28 Feb → 31 Mar, never → 28 Mar forever.
-      const startAnchor = cycle === 'monthly' ? resolveCycleAnchorDay(t.startDate, t.cycleAnchorStartDay) : null;
-      const endAnchor = cycle === 'monthly' ? resolveCycleAnchorDay(t.endDate, t.cycleAnchorEndDay) : null;
-      const newStart = periods > 0 ? ts(shiftByWorkCycles(t.startDate, cycle, periods, startAnchor)) : null;
-      const newEnd = periods > 0 ? ts(shiftByWorkCycles(t.endDate, cycle, periods, endAnchor)) : null;
+      // EVERY date field the task has moves (start / end / due, each on its own
+      // month anchor: 31 Jan → 28 Feb → 31 Mar, never → 28 Mar forever). The
+      // job used to rewrite `dueDate` only as a copy of a moved `endDate`, so a
+      // legacy task carrying only `dueDate` was "behind" every period, carried
+      // again and again, and never re-dated. (`shiftTaskDatesByWorkCycles`.)
+      const dates = shiftTaskDatesByWorkCycles(t, cycle, periods);
+      const newEnd = dates.endDate ? ts(dates.endDate) : null;
       const common = {
         updatedAt: admin.firestore.Timestamp.now(),
+        // Per-task idempotency token of the cycle (a re-run skips the row).
+        workCycleAppliedPeriodKey: currentKey,
         ...(periods > 0 ? {
           // BOTH alert flags reset — the deadline is a new one.
           dueNotificationSent: false, overdueNotificationSent: false,
-          ...(startAnchor ? { cycleAnchorStartDay: startAnchor } : {}),
-          ...(endAnchor ? { cycleAnchorEndDay: endAnchor } : {}),
+          ...(dates.cycleAnchorStartDay ? { cycleAnchorStartDay: dates.cycleAnchorStartDay } : {}),
+          ...(dates.cycleAnchorEndDay ? { cycleAnchorEndDay: dates.cycleAnchorEndDay } : {}),
+          ...(dates.cycleAnchorDueDay ? { cycleAnchorDueDay: dates.cycleAnchorDueDay } : {}),
         } : {}),
-        ...(newStart ? { startDate: newStart } : {}),
-        ...(newEnd ? { endDate: newEnd, ...(t.dueDate ? { dueDate: newEnd } : {}) } : {}),
+        ...(dates.startDate ? { startDate: ts(dates.startDate) } : {}),
+        ...(newEnd ? { endDate: newEnd } : {}),
+        ...(dates.dueDate ? { dueDate: ts(dates.dueDate) } : {}),
         // A relative reminder follows the deadline; an absolute one belonged to last cycle.
         ...(newEnd && t.reminderOffsetMinutes !== null && t.reminderOffsetMinutes !== undefined
-          ? { reminderAt: admin.firestore.Timestamp.fromMillis(newEnd.toMillis() - Math.max(0, Number(t.reminderOffsetMinutes)) * 60_000), reminderSentAt: null }
+          ? { reminderAt: admin.firestore.Timestamp.fromMillis(newEnd.toMillis() - Math.max(0, Number(t.reminderOffsetMinutes)) * 60_000), reminderSentAt: null, reminderSkippedAt: null, reminderSkippedReason: null }
           : {}),
       };
       if (action === 'reopen') {
@@ -2653,9 +2817,13 @@ async function runRecurringProjectReset(opts?: { businessId?: string | null }) {
     reopenedTasks += reopened;
     carriedTasks += carried;
 
+    // The task writes settle BEFORE the period is marked applied — a death in
+    // between leaves the claim resumable, never a half-cycled period marked done.
+    await settleAll(ops.splice(0), 'recurring-project-reset:tasks');
     ops.push(projectDoc.ref.update({
       ...(project.status === 'Completed' ? { status: 'Active' } : {}),
       workCycleLastPeriodKey: currentKey,
+      workCycleTasksAppliedKey: currentKey,
       workCycleLastBlock: null,
       workCycleCheckedAt: admin.firestore.Timestamp.now(),
       workCycleCarriedOver: carried,
@@ -2671,7 +2839,7 @@ async function runRecurringProjectReset(opts?: { businessId?: string | null }) {
   }
 
   await settleAll(ops, 'recurring-project-reset');
-  return { reset: resetCount, reopenedTasks, carriedTasks, ownSeriesTasks, seeded, blocked, scoped: !!scopeId };
+  return { reset: resetCount, resumed, reopenedTasks, carriedTasks, ownSeriesTasks, subtasksOfSeries, alreadyApplied, seeded, blocked, scoped: !!scopeId };
 }
 
 // ── Recurring EXPENSES ───────────────────────────────────────────────────────
@@ -7900,6 +8068,8 @@ const PLATFORM_ONLY_JOBS = new Set<string>([
   'social-monthly-sync',
   // Retention sweep across the whole `notifications` collection.
   'cleanup-old-notifications',
+  // Deletes every tenant's expired, unregistered Google Maps prospects (Places terms).
+  'sales-agent-prospect-ttl',
 ]);
 const SCOPED_JOBS = new Set<string>([
   'task-deadline-alerts', 'task-reminders', 'chat-scheduled', 'invoice-reminders',
@@ -7917,6 +8087,9 @@ const SCOPED_JOBS = new Set<string>([
   'report-metrics-social', 'gmb-sync',
   // Nazmije's scheduled posts — into ONE tenant's group channel when run by hand.
   'nazmije-morning', 'nazmije-afternoon', 'nazmije-weekly',
+  // Ana, the virtual sales agent: prospecting (spends Places requests), cold WhatsApp
+  // and nudges (message real people), the morning digest — each scoped to the caller's tenant.
+  'sales-agent-prospecting', 'sales-agent-cold-wa', 'sales-agent-nudges', 'sales-agent-digest',
 ]);
 const BOOTSTRAP_JOBS = new Set<string>(['set-superadmin-claim']);
 
@@ -7993,6 +8166,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Idempotent per tenant/day/kind (nazmijePosts, create()); the clock gate,
         // off days and the per-digest switches live in api/_nazmijeCore.ts.
         result = await runNazmijeDigest(job.replace('nazmije-', '') as 'morning' | 'afternoon' | 'weekly', { businessId: manualScope });
+        break;
+      case 'sales-agent-prospecting':
+        // Ana: runs ≤ 3 queued Google Maps searches per tick (every 15 min from the VPS,
+        // NOT in run-all — each page is a billable Places request, metered per tenant).
+        result = await runSalesAgentProspecting({ businessId: manualScope });
+        break;
+      case 'sales-agent-cold-wa':
+        // Ana: ONE cold WhatsApp per sender number per tick, under law 7 of the plan
+        // (≤10/day, ≥1h gap, office window, warm-up, auto-pause). Messages real people →
+        // scoped to the caller's tenant when run by hand.
+        result = await runSalesAgentColdWa({ businessId: manualScope });
+        break;
+      case 'sales-agent-nudges':
+        // Ana: nudges a prospect who went silent mid-qualification (≤ 2), escalates a
+        // handoff nobody picked up within the SLA.
+        result = await runSalesAgentNudges({ businessId: manualScope });
+        break;
+      case 'sales-agent-digest':
+        // Ana: "dje në shitje" to the managers, 08:15 local; idempotent per tenant/day.
+        result = await runSalesAgentDigest({ businessId: manualScope });
+        break;
+      case 'sales-agent-prospect-ttl':
+        // Platform-only (guard above): Places terms — unregistered prospects live 30 days.
+        result = await runSalesAgentProspectTtl();
         break;
       case 'chat-scheduled':
         // Scheduled chat messages ("Programo") — a wall-clock promise, every 5 min

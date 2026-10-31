@@ -58,6 +58,12 @@ export interface WhatsAppMessage {
   sentByUid?: string;
   mediaType?: 'image' | 'video' | 'audio' | 'document' | 'sticker';
   mediaUrl?: string;
+  /** Written by the VPS when it downloads inbound/phone-sent media (Oct 2026). */
+  mediaMime?: string;
+  mediaFilename?: string;
+  mediaSize?: number;
+  /** Why the media could not be stored (too big, refused type, CDN download failed); the text stays "[Foto]". */
+  mediaError?: string;
   /** Baileys agent (whatsappAccounts id) the row went through / arrived on. */
   agentId?: string | null;
   /** Sent by a machine (cron, campaign, auto-reply), not typed by a person. */
@@ -568,6 +574,12 @@ export interface Project {
   /** Work period already opened ('2026-10' / 'W2026-10-12') — the reset job's
    *  idempotency token. Written by the cron only. */
   workCycleLastPeriodKey?: string | null;
+  /** Period whose task shift finished (cron-only). A claimed period without it
+   *  is an unfinished claim the next run RESUMES (`workCycleClaimUnfinished`). */
+  workCycleTasksAppliedKey?: string | null;
+  /** Period the unfinished claim started from / when it was claimed (cron-only). */
+  workCycleOpeningFromKey?: string | null;
+  workCycleClaimedAt?: Date | null;
   /** What the reset job decided last time (a `WorkCycleBlock`, null = cycled). */
   workCycleLastBlock?: string | null;
   workCycleCheckedAt?: Date;
@@ -722,6 +734,17 @@ export interface Business {
    * via `POST /api/platform-admin`, the owner cannot change it). Layer 1.
    */
   lockedModules?: string[];
+  /**
+   * Has the platform configured this tenant's modules yet? A SELF-SERVE signup is
+   * born with every optional module locked and `'pending'` (src/lib/createTenant.ts);
+   * `set-modules` writes `'done'`. A tenant the console created, or a legacy one
+   * without the field, is never pending. Owner-immutable (rules).
+   */
+  moduleSetup?: 'pending' | 'done';
+  moduleSetupRequestedAt?: Date;
+  /** Super-admins were told about the pending signup (api/_sync-claims.ts, once). */
+  moduleSetupNotifiedAt?: Date;
+  moduleSetupDoneAt?: Date;
   /** Portal subdomain for this tenant: `<portalSubdomain>.fivocrm.com/portal`.
    * Resolves hostname → businessId so this tenant's clients register/scope to it. */
   portalSubdomain?: string;
@@ -814,6 +837,8 @@ export interface TeamMember {
   canAccessProducts?: boolean;
   /** Hosting & domains module. */
   canAccessHosting?: boolean;
+  /** Virtual sales agent module (prospecting, AI replies, qualification). */
+  canAccessSalesAgent?: boolean;
   canAccessExpenses?: boolean;
   canAccessProfile?: boolean;
   /**
@@ -981,6 +1006,22 @@ export interface Task {
   recurringEndDate?: Date; // optional "repeat until" — no occurrences after this date
   nextRecurringDate?: Date;
   nextCycleCreated?: boolean;
+  /** Id of the occurrence the claim transaction created (`claimTaskNextCycle`);
+   *  lets `nextCycleClaimIsStale` tell a dead claim from a live one. */
+  nextCycleTaskId?: string | null;
+  /** Why the engine did NOT create the next occurrence (`RecurringSkippedReason`
+   *  in recurringUtils: duplicate-occurrence / series-ended / child-missing). */
+  recurringSkippedReason?: string | null;
+  /** Stamped when the browser re-armed a stale claim on re-complete. */
+  recurringClaimRepairedAt?: Date | null;
+  /** Cron-only: occurrences the backstop rolled past without generating. */
+  recurringOccurrencesRolled?: number;
+  recurringOccurrencesRolledAt?: Date | null;
+  /** Cron-only: the work-cycle period whose shift was already applied to this
+   *  task (a re-run of `recurring-project-reset` must not carry it twice). */
+  workCycleAppliedPeriodKey?: string | null;
+  /** Month anchor of `dueDate` for the work-cycle shift (like the end anchor). */
+  cycleAnchorDueDay?: number | null;
   /** Root parent id shared by every occurrence of one recurring series
    *  (`seriesIdOf` in recurringUtils). Absent on rows that predate it. */
   seriesId?: string;
@@ -996,6 +1037,10 @@ export interface Task {
   reminderAt?: Date | null;
   reminderOffsetMinutes?: number | null;
   reminderSentAt?: Date | null;
+  /** Consumed by the cron WITHOUT a send (`task-done`, `no-recipient`, …);
+   *  cleared with explicit null by `setReminderPatch` on re-arm. */
+  reminderSkippedAt?: Date | null;
+  reminderSkippedReason?: string | null;
   /** Reminder owner: who asked to be reminded (cron notifies them; null/absent = assignee). */
   reminderSetByUserId?: string | null;
   /**
@@ -2140,9 +2185,151 @@ export interface Lead extends FollowUpFields {
   playbookId?: string | null;
   /** Service the lead asked for (playbook name), stamped by the inbound WhatsApp handler. */
   serviceInterest?: string | null;
+  // ── Virtual sales agent (server-written; see src/lib/salesAgent/core.ts) ──
+  /** Set when the agent collected enough qualification fields (≥ 3). */
+  agentQualifiedAt?: Date | null;
+  /** 0–100 qualification/fit score computed by the agent. */
+  agentScore?: number | null;
+  /** Three-line summary the agent wrote for the human (what they want, when, budget). */
+  agentSummary?: string | null;
+  /** Fields the agent collected in conversation (service, city, timeline, budget, decisionMaker). */
+  agentCollected?: Record<string, string> | null;
+  /** The Google Maps prospect this lead was registered from (`prospects` doc id). */
+  prospectId?: string | null;
+  /** Cold-outreach stamps (agent-sent first contact). */
+  coldWaSentAt?: Date | null;
+  coldEmailSentAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
+}
+
+// ── Virtual sales agent ("Ana") — prospecting + conversations ───────────────
+// Settings, block reasons and the decision engine live in src/lib/salesAgent/core.ts.
+// These are the Firestore document shapes only.
+
+export type ProspectStatus = 'new' | 'approved' | 'rejected' | 'registered' | 'duplicate';
+
+/** One business found on Google Maps for a `prospectSearches` run. Unregistered rows expire after 30 days (Places terms). */
+export interface Prospect {
+  id: string;
+  businessId: string;
+  teamId?: string;
+  searchId: string;
+  /** Google place id — the only Places field that may be stored indefinitely. */
+  placeId: string;
+  name: string;
+  category?: string | null;
+  address?: string | null;
+  city?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  rating?: number | null;
+  reviewCount?: number | null;
+  /** 0–100 ICP fit computed by `fitScore()` (deterministic). */
+  fitScore: number;
+  fitReasons: string[];
+  status: ProspectStatus;
+  rejectReason?: string | null;
+  /** Set when registered as a lead, or when a matching lead/customer already existed (`duplicate`). */
+  leadId?: string | null;
+  matchedContactId?: string | null;
+  matchedContactKind?: 'lead' | 'customer' | null;
+  /** Agent-drafted first message (email/WhatsApp) + phone-call script for the human. */
+  firstMessageDraft?: string | null;
+  callScript?: string | null;
+  /** Whether `phone` was confirmed to be on WhatsApp (VPS `onWhatsApp`). null = not checked. */
+  waVerified?: boolean | null;
+  expiresAt: Date;
+  registeredAt?: Date | null;
+  registeredByUserId?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type ProspectSearchStatus = 'queued' | 'running' | 'done' | 'failed';
+
+export interface ProspectSearch {
+  id: string;
+  businessId: string;
+  teamId?: string;
+  /** Free text, e.g. "klinika dentare". */
+  query: string;
+  city: string;
+  /** ISO 3166-1 alpha-2 region bias, default 'AL'. */
+  region?: string;
+  /** Max results to fetch (≤ 60 = 3 pages of 20). */
+  maxResults: number;
+  status: ProspectSearchStatus;
+  error?: string | null;
+  counts: { found: number; new: number; duplicate: number; registered: number; requests: number };
+  requestedByUserId: string | null;
+  startedAt?: Date | null;
+  finishedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type SalesKnowledgeKind = 'faq' | 'objection' | 'policy' | 'service-note';
+
+/** A fact the agent may state. The model never invents numbers — it only sees these + the service catalogue. */
+export interface SalesKnowledgeItem {
+  id: string;
+  businessId: string;
+  teamId?: string;
+  kind: SalesKnowledgeKind;
+  /** The question / objection / topic (what the client says). */
+  question: string;
+  /** The approved answer (what the agent may say). */
+  answer: string;
+  serviceId?: string | null;
+  enabled: boolean;
+  createdByUserId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type SalesAgentRunKind = 'reply' | 'qualify' | 'book' | 'register' | 'cold-wa' | 'cold-email' | 'nudge' | 'digest' | 'sequence-step';
+
+/** Idempotency + audit row, one per agent decision. Server-written only (`write: if false`). */
+export interface SalesAgentRun {
+  id: string;
+  businessId: string;
+  teamId?: string;
+  kind: SalesAgentRunKind;
+  entityId: string;
+  /** 'send' | 'draft' | 'handoff' | 'silent' | 'blocked' */
+  decision: string;
+  blockReason?: string | null;
+  handoffReason?: string | null;
+  intent?: string | null;
+  confidence?: number | null;
+  model?: string | null;
+  tokens?: number | null;
+  replyText?: string | null;
+  error?: string | null;
+  createdAt: Date;
+}
+
+export type ConversationAgentStage = 'greeting' | 'qualifying' | 'proposing' | 'booking' | 'handoff' | 'closed';
+
+/** Agent state stored on `conversations/{id}.agent` (server-written; staff may only toggle `active` / handoff-resume). */
+export interface ConversationAgentState {
+  active: boolean;
+  stage: ConversationAgentStage;
+  collected: Record<string, string>;
+  turns: number;
+  turnsWithoutProgress: number;
+  lastIntent?: string | null;
+  lastReplyAt?: Date | null;
+  lastDraftAt?: Date | null;
+  handoffReason?: string | null;
+  handoffAt?: Date | null;
+  handoffNotifiedAt?: Date | null;
+  resumedAt?: Date | null;
+  resumedByUserId?: string | null;
+  nudgesSent?: number;
+  lastNudgeAt?: Date | null;
 }
 
 // ── Opportunities / Deals (qualified pipeline, split from Lead) ─────────────
@@ -2627,6 +2814,8 @@ export interface TeamInvite {
   canAccessProducts?: boolean;
   /** Hosting & domains module. */
   canAccessHosting?: boolean;
+  /** Virtual sales agent module. */
+  canAccessSalesAgent?: boolean;
   canAccessExpenses?: boolean;
   canAccessProfile?: boolean;
   /** Carried onto the membership when the invite is accepted — see TeamMember. */

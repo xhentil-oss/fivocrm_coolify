@@ -48,7 +48,7 @@ function rolePriority(role?: string): number {
   return i === -1 ? 99 : i;
 }
 
-function superAdminEmails(): string[] {
+export function superAdminEmails(): string[] {
   const raw = process.env.SUPER_ADMIN_EMAILS || process.env.VITE_SUPER_ADMIN_EMAILS || '';
   return raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 }

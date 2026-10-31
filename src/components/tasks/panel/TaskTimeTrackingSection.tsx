@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Clock, Play, Square } from 'lucide-react';
-import { useCollection, useMutation } from '../../../hooks/useFirestore';
+import { collection, getDocs, query as fsQuery, where as fsWhere } from 'firebase/firestore';
+import { db } from '../../../lib/firebase';
+import { useCollection, useMutation, getGlobalBusinessId } from '../../../hooks/useFirestore';
 import { useAuth } from '../../../contexts/AuthContext';
 import { toast } from '../../../hooks/use-toast';
 import { dayKeyOf as timeEntryDayKey } from '../../../lib/finance/timeEntries';
@@ -27,7 +29,11 @@ const TaskTimeTrackingSection: React.FC<{
   task: Task;
   /** Every running entry of the business (`endTime == null`) — the panel's listener. */
   allActiveTimeEntries: any[] | undefined | null;
-}> = ({ task, allActiveTimeEntries }) => {
+  /** The rate-card role the timer rows are costed under (`memberCostRole` of
+   *  my teamMembers row — the same value the daily report and TimeLogDialog
+   *  write). Without it the row was re-costed whenever the role changed. */
+  costRole?: string;
+}> = ({ task, allActiveTimeEntries, costRole }) => {
   const { user } = useAuth();
   const timeEntryMutation = useMutation<any>('timeEntries');
 
@@ -81,9 +87,32 @@ const TaskTimeTrackingSection: React.FC<{
     // Enforce a single running timer per user: close any entry left open from a
     // previous session/task first. Overlapping running timers were the root cause
     // of corrupt totals (a stop computed its duration against the wrong start).
-    const myRunning = (allActiveTimeEntries || []).filter(
+    // The open entries are RE-READ from Firestore here (business-scoped so the
+    // rules can prove the list): the panel's listener is a snapshot that may lag
+    // a Start made a second ago on another device, and it is team-scoped, so a
+    // timer left open in another department never showed up in it at all.
+    let myRunning: any[] = (allActiveTimeEntries || []).filter(
       (e: any) => e.userId === user.uid && !e.endTime,
     );
+    const businessId = (task as any).businessId || getGlobalBusinessId();
+    if (businessId) {
+      try {
+        const snap = await getDocs(fsQuery(
+          collection(db, 'timeEntries'),
+          fsWhere('businessId', '==', businessId),
+          fsWhere('userId', '==', user.uid),
+          fsWhere('endTime', '==', null),
+        ));
+        const fresh = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+        // Union with the snapshot (an entry the listener saw but the read did not
+        // is still worth closing); dedupe by id.
+        const byId = new Map<string, any>();
+        [...myRunning, ...fresh].forEach(e => byId.set(e.id, e));
+        myRunning = [...byId.values()];
+      } catch (err) {
+        console.warn('[Timer] leximi i orëve të hapura dështoi — përdoret snapshot-i:', err);
+      }
+    }
     let lockedOpen = 0;
     for (const e of myRunning) {
       const endTimeVal = new Date();
@@ -116,6 +145,8 @@ const TaskTimeTrackingSection: React.FC<{
       // writers used to hardcode `isBillable: false`, so utilisation and
       // billable value were structurally zero for every tenant.
       customerId: (task as any).customerId || undefined,
+      // Snapshot of the role at booking time, like every other entry path.
+      costRole,
       description: `Working on: ${task.title}`,
       startTime: new Date(),
       date: timeEntryDayKey(new Date()),

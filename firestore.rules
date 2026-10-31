@@ -526,17 +526,23 @@ service cloud.firestore {
       // already closed for invoices.
       // A Viewer is read-only by role; until now the UI was the only gate and
       // the detail panel did not even apply it (test 39d).
-      // Assignment and the client-visibility key are checked too (tests 82a–82d).
+      // Assignment (82a), the pinned keys (82b), the client-visibility key
+      // (82c, 84c) and the project link (84g — a real project of the same
+      // business) are checked too.
       // Created AS YOURSELF (useMutation stamps createdByUserId = uid; a next
       // recurring occurrence is created by its completer — the original creator
       // must ride in a separate field, never here).
       allow create: if canCreateBusinessDoc() && !isViewerRole()
         && (isSuperAdmin() || request.resource.data.get('createdByUserId', '') == request.auth.uid)
         && taskAssigneeAllowed(request.resource.data.businessId, request.resource.data.get('teamId', ''), null)
-        && taskCustomerAllowed(null);
+        && taskProjectAllowed(null)
+        && taskCustomerAllowed(null, null)
+        && (isSuperAdmin() || !request.resource.data.keys().hasAny(taskServerOnlyKeys()));
       // teamId and createdByUserId are pinned (a department / authorship never
       // moves by edit — the cron, Admin SDK, bypasses rules for its own repairs);
       // a legacy row with no teamId may be given one of its own business.
+      // Money (84b), the engine flags (84f) and the approval history (84e) have
+      // their own gates below.
       allow update: if canManageBusinessDoc() && keepsBusinessId() && !isViewerRole()
         && (isSuperAdmin()
             || (request.resource.data.get('createdByUserId', null) == resource.data.get('createdByUserId', null)
@@ -545,7 +551,11 @@ service cloud.firestore {
                         && businessOfTeam(request.resource.data.get('teamId', '')) == resource.data.businessId))))
         && taskAssigneeAllowed(resource.data.businessId, resource.data.get('teamId', ''),
                                resource.data.get('assignedToUserId', null))
-        && taskCustomerAllowed(resource.data.get('customerId', null))
+        && taskProjectAllowed(resource.data.get('projectId', null))
+        && taskCustomerAllowed(resource.data.get('customerId', null), resource.data.get('projectId', null))
+        && taskMoneyAllowed()
+        && taskEngineFlagsAllowed()
+        && taskServerKeysUnchanged()
         && taskApprovalStaffAllowed()
         && taskSeenUntouchedOrCleared();
       // "Parë" (src/lib/taskReceipts.ts): the ASSIGNEE stamps that they opened the
@@ -572,8 +582,15 @@ service cloud.firestore {
     // requested as yourself, on a portal-visible task) or WITHDRAWN (cancelled) —
     // by an Admin/Manager or the task's assignee/creator. Staff can never write a
     // client decision (approved / changes_requested) into it.
+    // `clientApprovalHistory` ("Raundet e mëparshme") rides under the SAME gate:
+    // the only legitimate write is buildApprovalRequestPatch (src/lib/
+    // taskApproval.ts) moving the decided round into history while it opens the
+    // next pending one — so a history write must come with a legal round write by
+    // one of those people. A colleague could otherwise plant a forged "approved"
+    // round from the console (test 84e). The portal's own branch (taskClientDecision)
+    // never touches it.
     function taskApprovalStaffAllowed() {
-      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['clientApproval'])
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['clientApproval', 'clientApprovalHistory'])
         || isSuperAdmin()
         || (request.resource.data.get('clientApproval', null) is map
             && request.resource.data.clientApproval.get('state', '') in ['pending', 'cancelled']
@@ -661,18 +678,113 @@ service cloud.firestore {
         || (previousAssignee == null && continuesRecurringSeries(businessId));
     }
 
+    // The task's money (src/lib/finance/taskValue.ts: `value` prices the task and
+    // drafts an invoice; `valueAppliedToBudget` is the budget-increment claim) is
+    // Admin/Manager work in the RULES, like the project's own budget
+    // (projectFinanceKeys) — the UI only hid it (`canEditBudget`). A Member may
+    // spread the stored value unchanged (projKeySame tolerates null/0/absent as
+    // one "nothing"), never set or move it (test 84b).
+    function taskMoneyAllowed() {
+      return (projKeySame('value') && projKeySame('valueAppliedToBudget'))
+        || isSuperAdmin()
+        || isBusinessAdmin(resource.data.businessId);
+    }
+
+    // The engine flags are NOT cron-only — the browser writes them too: the
+    // recurrence claim (src/lib/taskRecurrenceClaim.ts) and completeTask set
+    // `nextCycleCreated`, the re-open / "Përsërit deri" paths give it back,
+    // every deadline edit re-arms `dueNotificationSent` / `overdueNotificationSent`
+    // (panelShared.rearmDeadlineAlerts) and a reminder edit clears `reminderSentAt`
+    // (taskReminders.setReminderPatch). But they belong to the task's OWNER: the
+    // assignee, the creator or an Admin/Manager. A random colleague flipping
+    // `nextCycleCreated` on a series kills it (true) or doubles it (false) with
+    // no trace, and a silenced alert flag is a notification that never fires.
+    // The one thing any other non-Viewer staff may do is RE-ARM (write false /
+    // null — what a deadline edit on a colleague's task spreads): it costs at
+    // most a repeated notification, never a lost cycle (test 84f).
+    // `nextCycleTaskId` / `recurringClaimRepairedAt` are written by the same claim
+    // transaction as `nextCycleCreated` (the child's id, and the take-over of a
+    // claim proved empty); `reminderSkippedAt` / `reminderSkippedReason` are the
+    // cron's "consumed without a send" marks, which the browser only CLEARS
+    // (setReminderPatch → null), like `reminderSentAt`.
+    function taskEngineFlagKeys() {
+      return ['nextCycleCreated', 'nextCycleTaskId', 'recurringClaimRepairedAt', 'recurringSkippedReason',
+              'reminderSentAt', 'reminderSkippedAt', 'reminderSkippedReason',
+              'dueNotificationSent', 'overdueNotificationSent'];
+    }
+    // SERVER-ONLY task keys (recurring-project-reset / recurring-tasks cron, Admin
+    // SDK): the period the reset already applied to this task, the occurrence
+    // roll ledger and the due-date month anchor the reset moves. Never born in a
+    // browser create, never changed by a browser update (an unchanged spread is
+    // fine — projKeySame). Same law as projectRollupKeys (test 84l).
+    function taskServerOnlyKeys() {
+      return ['recurringOccurrencesRolled', 'recurringOccurrencesRolledAt', 'workCycleAppliedPeriodKey', 'cycleAnchorDueDay'];
+    }
+    function taskServerKeysUnchanged() {
+      return isSuperAdmin()
+        || (projKeySame('recurringOccurrencesRolled') && projKeySame('recurringOccurrencesRolledAt')
+            && projKeySame('workCycleAppliedPeriodKey') && projKeySame('cycleAnchorDueDay'));
+    }
+    function taskEngineOwner() {
+      return isSuperAdmin()
+        || isBusinessAdmin(resource.data.businessId)
+        || resource.data.get('assignedToUserId', '') == request.auth.uid
+        || resource.data.get('createdByUserId', '') == request.auth.uid;
+    }
+    function taskFlagUntouchedOrRearmed(k, armed) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([k])
+        || request.resource.data.get(k, armed) == armed;
+    }
+    function taskEngineFlagsAllowed() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(taskEngineFlagKeys())
+        || taskEngineOwner()
+        || (!request.resource.data.diff(resource.data).affectedKeys()
+              .hasAny(['nextCycleCreated', 'nextCycleTaskId', 'recurringClaimRepairedAt', 'recurringSkippedReason'])
+            && taskFlagUntouchedOrRearmed('dueNotificationSent', false)
+            && taskFlagUntouchedOrRearmed('overdueNotificationSent', false)
+            && taskFlagUntouchedOrRearmed('reminderSentAt', null)
+            && taskFlagUntouchedOrRearmed('reminderSkippedAt', null)
+            && taskFlagUntouchedOrRearmed('reminderSkippedReason', null));
+    }
+
+    // `projectId` names a PROJECT OF THE SAME BUSINESS whenever it is set or
+    // changed (create and update; one get(), shared with customerOfProjectIs).
+    // Unchanged / cleared is always fine — a task whose project was deleted must
+    // stay editable. Before, the project was validated only when a customerId
+    // was set next to it, so a Member could point a task at another tenant's
+    // project id (test 84g).
+    function sameRef(a, b) {
+      return a == b || (isEmptyValue(a) && isEmptyValue(b));
+    }
+    function taskProjectAllowed(previousProjectId) {
+      return isEmptyValue(request.resource.data.get('projectId', null))
+        || (previousProjectId != null && request.resource.data.get('projectId', null) == previousProjectId)
+        || isSuperAdmin()
+        || projectInBusiness(request.resource.data.get('projectId', null), request.resource.data.businessId);
+    }
+    function projectInBusiness(projectId, businessId) {
+      return projectId is string && projectId != ''
+        && exists(/databases/$(database)/documents/projects/$(projectId))
+        && get(/databases/$(database)/documents/projects/$(projectId)).data.get('businessId', '') == businessId;
+    }
+
     // customerId on a task IS the portal-visibility switch (the client reads
-    // `customerId == mine`). It may be: unchanged, cleared, the customer of the
-    // task's own project (useFirestore derives it from the project on create;
-    // TaskDetailPanel / ProjectsView re-derive it on a project move or a change
-    // of the project's customer), the customer of the parent task (a subtask) or
-    // of the series root (a next occurrence) in the same business — or any
-    // customer of the same business when an Admin/Manager sets it by hand.
+    // `customerId == mine`). It may be: unchanged — but only while the task stays
+    // on the same project: a task moved to another project must be re-derived
+    // (TaskPeopleRows.changeProject sends the NEW project's customer or '', and
+    // that is what is accepted — keeping the old client across a move left them
+    // reading a task that is no longer theirs, test 84c) —, cleared, the customer
+    // of the task's own project (useFirestore derives it from the project on
+    // create; TaskDetailPanel / ProjectsView re-derive it on a project move or a
+    // change of the project's customer), the customer of the parent task (a
+    // subtask) or of the series root (a next occurrence) in the same business — or
+    // any customer of the same business when an Admin/Manager sets it by hand.
     // Anything else would publish an internal task to another client's portal.
-    function taskCustomerAllowed(previousCustomerId) {
+    function taskCustomerAllowed(previousCustomerId, previousProjectId) {
       return request.resource.data.get('customerId', null) == null
         || request.resource.data.get('customerId', null) == ''
-        || request.resource.data.get('customerId', null) == previousCustomerId
+        || (request.resource.data.get('customerId', null) == previousCustomerId
+            && sameRef(request.resource.data.get('projectId', null), previousProjectId))
         || isSuperAdmin()
         || customerOfProjectIs(request.resource.data.get('projectId', ''), request.resource.data.customerId)
         || customerOfTaskIs(request.resource.data.get('parentTaskId', ''), request.resource.data.customerId)
@@ -969,11 +1081,12 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
-      allow create: if (canCreateBusinessDoc() && !isViewerRole())
-        || isPortalBootstrapContact()
-        || isSelfCreate();
+      allow create: if ((canCreateBusinessDoc() && !isViewerRole())
+          || isPortalBootstrapContact()
+          || isSelfCreate())
+        && leadAgentKeysAbsent();
       allow update: if isSuperAdmin()
-        || (canManageBusinessDoc() && keepsBusinessId() && !isViewerRole());
+        || (canManageBusinessDoc() && keepsBusinessId() && !isViewerRole() && leadAgentKeysUntouched());
       allow delete: if isSuperAdmin() || (canManageBusinessDoc() && !isViewerRole());
     }
 
@@ -1563,6 +1676,9 @@ service cloud.firestore {
               // The WORK cycle's idempotency token + diagnosis (recurring-project-reset):
               // a browser that moved the claim could skip or re-run a month's cycle.
               'workCycleLastPeriodKey', 'workCycleLastBlock', 'workCycleCheckedAt', 'workCycleCarriedOver',
+              // The reset's two-phase claim (period claimed → tasks applied) + its
+              // "opening from" pointer: browser-written, a cycle could be re-run or skipped.
+              'workCycleTasksAppliedKey', 'workCycleOpeningFromKey', 'workCycleClaimedAt',
               // Renewal-notice debounce for quarterly / yearly retainers (Part 2).
               'renewalNoticePeriodKey'];
     }
@@ -1697,7 +1813,8 @@ service cloud.firestore {
       // shape) and nothing else; update may spread them UNCHANGED only.
       allow create: if canCreateBusinessDoc() && !isViewerRole()
         && !request.resource.data.keys().hasAny(['laborCost', 'hoursByRole', 'spendRolledUpAt', 'budgetAlertsSent',
-                                                  'workCycleLastPeriodKey', 'workCycleLastBlock', 'workCycleCheckedAt', 'workCycleCarriedOver'])
+                                                  'workCycleLastPeriodKey', 'workCycleLastBlock', 'workCycleCheckedAt', 'workCycleCarriedOver',
+                                                  'workCycleTasksAppliedKey', 'workCycleOpeningFromKey', 'workCycleClaimedAt'])
         && request.resource.data.get('spent', 0) == 0
         && projCreateFinanceOk();
       // STAFF ONLY. No portal view writes `projects` (PortalProjectsView /
@@ -1832,7 +1949,8 @@ service cloud.firestore {
       allow update: if isAuth() && (
         ((request.auth.uid in resource.data.watchers
             || isBusinessMember(resource.data.businessId))
-          && keepsBusinessId())
+          && keepsBusinessId()
+          && conversationAgentUntouched())
         || (canAccessClientChannel(convId)
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(['lastMessageAt', 'lastMessagePreview', 'lastClientMessageAt', 'lastInboundAt', 'awaitingReply', 'updatedAt']))
@@ -1871,15 +1989,26 @@ service cloud.firestore {
         && request.resource.data.get('senderId', '') == request.auth.uid
         && request.resource.data.get('createdByUserId', request.auth.uid) == request.auth.uid
         && (
+          // `senderType: 'client'` is the PORTAL CLIENT'S identity on a row (it is
+          // what the staff unread sweeps, the "client_message" notification and
+          // the ✓✓ receipt key on) — so it is accepted only from the customer the
+          // channel is named for (`client-<cid>[-project-<id>]`, PortalChatView),
+          // proven by the `cid` claim / users.customerId. canAccessClientChannel
+          // also admits STAFF of the customer's business, which let a staff user
+          // post as the client (test 84h).
           (request.resource.data.get('senderType', '') == 'client'
-            && canAccessClientChannel(request.resource.data.get('channelId', ''))
+            && isClientChannelId(request.resource.data.get('channelId', ''))
+            // (`client--x` would split to '' and match a staff token's empty cid)
+            && request.resource.data.channelId.split('-')[1] != ''
+            && isPortalClientDoc(request.resource.data.channelId.split('-')[1])
             // The stamped tenant, when present, must be the client's own — a foreign
             // businessId landed the row in ANOTHER tenant's unread sweeps and GDPR export.
             && (!(request.resource.data.get('businessId', '') is string)
                 || request.resource.data.get('businessId', '') == ''
-                || isPortalClientOfBusiness(request.resource.data.businessId)
-                || isBusinessMember(request.resource.data.businessId)))
-          || (request.resource.data.get('senderType', '') != 'client'
+                || isPortalClientOfBusiness(request.resource.data.businessId)))
+          // Staff rows carry no senderType (DMs, groups, task chat) or 'staff'
+          // (ChatView in a client thread) — nothing else.
+          || (request.resource.data.get('senderType', '') in ['', 'staff']
               && (isSuperAdmin() || canCreateBusinessDoc())
               && (!(request.resource.data.get('receiverId', '') is string)
                   || request.resource.data.get('receiverId', '') == ''
@@ -1956,12 +2085,26 @@ service cloud.firestore {
           )
         )
       );
-      allow delete: if isAuth() && resource.data.senderId == request.auth.uid;
+      // The SENDER deletes their own message — and, for a TASK CHAT row (`taskId`),
+      // the staff deleting that task (src/lib/deleteCascade.ts, Phase 2: the
+      // messages go BEFORE the task doc, so the task is still there to bind to):
+      // a non-Viewer member of the business, on a row whose task is of that
+      // business — the same people the tasks rule lets delete the task (test 84n).
+      allow delete: if isAuth() && (
+        resource.data.senderId == request.auth.uid
+        || (canManageBusinessDoc() && !isViewerRole()
+            && taskInBusiness(resource.data.get('taskId', ''), resource.data.businessId))
+      );
     }
 
+    // The CRM timeline. A row is logged AS YOURSELF (`userId` — useActivityLogger,
+    // useFollowUpActions and Customer360View all stamp user.uid) and never by a
+    // Viewer, who has no action to log; a colleague could otherwise forge "X called
+    // the client" rows under someone else's name (test 84d).
     match /activities/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateBusinessDoc();
+      allow create: if canCreateBusinessDoc() && !isViewerRole()
+        && (isSuperAdmin() || request.resource.data.get('userId', '') == request.auth.uid);
       allow update, delete: if false;
     }
 
@@ -2077,16 +2220,24 @@ service cloud.firestore {
             || isSuperAdmin()
           )
         )
-        // Re-point on a task move (TaskDetailPanel.changeProject): non-Viewer
-        // staff of the business may change ONLY customerId, and only to the
-        // task's CURRENT customerId or to nothing — a comment follows its task's
-        // client, it is never published to an arbitrary one (test 82i).
+        // Re-point on a task move (TaskPeopleRows.changeProject →
+        // repointClientComments): non-Viewer staff of the business may change ONLY
+        // customerId, ONLY on a comment that already HAS one (a client-visible
+        // comment following its task's client), and only to the task's CURRENT
+        // customerId or to nothing — a comment follows its task's client, it is
+        // never published to an arbitrary one (test 82i), and an INTERNAL comment
+        // is never published at all by this branch (test 84a): the UI touches
+        // only rows with a customerId, so the rule says the same.
         || (
           request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['customerId', 'updatedAt'])
           && isBusinessMember(resource.data.businessId)
           && tenantActive(resource.data.businessId)
           && !isViewerRole()
+          // (`is string`: a comment made internal writes `customerId: null`, and
+          // `.get(k, '') != ''` is TRUE for a present null)
+          && resource.data.get('customerId', '') is string
+          && resource.data.get('customerId', '') != ''
           && (request.resource.data.get('customerId', null) == null
               || request.resource.data.get('customerId', null) == ''
               || (exists(/databases/$(database)/documents/tasks/$(resource.data.taskId))
@@ -2147,12 +2298,24 @@ service cloud.firestore {
             || get(/databases/$(database)/documents/tasks/$(taskId)).data.get('assignedToUserId', '') == request.auth.uid);
     }
 
-    // Collaborator records follow the task: written by non-Viewer staff only.
+    // Collaborator records follow the task: written by non-Viewer staff only,
+    // BOUND to a task of the same business (useCreateTask writes them right after
+    // the task) and naming a real user id; the pair never moves by edit (test 84i).
     match /taskCollaborators/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateBusinessDoc() && !isViewerRole();
-      allow update: if canManageBusinessDoc() && keepsBusinessId() && !isViewerRole();
+      allow create: if canCreateBusinessDoc() && !isViewerRole()
+        && request.resource.data.get('userId', '') is string
+        && request.resource.data.get('userId', '') != ''
+        && taskInBusiness(request.resource.data.get('taskId', ''), request.resource.data.businessId);
+      allow update: if canManageBusinessDoc() && keepsBusinessId() && !isViewerRole()
+        && request.resource.data.get('taskId', null) == resource.data.get('taskId', null)
+        && request.resource.data.get('userId', null) == resource.data.get('userId', null);
       allow delete: if canManageBusinessDoc() && !isViewerRole();
+    }
+    function taskInBusiness(taskId, businessId) {
+      return taskId is string && taskId != ''
+        && exists(/databases/$(database)/documents/tasks/$(taskId))
+        && get(/databases/$(database)/documents/tasks/$(taskId)).data.get('businessId', '') == businessId;
     }
 
     match /clientRequests/{docId} {
@@ -2428,15 +2591,24 @@ service cloud.firestore {
       //     webhook, subscription-lifecycle cron, /api/platform-admin — all Admin
       //     SDK): a signup that arrives `plan: 'enterprise', status: 'active'`
       //     or with a ten-year trialEndsAt is self-service billing.
+      //   • a self-serve signup is born with every optional module LOCKED and
+      //     `moduleSetup: 'pending'` (createTenant.ts) — the platform decides what
+      //     the tenant gets (`set-modules` opens it and writes 'done'). The lock
+      //     list may be any list here (a signup can only withhold from itself; the
+      //     registry lives in the client, so its content is not provable), but the
+      //     flag may never be born 'done': that is what the console's work queue
+      //     and the owner's "po konfigurohen" banner key on.
       allow create: if isAuth()
         && request.resource.data.ownerId == request.auth.uid
         && !exists(teamRef(docId))
         && request.resource.data.get('plan', 'trial') == 'trial'
         && request.resource.data.get('status', 'trialing') == 'trialing'
-        && request.resource.data.get('lockedModules', []) == []
+        && request.resource.data.get('lockedModules', []) is list
+        && request.resource.data.get('moduleSetup', 'pending') == 'pending'
         && !request.resource.data.keys().hasAny([
              'seats', 'limits', 'stripeCustomerId', 'stripeSubscriptionId',
-             'currentPeriodEnd', 'cancelAtPeriodEnd', 'portalSubdomain'])
+             'currentPeriodEnd', 'cancelAtPeriodEnd', 'portalSubdomain',
+             'moduleSetupNotifiedAt', 'moduleSetupDoneAt'])
         && (!('trialEndsAt' in request.resource.data)
             || (request.resource.data.trialEndsAt is timestamp
                 && request.resource.data.trialEndsAt <= request.time + duration.value(15, 'd')));
@@ -2451,7 +2623,8 @@ service cloud.firestore {
         || (isAuth() && resource.data.ownerId == request.auth.uid
             && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
                  'status', 'plan', 'lockedModules', 'seats', 'limits', 'trialEndsAt', 'ownerId',
-                 'stripeCustomerId', 'stripeSubscriptionId', 'currentPeriodEnd', 'cancelAtPeriodEnd']));
+                 'stripeCustomerId', 'stripeSubscriptionId', 'currentPeriodEnd', 'cancelAtPeriodEnd',
+                 'moduleSetup', 'moduleSetupRequestedAt', 'moduleSetupNotifiedAt', 'moduleSetupDoneAt']));
       allow delete: if isSuperAdmin();
     }
 
@@ -2765,8 +2938,13 @@ service cloud.firestore {
       // and before the claims refresh — the membership row of the teamId you name),
       // or a portal client of it. A profile with a stranger's businessId would put
       // your display name into that tenant's mention list and chat directory.
+      // The sales agent's bot profile (`salesagent_<bid>`, userId 'salesagent') is
+      // written by the server only — it has no Auth user, so `userId == uid` already
+      // excludes it; the explicit guard keeps that true if the clause above changes.
       allow create: if isAuth()
         && request.resource.data.userId == request.auth.uid
+        && request.resource.data.get('userId', '') != 'salesagent'
+        && !docId.matches('salesagent_.*')
         && profileTenantOk(request.resource.data.get('businessId', ''), request.resource.data.get('teamId', ''));
       // Own profile only; the tenant key is immutable once set (a legacy profile
       // with none may be filled in, under the same test as a create).
@@ -2804,7 +2982,11 @@ service cloud.firestore {
       ) && (
         !(request.resource.data.get('actionUrl', '') is string)
         || request.resource.data.get('actionUrl', '') == ''
-        || request.resource.data.actionUrl[0:1] == '/'
+        // Mirrors isSafeAppPath (api/_callerIdentity.ts): a path that starts with
+        // ONE slash — `//evil.com` is protocol-relative and `/\evil.com` is what
+        // browsers normalise to it, so a second `/` or a `\` as the next character
+        // is refused (tests 73, 84j).
+        || request.resource.data.actionUrl.matches('/([^/\\\\].*)?')
       );
       // WAS `update: if owner` with no field guard — you could create a notification
       // for YOURSELF (always allowed above) and then update its userId to ANY uid on
@@ -3198,6 +3380,99 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ── Virtual sales agent ("Ana") — workspace/SALES_AGENT_PLAN.md ──
+    // A Google Maps search request. The BROWSER only queues it (status 'queued',
+    // zeroed counters, as itself); the cron (Admin SDK) runs it and writes the
+    // results, so an update from a client is never legitimate. A queued row may be
+    // withdrawn by an Admin/Manager; a running/done one is history.
+    match /prospectSearches/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if isSuperAdmin()
+        || (isBusinessMember(request.resource.data.businessId)
+            && tenantActive(request.resource.data.businessId)
+            && !isViewerRole()
+            && request.resource.data.get('status', '') == 'queued'
+            && request.resource.data.get('requestedByUserId', '') == request.auth.uid
+            && prospectSearchCountsZero());
+      allow update: if isSuperAdmin();
+      allow delete: if isSuperAdmin()
+        || (isBusinessAdmin(resource.data.businessId) && resource.data.get('status', '') == 'queued');
+    }
+    function prospectSearchCountsZero() {
+      return request.resource.data.counts is map
+        && request.resource.data.counts.get('found', 1) == 0
+        && request.resource.data.counts.get('new', 1) == 0
+        && request.resource.data.counts.get('duplicate', 1) == 0
+        && request.resource.data.counts.get('registered', 1) == 0
+        && request.resource.data.counts.get('requests', 1) == 0;
+    }
+    // One business found on Maps. Created by the cron, expired by the TTL job,
+    // registered as a lead by the endpoint (`leadId`, status 'registered' /
+    // 'duplicate', the outreach stamps, `waVerified`, the fit score and the Google
+    // place id are all server-owned). Staff triage only: approve / reject / undo,
+    // and never on a row that already became a lead.
+    match /prospects/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if isSuperAdmin();
+      allow update: if isSuperAdmin()
+        || (isBusinessMember(resource.data.businessId)
+            && tenantActive(resource.data.businessId)
+            && !isViewerRole()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'rejectReason', 'updatedAt'])
+            && resource.data.get('status', '') in ['new', 'approved', 'rejected']
+            && request.resource.data.get('status', '') in ['new', 'approved', 'rejected']);
+      allow delete: if isSuperAdmin() || isBusinessOwnerOrAdmin(resource.data.businessId);
+    }
+    // The facts the agent may state (FAQ, objections, policies). Admin/Manager
+    // author them; everyone in the business reads them; the portal never sees them.
+    match /salesKnowledge/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if isSuperAdmin()
+        || (isBusinessAdmin(request.resource.data.businessId) && tenantActive(request.resource.data.businessId));
+      allow update: if isSuperAdmin()
+        || (isBusinessAdmin(resource.data.businessId) && tenantActive(resource.data.businessId) && keepsBusinessId());
+      allow delete: if isSuperAdmin() || isBusinessAdmin(resource.data.businessId);
+    }
+    // Server-only ledgers: one run doc per agent decision (idempotency + audit),
+    // the daily digest claim, the per-sender cold-WhatsApp counters and the AI /
+    // Places usage. A client that could write here could re-arm a reply, silence
+    // one forever, or reset a sender's quota.
+    match /salesAgentRuns/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow write: if false;
+    }
+    match /salesAgentDigests/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow write: if false;
+    }
+    match /salesAgentSenders/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow write: if false;
+    }
+    match /salesAgentUsage/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow write: if false;
+    }
+    // `leads.agent*` / prospect / cold-outreach stamps are written by the agent
+    // endpoint and jobs only (same law as the task engine flags): a client that
+    // could set `agentQualifiedAt` or clear `coldWaSentAt` would forge a
+    // qualification or re-arm a cold message.
+    function leadAgentServerKeys() {
+      return ['agentQualifiedAt', 'agentScore', 'agentSummary', 'agentCollected', 'prospectId', 'coldWaSentAt', 'coldEmailSentAt'];
+    }
+    function leadAgentKeysUntouched() {
+      return isSuperAdmin()
+        || !request.resource.data.diff(resource.data).affectedKeys().hasAny(leadAgentServerKeys());
+    }
+    function leadAgentKeysAbsent() {
+      return isSuperAdmin() || !request.resource.data.keys().hasAny(leadAgentServerKeys());
+    }
+    // `conversations.agent` (stage, collected fields, handoff) is the agent's own
+    // state; handoff / resume go through POST /api/sales-agent, which audits them.
+    function conversationAgentUntouched() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['agent']);
+    }
+
     match /campaignEnrollments/{docId} {
       // Per-recipient drip-sequence progress. Created + advanced by the cron
       // (Admin SDK); clients read their business's for reporting.
@@ -3270,7 +3545,7 @@ service cloud.firestore {
     // reads that file and fails when a key is missing here.
     function teamSettingsSecretKeys() {
       return ['aiApiKey', 'emailApiKey', 'emailSmtpPass', 'whatsappVpsSecret',
-              'metaWebhookVerifyToken', 'metaChannelTokens', 'gmbClientSecret', 'dynadotApiKey'];
+              'metaWebhookVerifyToken', 'metaChannelTokens', 'gmbClientSecret', 'dynadotApiKey', 'googlePlacesApiKey'];
     }
     match /teamSettings/{teamId} {
       // Non-secret tenant configuration (company identity, bank accounts, FX rates,
@@ -3309,8 +3584,12 @@ service cloud.firestore {
                 ? !request.resource.data.keys().hasAny(teamSettingsFinanceKeys())
                 : !request.resource.data.diff(resource.data).affectedKeys().hasAny(teamSettingsFinanceKeys())));
     }
+    // The virtual sales agent's configuration (autonomy level, cold-WhatsApp
+    // quota, persona) is in the same tier as the money settings: raising the
+    // autonomy or switching cold outreach on is a company-level decision, not a
+    // department's. Everything else in teamSettings stays Admin/Manager.
     function teamSettingsFinanceKeys() {
-      return ['bankAccounts', 'financeSettings', 'rateCard'];
+      return ['bankAccounts', 'financeSettings', 'rateCard', 'salesAgent'];
     }
     // Owner/Admin of the team's business: the signed claim (isBusinessOwnerOrAdmin),
     // the business doc's owner, the team's creator, or an active `Admin`

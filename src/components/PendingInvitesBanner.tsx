@@ -4,18 +4,25 @@ import { useCollection } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Mail, ArrowRight } from 'lucide-react';
 import { Button } from './ui/button';
+import { needsEmailVerification } from './VerifyEmailScreen';
 
 const PendingInvitesBanner: React.FC = () => {
   const { user } = useAuth();
   const email = user?.email?.toLowerCase() || '';
   // Shaped for the rule, not for convenience: on a LIST the teamInvites read rule
   // can only be proven from the query's own constraints, and the invitee's clause is
-  // `email == token.email`. The old business-scoped query (auto `businessId ==`,
-  // status filtered client-side) named no provable clause and was denied outright
-  // for every non-super-admin — "Error fetching teamInvites" on every page. It also
-  // hid the one invite this banner exists for: an invite into ANOTHER business.
+  // `verifiedEmail() && email == token.email`. The old business-scoped query (auto
+  // `businessId ==`, status filtered client-side) named no provable clause and was
+  // denied outright for every non-super-admin — "Error fetching teamInvites" on
+  // every page. It also hid the one invite this banner exists for: an invite into
+  // ANOTHER business.
+  // An UNVERIFIED password account cannot satisfy that clause either (the row
+  // carries the accept token, so the rules refuse to show it to an address nobody
+  // has proven) — a brand-new workspace owner, who lands in the app before clicking
+  // the verification mail, got the same denial on every page. No query until then.
+  const unverified = needsEmailVerification(user);
   const { data: invites } = useCollection<any>('teamInvites', {
-    skip: !email,
+    skip: !email || unverified,
     where: [
       { field: 'email', operator: '==', value: email },
       { field: 'status', operator: '==', value: 'Pending' },

@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
-import { startOfRecurrenceDay } from '../lib/recurringUtils';
 import { compareTasksByDue, taskDueMs } from '../lib/taskSort';
+import { dayDiffFromToday } from '../lib/taskDue';
 import type { Task } from '../types';
 
 export interface TaskGroup { key: string; label: string; sort: number; tasks: Task[]; total: number }
@@ -12,6 +12,10 @@ export interface TaskGroup { key: string; label: string; sort: number; tasks: Ta
  * show the overdue tasks that happened to sit in that window, and the same
  * group re-appear on page 2 with different members and a different count.
  * (Extracted verbatim from TasksView.)
+ *
+ * `todayKey` (useTodayKey) is the day the "Të vonuara / Sot / Këtë javë"
+ * buckets are judged against — it is a dependency, so the groups follow the
+ * Tirane midnight instead of freezing on the day the memo was first computed.
  */
 export function useTaskGroups(
   groupBy: 'none' | 'assignee' | 'priority' | 'project' | 'dueDate',
@@ -20,11 +24,10 @@ export function useTaskGroups(
   pageSize: number,
   getUserName: (userId?: string) => string,
   getProjectName: (projectId?: string) => string | null,
+  todayKey: number,
 ): TaskGroup[] {
   return useMemo(() => {
     if (groupBy === 'none') return [];
-    const now = new Date();
-    const todayMs = startOfRecurrenceDay(now);
     const PRIORITY_LABEL: Record<string, string> = { urgent: 'Urgjente', high: 'I lartë', medium: 'Mesatar', low: 'I ulët' };
     const PRIORITY_ORDER = ['urgent', 'high', 'medium', 'low'];
     const groups = new Map<string, TaskGroup>();
@@ -46,17 +49,16 @@ export function useTaskGroups(
         const pid = task.projectId || '';
         add(pid || '__none__', pid ? (getProjectName(pid) || 'Projekt pa emër') : 'Pa projekt', pid ? 0 : 1, task);
       } else if (groupBy === 'dueDate') {
-        // `endDate || dueDate` (legacy rows), through one normaliser. A COMPLETED
-        // task is its own bucket: a Done task dated last month used to fail the
-        // overdue branch and fall through to "Më vonë".
-        const dueMs = taskDueMs(task);
+        // The deadline through the ONE definition (`endDate ?? dueDate`, see
+        // taskDue.ts) in Tirane calendar days. A COMPLETED task is its own
+        // bucket: a Done task dated last month used to fail the overdue branch
+        // and fall through to "Më vonë".
         if (task.status === 'Done') { add('e_done', 'Përfunduara', 4, task); continue; }
-        if (dueMs === null) { add('z_none', 'Pa afat', 5, task); continue; }
-        const dayMs = startOfRecurrenceDay(new Date(dueMs));
-        const diff = Math.round((dayMs - todayMs) / 86400000);
-        if (dayMs < todayMs) add('a_overdue', 'Të vonuara', 0, task);
+        const diff = dayDiffFromToday(taskDueMs(task), todayKey);
+        if (diff === null) { add('z_none', 'Pa afat', 5, task); continue; }
+        if (diff < 0) add('a_overdue', 'Të vonuara', 0, task);
         else if (diff === 0) add('b_today', 'Sot', 1, task);
-        else if (diff > 0 && diff <= 7) add('c_week', 'Këtë javë', 2, task);
+        else if (diff <= 7) add('c_week', 'Këtë javë', 2, task);
         else add('d_later', 'Më vonë', 3, task);
       }
     }
@@ -71,5 +73,5 @@ export function useTaskGroups(
     return sorted
       .map(g => ({ ...g, tasks: g.tasks.filter(t => window.has(t.id)) }))
       .filter(g => g.tasks.length > 0);
-  }, [groupBy, orderedTasks, page, pageSize, getUserName, getProjectName]);
+  }, [groupBy, orderedTasks, page, pageSize, getUserName, getProjectName, todayKey]);
 }

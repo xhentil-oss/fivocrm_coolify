@@ -243,6 +243,12 @@ export function attentionList(
     const health = tenantHealth(b, now);
     const trialLeft = daysUntil(b.trialEndsAt, now);
 
+    // A self-serve signup sees NOTHING until the platform opens its modules — the
+    // most time-sensitive item on this list, independent of billing state.
+    if (b.moduleSetup === 'pending') {
+      out.push({ businessId: b.id, name, reason: 'Tenant i ri — modulet presin konfigurim', severity: 'high' });
+    }
+
     if (b.status === 'suspended') {
       out.push({ businessId: b.id, name, reason: 'I pezulluar — pa pagesë', severity: 'high' });
     } else if (b.status === 'past_due') {

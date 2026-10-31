@@ -8,6 +8,7 @@ import {
   describeReminder,
   reminderAtFromOffset,
   taskReminderRecipient,
+  REMINDER_LOOKBACK_MS,
 } from './taskReminders';
 import type { Task } from '../types';
 
@@ -33,11 +34,11 @@ describe('setReminderPatch', () => {
   it('a custom moment stores no offset', () => {
     const at = new Date('2026-09-09T09:30:00');
     const p = setReminderPatch(task(), { at });
-    expect(p).toEqual({ reminderAt: at, reminderOffsetMinutes: null, reminderSentAt: null, reminderSetByUserId: null });
+    expect(p).toEqual({ reminderAt: at, reminderOffsetMinutes: null, reminderSentAt: null, reminderSkippedAt: null, reminderSkippedReason: null, reminderSetByUserId: null });
   });
 
   it('clearing writes explicit nulls (undefined would be stripped and clear nothing)', () => {
-    expect(setReminderPatch(task(), null)).toEqual({ reminderAt: null, reminderOffsetMinutes: null, reminderSentAt: null, reminderSetByUserId: null });
+    expect(setReminderPatch(task(), null)).toEqual({ reminderAt: null, reminderOffsetMinutes: null, reminderSentAt: null, reminderSkippedAt: null, reminderSkippedReason: null, reminderSetByUserId: null });
   });
 
   it('records who asked for the reminder, and clears it with the reminder', () => {
@@ -61,7 +62,7 @@ describe('reminderPatchForDeadline — a moved deadline carries a RELATIVE remin
   it('recomputes and re-arms a preset reminder', () => {
     const t = task({ reminderAt: new Date('2026-09-10T14:00:00'), reminderOffsetMinutes: 60, reminderSentAt: new Date() });
     const p = reminderPatchForDeadline(t, new Date('2026-09-12T10:00:00'));
-    expect(p).toEqual({ reminderAt: new Date('2026-09-12T09:00:00'), reminderSentAt: null });
+    expect(p).toEqual({ reminderAt: new Date('2026-09-12T09:00:00'), reminderSentAt: null, reminderSkippedAt: null, reminderSkippedReason: null });
   });
 
   it('leaves a custom absolute reminder where the person put it', () => {
@@ -115,6 +116,31 @@ describe('presentation', () => {
   it('presets stay a short, unique list', () => {
     expect(new Set(REMINDER_PRESETS.map(p => p.minutes)).size).toBe(REMINDER_PRESETS.length);
     expect(REMINDER_PRESETS.length).toBeLessThanOrEqual(5);
+  });
+});
+
+describe('taskReminderBlockReason — consumed and stale reminders', () => {
+  const at = new Date('2026-09-10T14:00:00');
+  it('a reminder older than the look-back window is stale, not pending', () => {
+    const t = task({ reminderAt: at });
+    expect(taskReminderBlockReason(t, new Date(at.getTime() + 60_000))).toBeNull();
+    expect(taskReminderBlockReason(t, new Date(at.getTime() + REMINDER_LOOKBACK_MS + 1))).toBe('stale');
+    expect(describeReminder(t, new Date(at.getTime() + REMINDER_LOOKBACK_MS + 1))).toBe('Kaloi pa u dërguar 10 sht 14:00');
+  });
+  it('a reminder the cron consumed (task-done / no-recipient) never fires and never reads "U dërgua"', () => {
+    const skipped = task({ reminderAt: at, reminderSkippedAt: at, reminderSkippedReason: 'task-done' } as any);
+    expect(taskReminderBlockReason(skipped, new Date(at.getTime() + 3_600_000))).toBe('skipped');
+    expect(describeReminder(skipped, new Date('2026-09-10T08:00:00'))).toBe('U anulua sot 14:00 (detyra u mbyll)');
+    const nobody = task({ reminderAt: at, reminderSkippedAt: at, reminderSkippedReason: 'no-recipient' } as any);
+    expect(describeReminder(nobody, new Date('2026-09-10T08:00:00'))).toBe('Nuk u dërgua sot 14:00 (pa marrës)');
+    // Done wins over everything else (the cron consumes it from there).
+    expect(taskReminderBlockReason(task({ reminderAt: at, status: 'Done' }), new Date(at.getTime() + 1))).toBe('task-done');
+  });
+  it('setting or re-arming a reminder clears the consumed marks', () => {
+    expect(setReminderPatch(task(), { offsetMinutes: 60 })).toMatchObject({ reminderSkippedAt: null, reminderSkippedReason: null });
+    expect(setReminderPatch(task(), null)).toMatchObject({ reminderSkippedAt: null, reminderSkippedReason: null });
+    const moved = reminderPatchForDeadline(task({ reminderAt: at, reminderOffsetMinutes: 60 }), new Date('2026-09-12T15:00:00'));
+    expect(moved).toMatchObject({ reminderSentAt: null, reminderSkippedAt: null, reminderSkippedReason: null });
   });
 });
 

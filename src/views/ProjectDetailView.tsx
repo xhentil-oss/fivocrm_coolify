@@ -37,7 +37,10 @@ import { compareTasksBySectionThenDue, compareTasksByPriorityThenDue } from '../
 import { resolvePortalUserId } from '../lib/notifyClient';
 import { completeTask, recurringOccurrencesInMonth, hasLiveSeriesSibling, recurrenceHasEnded } from '../lib/recurringUtils';
 import { dayDiffFromToday, isOverdueDate } from '../lib/taskDue';
-import { reminderAtFromOffset } from '../lib/taskReminders';
+import { setReminderPatch } from '../lib/taskReminders';
+import { recurrenceSeedFromForm } from '../lib/taskCreateSeed';
+import { projectHoursRollup, formatHoursCompact } from '../lib/projectHours';
+import { reactionTogglePatch } from '../hooks/useTaskCommentHandlers';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { formatCurrency, formatCompactRange, toAll, canSeeFinancials, cn } from '../lib/utils';
 import { entryHours, memberBillRate } from '../lib/finance/laborCost';
@@ -469,22 +472,11 @@ const ProjectDetailView: React.FC = () => {
     };
   }, [project, costMembers, timeEntries, projectExpenses, projectId, allTasks, tenantSettings?.financeSettings, tenantSettings?.rateCard]);
 
-  // Total hours logged for the project and per task
-  const { totalHours, hoursByTask } = React.useMemo(() => {
-    if (!timeEntries) return { totalHours: 0, hoursByTask: new Map<string, number>() };
-    let total = 0;
-    const byTask = new Map<string, number>();
-    for (const e of timeEntries) {
-      const mins = e.duration
-        ? e.duration / 60
-        : e.startTime && e.endTime
-          ? (new Date(e.endTime).getTime() - new Date(e.startTime).getTime()) / 60000
-          : 0;
-      total += mins;
-      if (e.taskId) byTask.set(e.taskId, (byTask.get(e.taskId) || 0) + mins);
-    }
-    return { totalHours: total / 60, hoursByTask: byTask };
-  }, [timeEntries]);
+  // Total hours logged for the project and per task — the finance engine's
+  // definition (`entryHours`: duration is MINUTES for typed rows, the span for
+  // timer rows). The old hand-written sum read `duration` as seconds, so every
+  // row with one counted 60× too small (src/lib/projectHours.ts).
+  const { totalHours, hoursByTask } = React.useMemo(() => projectHoursRollup(timeEntries), [timeEntries]);
 
   const { getName, getInitials } = useUserNames(teamMembers || []);
 
@@ -584,14 +576,31 @@ const ProjectDetailView: React.FC = () => {
 
   // Keep selectedTask in sync with live Firestore data — from the RAW list, so
   // a task opened outside the role filter still re-syncs after each write.
+  //
+  // A task that LEAVES the snapshot (deleted, or moved to another project by a
+  // colleague) closes the panel with a notice: it used to stay open and
+  // editable, and every write from it threw. "Leaves" means it was seen in a
+  // snapshot first — a task just created is opened before the listener has
+  // it, and must not be closed on that first empty look.
+  const selectedSeenInSnapshotRef = React.useRef<string | null>(null);
   useEffect(() => {
-    if (selectedTask && rawProjectTasks) {
-      const updated = rawProjectTasks.find(t => t.id === selectedTask.id);
-      if (updated && JSON.stringify(updated) !== JSON.stringify(selectedTask)) {
-        setSelectedTask(updated);
-      }
+    if (!selectedTask || !rawProjectTasks) return;
+    const updated = rawProjectTasks.find(t => t.id === selectedTask.id);
+    if (updated) {
+      selectedSeenInSnapshotRef.current = selectedTask.id;
+      if (JSON.stringify(updated) !== JSON.stringify(selectedTask)) setSelectedTask(updated);
+      return;
     }
-  }, [rawProjectTasks, selectedTask]);
+    if (selectedSeenInSnapshotRef.current === selectedTask.id) {
+      selectedSeenInSnapshotRef.current = null;
+      setSelectedTask(null);
+      setFocusComment(null);
+      toast({
+        title: 'Detyra nuk është më në këtë projekt',
+        description: 'U fshi ose u zhvendos nga një koleg — paneli u mbyll.',
+      });
+    }
+  }, [rawProjectTasks, selectedTask, toast]);
 
   // Progress uses ALL top-level tasks from the RAW (unfiltered) project tasks —
   // the role-filtered `allTasks` would make a Member who only sees their own Done
@@ -685,7 +694,11 @@ const ProjectDetailView: React.FC = () => {
 
 
 
+  // In-flight guard — a second submit while the create is on the wire used to
+  // create the task twice (same law as useCreateTask on the Tasks page).
+  const createInFlightRef = React.useRef(false);
   const handleCreateTask = async (formData: FormData, opts?: { createAnother?: boolean }) => {
+    if (createInFlightRef.current) return;
     const title = formData.get('title') as string;
     if (!title || !title.trim()) return;
     const description = formData.get('description') as string;
@@ -698,25 +711,22 @@ const ProjectDetailView: React.FC = () => {
       return;
     }
     const assignedToUserId = formData.get('assignedToUserId') as string || user?.uid || '';
-    // "Më kujto" preset (minutes before the deadline) — same resolution as
-    // TasksView.handleCreateTask. This handler used to ignore the field, so a
-    // reminder chosen from the project page was silently never armed.
+    // "Më kujto" preset (minutes before the deadline) — resolved through the
+    // ONE reminder helper so the three fields agree, with `reminderSetByUserId`
+    // = the CREATOR (a manager creating for a colleague is the one reminded,
+    // as in the panel). This handler used to ignore the field entirely.
     const reminderOffsetRaw = formData.get('reminderOffsetMinutes') as string;
     const reminderOffsetMinutes = reminderOffsetRaw !== null && reminderOffsetRaw !== '' && !isNaN(Number(reminderOffsetRaw))
       ? Math.max(0, Number(reminderOffsetRaw)) : undefined;
-    const reminderAt = reminderOffsetMinutes !== undefined ? reminderAtFromOffset(endDate, reminderOffsetMinutes) : undefined;
+    const reminderPatch = reminderOffsetMinutes !== undefined
+      ? setReminderPatch({ endDate }, { offsetMinutes: reminderOffsetMinutes }, user?.uid)
+      : {};
     const section = (formData.get('section') as string || '').trim();
     const priority = formData.get('priority') as string || 'medium';
     const status = formData.get('status') as string || 'Todo';
-    const isRecurring = formData.get('isRecurring') === 'true';
-    const recurringFrequency = formData.get('recurringFrequency') as string || 'weekly';
-    const recurringInterval = parseInt(formData.get('recurringInterval') as string) || 1;
-    const recurringDayOfWeek = formData.get('recurringDayOfWeek') !== null ? parseInt(formData.get('recurringDayOfWeek') as string) : undefined;
-    const recurringDayOfMonth = formData.get('recurringDayOfMonth') !== null ? parseInt(formData.get('recurringDayOfMonth') as string) : undefined;
-    const recurringDaysOfWeekRaw = formData.get('recurringDaysOfWeek') as string;
-    const recurringDaysOfWeekParsed: number[] | undefined = recurringDaysOfWeekRaw
-      ? (() => { try { return JSON.parse(recurringDaysOfWeekRaw); } catch { return [1,2,3,4,5]; } })()
-      : undefined;
+    // Recurrence seeded from the task's OWN start (+ one frequency, Europe/Tirane),
+    // never from "now" — src/lib/taskCreateSeed.ts, shared with useCreateTask.
+    const recurrence = recurrenceSeedFromForm(formData, { startDate, endDate });
     // The quick form's time window doubles as the estimate — it feeds the
     // capacity load bars, so it must be persisted like TasksView does.
     const estimatedHoursRaw = formData.get('estimatedHours') as string;
@@ -735,7 +745,7 @@ const ProjectDetailView: React.FC = () => {
       status,
       priority,
       collaboratorIds: [],
-      ...(reminderOffsetMinutes !== undefined && reminderAt ? { reminderOffsetMinutes, reminderAt } : {}),
+      ...reminderPatch,
       ...(!isNaN(estimatedHours) && estimatedHours > 0 ? { estimatedHours } : {}),
       ...(labels.length > 0 ? { labels } : {}),
       ...(section ? { section } : {}),
@@ -753,119 +763,79 @@ const ProjectDetailView: React.FC = () => {
       ...(project?.businessId ? { businessId: project.businessId } : {}),
     };
 
-    if (isRecurring) {
-      taskData.isRecurring = true;
-      taskData.recurringFrequency = recurringFrequency;
-      taskData.recurringInterval = recurringInterval;
-      // "Përsërit deri" — the quick form sends YYYY-MM-DD (same as TasksView's
-      // handler; this one used to drop it, so repeat-until never stuck here).
-      const recurringEndDateRaw = formData.get('recurringEndDate') as string;
-      if (recurringEndDateRaw) {
-        const [ry, rm, rd] = recurringEndDateRaw.split('-').map(Number);
-        if (ry && rm && rd) taskData.recurringEndDate = new Date(ry, rm - 1, rd);
-      }
+    if (recurrence) {
+      Object.assign(taskData, recurrence);
       taskData.dueNotificationSent = false;
+    }
 
-      // Calculate nextRecurringDate from the selected day-of-week / days-of-week
-      const now = new Date();
-      if (recurringFrequency === 'weekly' && recurringDayOfWeek !== undefined && !isNaN(recurringDayOfWeek)) {
-        taskData.recurringDayOfWeek = recurringDayOfWeek;
-        // Compute next occurrence of the selected weekday
-        const next = new Date(now);
-        const currentDay = now.getDay();
-        let daysUntil = recurringDayOfWeek - currentDay;
-        if (daysUntil <= 0) daysUntil += 7;
-        next.setDate(next.getDate() + daysUntil);
-        next.setHours(9, 0, 0, 0);
-        taskData.nextRecurringDate = next;
-      } else if (recurringFrequency === 'daily') {
-        const activeDays = recurringDaysOfWeekParsed ?? [1,2,3,4,5];
-        taskData.recurringDaysOfWeek = activeDays;
-        // Compute next weekday in the active list
-        const next = new Date(now);
-        next.setDate(next.getDate() + 1);
-        next.setHours(9, 0, 0, 0);
-        let tries = 0;
-        while (activeDays.length > 0 && !activeDays.includes(next.getDay()) && tries < 7) {
-          next.setDate(next.getDate() + 1);
-          tries++;
+    createInFlightRef.current = true;
+    let newTask: any;
+    try {
+      newTask = await taskMutation.create(taskData);
+    } catch (err) {
+      createInFlightRef.current = false;
+      throw err;
+    }
+
+    // From here on the TASK EXISTS: every side-effect is contained, and the
+    // dialog closes in `finally` — a rejected notification used to leave it
+    // open on a task that was already there, and the next click made a twin.
+    try {
+      // A task created with a monetary value gets its own invoice, as a DRAFT: a
+      // draft never counts as revenue, so it can never collide with the project's
+      // own budget billing. Review it in Faturat and send it when it's right.
+      const taskValue = Number(taskData.value) || 0;
+      if (taskValue > 0) {
+        try {
+          // Shared side-effects (src/lib/finance/taskValue.ts): draft invoice +
+          // line item, budget increment ONLY for one-time projects (a recurring
+          // project's budget is its per-period fee — growing it would raise every
+          // future auto-invoice and double-bill the same work), idempotency flag.
+          const result = await applyValuedTaskSideEffects({
+            taskId: (newTask as any).id,
+            taskTitle: title,
+            value: taskValue,
+            project: project ? { ...(project as any), id: projectId! } : null,
+            canEditBudget: canSeeFinancials(permissions),
+          });
+          toast({
+            title: 'Detyra u krijua + faturë Draft ✓',
+            description: result.appliedToBudget
+              ? `${result.invoiceNumber} për ${taskValue.toLocaleString()} · buxheti i projektit u rrit me ${taskValue.toLocaleString()}.`
+              : `${result.invoiceNumber} për ${taskValue.toLocaleString()} · tarifa periodike e projektit nuk u prek (faturohet vetëm një herë).`,
+          });
+        } catch (err: any) {
+          console.error('[Tasks] draft invoice for valued task failed:', err);
+          toast({
+            title: 'Detyra u ruajt, fatura jo',
+            description: err?.message || 'Fatura nuk u krijua — provo ta shtosh manualisht.',
+            variant: 'destructive',
+          });
         }
-        taskData.nextRecurringDate = next;
-      } else if (recurringFrequency === 'monthly' && recurringDayOfMonth !== undefined && !isNaN(recurringDayOfMonth)) {
-        taskData.recurringDayOfMonth = recurringDayOfMonth;
-        // Clamp to the month's last day (same as TasksView's buildMonthly) —
-        // `new Date(y, m, 31)` overflows into the NEXT month (Feb 31 → Mar 3),
-        // which pushed the cron's due-gate days late for day-29/30/31 series.
-        const buildMonthly = (year: number, month: number) => {
-          const lastDay = new Date(year, month + 1, 0).getDate();
-          return new Date(year, month, Math.min(recurringDayOfMonth, lastDay), 9, 0, 0);
-        };
-        let next = buildMonthly(now.getFullYear(), now.getMonth());
-        if (next <= now) next = buildMonthly(now.getFullYear(), now.getMonth() + 1);
-        taskData.nextRecurringDate = next;
-      } else {
-        // yearly or fallback: use endDate
-        taskData.nextRecurringDate = new Date(endDate);
       }
-    }
 
-    const newTask = await taskMutation.create(taskData);
-
-    // A task created with a monetary value gets its own invoice, as a DRAFT: a
-    // draft never counts as revenue, so it can never collide with the project's
-    // own budget billing. Review it in Faturat and send it when it's right.
-    const taskValue = Number(taskData.value) || 0;
-    if (taskValue > 0) {
-      try {
-        // Shared side-effects (src/lib/finance/taskValue.ts): draft invoice +
-        // line item, budget increment ONLY for one-time projects (a recurring
-        // project's budget is its per-period fee — growing it would raise every
-        // future auto-invoice and double-bill the same work), idempotency flag.
-        const result = await applyValuedTaskSideEffects({
-          taskId: (newTask as any).id,
-          taskTitle: title,
-          value: taskValue,
-          project: project ? { ...(project as any), id: projectId! } : null,
-          canEditBudget: canSeeFinancials(permissions),
-        });
-        toast({
-          title: 'Detyra u krijua + faturë Draft ✓',
-          description: result.appliedToBudget
-            ? `${result.invoiceNumber} për ${taskValue.toLocaleString()} · buxheti i projektit u rrit me ${taskValue.toLocaleString()}.`
-            : `${result.invoiceNumber} për ${taskValue.toLocaleString()} · tarifa periodike e projektit nuk u prek (faturohet vetëm një herë).`,
-        });
-      } catch (err: any) {
-        console.error('[Tasks] draft invoice for valued task failed:', err);
-        toast({
-          title: 'Detyra u ruajt, fatura jo',
-          description: err?.message || 'Fatura nuk u krijua — provo ta shtosh manualisht.',
-          variant: 'destructive',
-        });
+      const notificationPromises: Promise<unknown>[] = [];
+      if (assignedToUserId && assignedToUserId !== user?.uid) {
+        notificationPromises.push(notificationMutation.create({
+          userId: assignedToUserId,
+          type: 'task_assigned',
+          title: 'Detyrë e Re e Caktuar',
+          message: `Ju u caktuat te detyra: ${title}`,
+          isRead: false,
+          // Land on the task itself (opens the panel), not just the project page.
+          actionUrl: taskDeepLink((newTask as any).id, projectId),
+          actionLabel: 'Shiko Detyrën',
+        }).catch(err => console.error('[Notifications] task_assigned dërgim dështoi:', err)));
       }
-    }
 
-    if (assignedToUserId && assignedToUserId !== user?.uid) {
-      await notificationMutation.create({
-        userId: assignedToUserId,
-        type: 'task_assigned',
-        title: 'Detyrë e Re e Caktuar',
-        message: `Ju u caktuat te detyra: ${title}`,
-        isRead: false,
-        // Land on the task itself (opens the panel), not just the project page.
-        actionUrl: taskDeepLink((newTask as any).id, projectId),
-        actionLabel: 'Shiko Detyrën',
-      }).catch(err => console.error('[Notifications] task_assigned dërgim dështoi:', err));
-    }
-
-    // Notify guests about the new task
-    if (project) {
-      const guestIds: string[] = project.guestUserIds || [];
-      await Promise.all(
+      // Notify guests about the new task
+      if (project) {
+        const guestIds: string[] = project.guestUserIds || [];
         guestIds
           // Skip the assignee too — they already got task_assigned above, and a
           // guest-assignee received two notifications for the same task.
           .filter(id => id !== user?.uid && id !== assignedToUserId)
-          .map(guestId =>
+          .forEach(guestId => notificationPromises.push(
             notificationMutation.create({
               userId: guestId,
               type: 'guest_task_new',
@@ -875,21 +845,30 @@ const ProjectDetailView: React.FC = () => {
               actionUrl: taskDeepLink((newTask as any).id, projectId),
               actionLabel: 'Shiko Detyrën',
             }).catch(err => console.error('[Notifications] guest_task_new dërgim dështoi:', err))
-          )
-      );
-    }
-
-    // "Krijo & shto tjetër" keeps the dialog open for batch entry.
-    if (!opts?.createAnother) {
-      setIsCreateTaskOpen(false);
-      setSelectedTask(newTask);
+          ));
+      }
+      await Promise.allSettled(notificationPromises);
+    } catch (err) {
+      console.error('[Tasks] detyra u krijua, veprimet pasuese dështuan:', err);
+    } finally {
+      createInFlightRef.current = false;
+      // "Krijo & shto tjetër" keeps the dialog open for batch entry.
+      if (!opts?.createAnother) {
+        setIsCreateTaskOpen(false);
+        setSelectedTask(newTask);
+      }
     }
   };
 
   const handleAddComment = async (taskId: string, content: string, opts?: { visibleToClient?: boolean }) => {
     // Return the created doc — the panel needs its id to deep-link the notifications.
-    // customerId is the client-visibility switch — stamped only on request.
-    const customerId = opts?.visibleToClient ? (project as any)?.customerId : undefined;
+    // customerId is the client-visibility switch — stamped only on request, and
+    // from the TASK's customerId: the rules require `== task.customerId`, and
+    // the project's customer can differ (customer changed after the task was
+    // made, task moved in). A task without one cannot carry a client-visible
+    // comment — the composer hides the toggle for it.
+    const task = (rawProjectTasks || []).find(t => t.id === taskId);
+    const customerId = opts?.visibleToClient ? (task as any)?.customerId : undefined;
     return commentMutation.create({
       taskId,
       content,
@@ -934,16 +913,13 @@ const ProjectDetailView: React.FC = () => {
   const handleToggleReaction = async (commentId: string, emoji: string) => {
     if (!user?.uid) return;
     const c = comments?.find((x: any) => x.id === commentId);
-    const current: Record<string, string[]> = { ...((c as any)?.reactions || {}) };
-    const arr = Array.isArray(current[emoji]) ? [...current[emoji]] : [];
-    const i = arr.indexOf(user.uid);
-    if (i >= 0) arr.splice(i, 1); else arr.push(user.uid);
-    if (arr.length) current[emoji] = arr; else delete current[emoji];
+    // One atomic field-path write (`reactions.<emoji>` ± uid) — the whole-map
+    // read-modify-write let concurrent reactions overwrite each other.
     // Never fail silently: a reaction on someone else's comment is a rules-level
     // write (see the `reactions`-only branch on taskComments), so a stale rules
     // deploy shows up as nothing happening at all unless we say so.
     try {
-      await commentMutation.update(commentId, { reactions: current } as any);
+      await commentMutation.update(commentId, reactionTogglePatch(c, emoji, user.uid) as any);
     } catch (err: any) {
       toast({ title: 'Reagimi nuk u ruajt', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
     }
@@ -1647,7 +1623,7 @@ const ProjectDetailView: React.FC = () => {
                         const dateInfo = formatDateCompact(new Date(task.endDate));
                         const meta = TASK_STATUS_META[task.status] || TASK_STATUS_META['Todo'];
                         const done = task.status === 'Done';
-                        const mins = hoursByTask.get(task.id);
+                        const loggedHours = hoursByTask.get(task.id);
                         return (
                           <div
                             key={task.id}
@@ -1721,7 +1697,7 @@ const ProjectDetailView: React.FC = () => {
                             </span>
 
                             <span className={cn('text-right text-xs font-bold text-brand-muted', NUM)}>
-                              {mins == null ? '—' : mins / 60 < 1 ? `${Math.round(mins)}m` : `${(mins / 60).toFixed(1)}h`}
+                              {loggedHours == null ? '—' : formatHoursCompact(loggedHours)}
                             </span>
                           </div>
                         );
@@ -2112,7 +2088,13 @@ const ProjectDetailView: React.FC = () => {
                   // Same cascade as ProjectsView (src/lib/deleteCascade.ts): a
                   // bare remove() left every task, comment and draft invoice
                   // dangling on a project id that no longer exists.
-                  const summary = await deleteProjectCascade({ id: projectId, name: project?.name || '' });
+                  const summary = await deleteProjectCascade(
+                    { id: projectId, name: project?.name || '' },
+                    // An approver's expense list is unconstrained, so rows with
+                    // no category are unlinked too (the non-approver query must
+                    // carry `category != 'Salary'`, which drops them).
+                    { isExpenseApprover: permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin },
+                  );
                   const parts = projectCascadeToastParts(summary);
                   toast({ title: `Projekti u fshi`, description: parts.length ? parts.join(' · ') : undefined });
                   navigate('/app/projects');

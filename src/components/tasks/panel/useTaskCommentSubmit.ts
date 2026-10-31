@@ -1,10 +1,30 @@
-import { useMutation } from '../../../hooks/useFirestore';
+import { useCollection, useMutation } from '../../../hooks/useFirestore';
 import { useAuth } from '../../../contexts/AuthContext';
 import { toast } from '../../../hooks/use-toast';
 import { resolvePortalUserId } from '../../../lib/notifyClient';
 import { commentMentionUids, commentToPlainText } from '../../../lib/commentMarkdown';
 import { taskDeepLink, portalProjectCommentDeepLink } from '../../../lib/deepLinks';
-import type { Task, TaskComment } from '../../../types';
+import type { Task, TaskComment, TeamMember } from '../../../types';
+
+/**
+ * The @mention uids a comment may act on: only people the business KNOWS. The
+ * uids come out of the comment TEXT (`@[Name](uid)`), which anyone can type by
+ * hand — an unknown uid used to become a follower in `collaboratorIds` and a
+ * notification recipient. Known = a teamMembers row of the business, or someone
+ * already on the task (assignee, creator, follower). Exported for tests.
+ */
+export function validMentionUids(
+  uids: Iterable<string>,
+  known: { memberUids: Iterable<string>; task: Partial<Pick<Task, 'assignedToUserId' | 'createdByUserId' | 'collaboratorIds'>> },
+): string[] {
+  const allowed = new Set<string>(known.memberUids);
+  if (known.task.assignedToUserId) allowed.add(known.task.assignedToUserId);
+  if (known.task.createdByUserId) allowed.add(known.task.createdByUserId);
+  for (const uid of known.task.collaboratorIds || []) allowed.add(uid);
+  const out: string[] = [];
+  for (const uid of uids) if (typeof uid === 'string' && allowed.has(uid) && !out.includes(uid)) out.push(uid);
+  return out;
+}
 
 /** Two quick "rib-bit" pulses — the comment-sent chirp (Web Audio, no asset). */
 function playFrogSound() {
@@ -72,6 +92,9 @@ export function useTaskCommentSubmit({
   const { user } = useAuth();
   const taskMutation = useMutation<Task>('tasks');
   const notificationMutation = useMutation<any>('notifications');
+  // The business's members — the list a mention is validated against (the same
+  // shared, cached listener every picker uses).
+  const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
 
   /** Resolves true once the comment is SAVED (the composer then clears) — a
    *  failed follower update afterwards must not keep the text for a duplicate send. */
@@ -79,7 +102,12 @@ export function useTaskCommentSubmit({
     // The composer already writes mentions as @[Name](uid) (lib/commentMarkdown).
     const finalText = text.trim();
     if (!finalText) return false;
-    const mentionedUids = new Set<string>(commentMentionUids(finalText));
+    // Validated against the member list: a uid typed into the text by hand is
+    // never a follower or a recipient (it stays plain text in the comment).
+    const mentionedUids = new Set<string>(validMentionUids(commentMentionUids(finalText), {
+      memberUids: (teamMembers || []).map(m => m.userId).filter(Boolean),
+      task,
+    }));
     let saved = false;
 
     // Captured BEFORE the save: the checkbox resets right after it.

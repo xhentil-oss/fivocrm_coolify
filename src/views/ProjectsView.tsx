@@ -3,7 +3,7 @@ import { useToast } from '../hooks/use-toast';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation, useGlobalBusinessId, getGlobalTeamId } from '../hooks/useFirestore';
 import { getNextInvoiceNumber, db } from '../lib/firebase';
-import { doc, runTransaction, Timestamp } from 'firebase/firestore';
+import { collection, doc, getDocs, query, runTransaction, Timestamp, where } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { canSeeFinancials, toAll, fromAll, currencySymbol, getRateToAll } from '../lib/utils';
@@ -223,8 +223,41 @@ const ProjectsView: React.FC = () => {
   
   const projectMutation = useMutation<Project>('projects');
   const taskMutation = useMutation<Task>('tasks');
+  const taskCommentMutation = useMutation<any>('taskComments');
   const invoiceMutation = useMutation<Invoice>('invoices');
   const invoiceItemMutation = useMutation<InvoiceItem>('invoiceItems');
+
+  /**
+   * Re-point the client-visible comments of these tasks at the project's new
+   * customer (mirror of the panel's `repointClientComments`, TaskPeopleRows).
+   * businessId makes the list provable under the rules (rules are not filters).
+   * Only rows that already carry a customerId are touched — an internal comment
+   * must never become client-visible through a project edit.
+   */
+  const repointProjectClientComments = async (taskIds: string[], customerId: string | null, projectBusinessId?: string | null) => {
+    const businessId = projectBusinessId || activeBusinessId;
+    if (!businessId || taskIds.length === 0) return;
+    try {
+      const chunks: string[][] = [];
+      for (let i = 0; i < taskIds.length; i += 30) chunks.push(taskIds.slice(i, i + 30));
+      const snaps = await Promise.all(chunks.map(ids => getDocs(query(
+        collection(db, 'taskComments'),
+        where('businessId', '==', businessId),
+        where('taskId', 'in', ids),
+      ))));
+      const toUpdate = snaps.flatMap(s => s.docs).filter(d => {
+        const cur = (d.data() as any).customerId;
+        return !!cur && cur !== customerId;
+      });
+      const results = await Promise.allSettled(
+        toUpdate.map(d => taskCommentMutation.update(d.id, { customerId } as any)),
+      );
+      const failed = results.filter(r => r.status === 'rejected').length;
+      if (failed) console.warn(`[ProjectsView] ${failed} komente të dukshme për klientin nuk u ri-lidhën me klientin e ri`);
+    } catch (err) {
+      console.warn('[ProjectsView] ri-lidhja e komenteve të klientit dështoi:', err);
+    }
+  };
   const notificationMutation = useMutation<any>('notifications');
   const logActivity = useActivityLogger();
 
@@ -700,7 +733,12 @@ const ProjectsView: React.FC = () => {
       // Shared implementation (src/lib/deleteCascade.ts) — the same cascade the
       // project detail page runs, with businessId-scoped queries the rules can
       // actually prove (a projectId-only query is denied for non-super-admins).
-      const summary = await deleteProjectCascade({ id, name });
+      const summary = await deleteProjectCascade({ id, name }, {
+        // An approver's expense list is unconstrained, so rows with no category
+        // are unlinked too (the non-approver query must carry `category !=
+        // 'Salary'`, which drops them).
+        isExpenseApprover: permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin,
+      });
       if (summary.failed) console.warn('[ProjectsView] pjesë e kaskadës dështoi:', summary);
 
       logActivity('project_deleted', `Projekt i fshirë: ${name}`, { entityType: 'project', entityId: id });
@@ -1051,6 +1089,13 @@ const ProjectsView: React.FC = () => {
       );
       const failedRestamp = restamp.filter(r => r.status === 'rejected').length;
       if (failedRestamp) console.warn(`[ProjectsView] ${failedRestamp} detyra nuk u ri-vulosën me klientin e ri`);
+      // The tasks' CLIENT-VISIBLE comments carry the same customerId (it is
+      // what the portal reads them by). Re-point those too, or the old client
+      // keeps reading them and the new one sees none — same write as the
+      // panel's `repointClientComments` on a task move: only rows that already
+      // HAVE a customerId (internal comments stay internal), explicit null when
+      // the project's customer is cleared.
+      void repointProjectClientComments(projectTasks.map(t => t.id), newCustomerId || null, (projectToEdit as any).businessId);
     }
 
     // Keep DRAFT invoices in step with the fee. A draft was never sent, so silently

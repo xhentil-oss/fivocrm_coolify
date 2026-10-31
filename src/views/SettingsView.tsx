@@ -2645,6 +2645,7 @@ const MODULES: { key: string; label: string }[] = [
   { key: 'canAccessServices',    label: 'Shërbimet' },
   { key: 'canAccessProducts',    label: 'Dyqani & Produktet' },
   { key: 'canAccessHosting',     label: 'Hosting & Domain-e' },
+  { key: 'canAccessSalesAgent',  label: 'Agjentja e shitjeve (Ana)' },
   { key: 'canAccessExpenses',    label: 'Shpenzimet' },
   { key: 'canAccessReports',     label: 'Raportimi' },
   // Reporting capabilities. `canAccessReports` above is the module gate (everyone
@@ -2701,7 +2702,7 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
   Sales: {
     canAccessProjects: false, canAccessTasks: false, canAccessGoals: false,
     canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: true,
-    canAccessServices: true, canAccessProducts: true, canAccessHosting: true, canAccessExpenses: false,
+    canAccessServices: true, canAccessProducts: true, canAccessHosting: true, canAccessSalesAgent: true, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
     // Reporting defaults come from the module's own resolver, so the template shown
     // here can never drift from what usePermissions actually grants.
@@ -2711,7 +2712,7 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
   SalesAgent: {
     canAccessProjects: false, canAccessTasks: true, canAccessGoals: false,
     canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: true,
-    canAccessServices: true, canAccessProducts: true, canAccessHosting: true, canAccessExpenses: false,
+    canAccessServices: true, canAccessProducts: true, canAccessHosting: true, canAccessSalesAgent: true, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
     canAssignTasks: true,
     ...reportingCapabilitiesFor('SalesAgent'),
@@ -2719,7 +2720,7 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
   Manager: {
     canAccessProjects: true, canAccessTasks: true, canAccessGoals: true,
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
-    canAccessServices: false, canAccessProducts: false, canAccessHosting: false, canAccessExpenses: false,
+    canAccessServices: false, canAccessProducts: false, canAccessHosting: false, canAccessSalesAgent: false, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
     canAssignTasks: true,
     ...reportingCapabilitiesFor('Manager'),
@@ -2727,7 +2728,7 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
   Member: {
     canAccessProjects: true, canAccessTasks: true, canAccessGoals: true,
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
-    canAccessServices: false, canAccessProducts: false, canAccessHosting: false, canAccessExpenses: false,
+    canAccessServices: false, canAccessProducts: false, canAccessHosting: false, canAccessSalesAgent: false, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
     canAssignTasks: false,
     ...reportingCapabilitiesFor('Member'),
@@ -2735,7 +2736,7 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
   Viewer: {
     canAccessProjects: true, canAccessTasks: true, canAccessGoals: false,
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
-    canAccessServices: false, canAccessProducts: false, canAccessHosting: false, canAccessExpenses: false,
+    canAccessServices: false, canAccessProducts: false, canAccessHosting: false, canAccessSalesAgent: false, canAccessExpenses: false,
     canAccessTimeTracking: false, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
     canAssignTasks: false,
     ...reportingCapabilitiesFor('Viewer'),

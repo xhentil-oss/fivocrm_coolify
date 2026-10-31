@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import admin, { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 import { writeAudit } from './_audit.js';
 import { seatsForPlan } from './_billingPlans.js';
+import { notifyUser } from './_push.js';
 
 /**
  * POST /api/platform-admin — the platform console's write path.
@@ -205,7 +206,30 @@ async function setModules(res: VercelResponse, ctx: Ctx) {
   const patch: Record<string, any> = { updatedAt: admin.firestore.Timestamp.now() };
   if (lockedModules !== undefined) patch.lockedModules = lockedModules;
   if (disabledModules !== undefined) patch.disabledModules = disabledModules;
+  // Writing the entitlement IS configuring the tenant: a self-serve signup is born
+  // with everything locked and `moduleSetup: 'pending'` (src/lib/createTenant.ts),
+  // and this is the only path that can clear it (rules deny the owner).
+  const completesSetup = lockedModules !== undefined && before.moduleSetup === 'pending';
+  if (lockedModules !== undefined) {
+    patch.moduleSetup = 'done';
+    if (completesSetup) patch.moduleSetupDoneAt = admin.firestore.Timestamp.now();
+  }
   await ref.update(patch);
+
+  // The owner has been looking at a bare workspace with a "po konfigurohen" banner —
+  // tell them it is done. A delivery failure never fails the write.
+  if (completesSetup && typeof before.ownerId === 'string' && before.ownerId) {
+    const opened = lockedModules.length === 0 ? 'të gjitha modulet' : 'modulet e kontratës suaj';
+    await notifyUser({
+      userId: before.ownerId,
+      type: 'modules_configured',
+      title: 'Modulet e workspace-it u aktivizuan',
+      message: `FivoCRM aktivizoi ${opened} për "${before.name || 'workspace-in tuaj'}". Zgjidhni çfarë shfaqni nga Cilësimet → Modulet.`,
+      actionUrl: '/app/dashboard',
+      businessId,
+      teamId: typeof before.defaultTeamId === 'string' ? before.defaultTeamId : null,
+    }).catch((err: any) => console.error('[platform-admin] modules_configured notification failed:', err?.message || err));
+  }
 
   await writeAudit({
     businessId,
@@ -295,6 +319,8 @@ async function createTenantAction(
     seats: seatsForPlan(plan),
     lockedModules,
     disabledModules,
+    // Configured by the operator right here — never in the self-serve "pending" state.
+    moduleSetup: 'done',
     memberCount: 0,
     teamCount: 1,
     defaultTeamId: teamRef.id,
