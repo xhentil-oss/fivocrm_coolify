@@ -1,13 +1,15 @@
 import { Timestamp } from './_firebaseAdmin.js';
+import { convertLeadPatch, isOpenLeadStatus, type RouteLeadFacts } from './_contactRoute.js';
 
 /**
  * Contact identity (server side) — mirror of `src/lib/contactIdentity.ts`.
  *
- * A contact may legitimately be both a lead and a customer; what must never
- * happen is two records for the same person that don't know about each other.
- * Every server write path (landing form, WHMCS sync) resolves the counterpart
- * through these helpers and cross-links it, so the CRM never shows an orphan
- * lead next to an orphan customer for one person.
+ * One person, one pair of records: a lead is the person BEFORE they are a
+ * client; once they are a client their lead is closed (`Converted`) and kept
+ * only as history, and new business from them is a Deal (`_contactRoute.ts`
+ * decides which). Every server write path (landing form, portal, WhatsApp,
+ * WHMCS sync) resolves the person through these helpers — email OR phone — so
+ * the CRM never shows an open lead next to the client it already is.
  *
  * Keep the normalization rules identical to the client mirror.
  */
@@ -70,22 +72,25 @@ export interface ContactLookup {
 }
 
 /**
- * Finds an existing doc in `collectionName` for the same person: email first
- * (strong signal), then phone variants. `phoneField` differs per collection —
- * leads store `phoneNumber`, customers store `phone`.
+ * Every doc in `collectionName` for the same person, in tenant: email matches
+ * first (strong signal), then phone variants, de-duplicated. `phoneField` differs
+ * per collection — leads store `phoneNumber`, customers store `phone`.
  */
-async function findContactDoc(
+async function findContactDocs(
   db: Db,
   collectionName: 'leads' | 'customers',
   phoneField: 'phoneNumber' | 'phone',
-  { email, phone, teamId, businessId }: ContactLookup
-): Promise<DocSnap | null> {
+  { email, phone, teamId, businessId }: ContactLookup,
+  firstOnly: boolean
+): Promise<DocSnap[]> {
   const sameTenant = (d: DocSnap) => {
     const data = d.data();
     if (teamId && data.teamId && data.teamId !== teamId) return false;
     if (businessId && data.businessId && data.businessId !== businessId) return false;
     return true;
   };
+  const found = new Map<string, DocSnap>();
+  const take = (docs: DocSnap[]) => { for (const d of docs) if (sameTenant(d) && !found.has(d.id)) found.set(d.id, d); };
 
   const normEmail = normContactEmail(email);
   if (normEmail) {
@@ -95,18 +100,37 @@ async function findContactDoc(
     const emailForms = rawEmail && rawEmail !== normEmail ? [normEmail, rawEmail] : [normEmail];
     for (const form of emailForms) {
       const snap = await db.collection(collectionName).where('email', '==', form).limit(10).get();
-      const hit = snap.docs.find(sameTenant);
-      if (hit) return hit;
+      take(snap.docs);
+      if (firstOnly && found.size) return [...found.values()];
     }
   }
 
   for (const variant of phoneQueryVariants(phone)) {
     const snap = await db.collection(collectionName).where(phoneField, '==', variant).limit(10).get();
-    const hit = snap.docs.find(sameTenant);
-    if (hit) return hit;
+    take(snap.docs);
+    if (firstOnly && found.size) return [...found.values()];
   }
 
-  return null;
+  return [...found.values()];
+}
+
+async function findContactDoc(
+  db: Db,
+  collectionName: 'leads' | 'customers',
+  phoneField: 'phoneNumber' | 'phone',
+  lookup: ContactLookup
+): Promise<DocSnap | null> {
+  return (await findContactDocs(db, collectionName, phoneField, lookup, true))[0] ?? null;
+}
+
+/** Every lead of this person (email OR phone) — routing needs all of them, not the first. */
+export function findLeadsForContact(db: Db, lookup: ContactLookup) {
+  return findContactDocs(db, 'leads', 'phoneNumber', lookup, false);
+}
+
+/** Routing facts for `resolveContactRoute` (`_contactRoute.ts`). */
+export function leadRouteFacts(docs: DocSnap[]): RouteLeadFacts[] {
+  return docs.map(d => ({ id: d.id, status: d.data().status ?? null, customerId: d.data().customerId ?? null }));
 }
 
 export function findLeadForContact(db: Db, lookup: ContactLookup) {
@@ -145,4 +169,65 @@ export async function crossLinkLeadCustomer(
   } catch (err) {
     console.error('[contactIdentity] cross-link failed', { leadId, customerId, err });
   }
+}
+
+/**
+ * The person is a client: close every OPEN lead of theirs (`Converted`, linked)
+ * and pair the customer back to one of them. A client never keeps an open lead
+ * (`_contactRoute.ts`). Best-effort, same as `crossLinkLeadCustomer`.
+ */
+export async function closeLeadsForClient(
+  db: Db,
+  leadIds: string[],
+  customerId: string
+): Promise<number> {
+  if (!leadIds.length) return 0;
+  const at = new Date();
+  const patch = { ...convertLeadPatch(customerId, at), convertedAt: Timestamp.fromDate(at), updatedAt: Timestamp.fromDate(at) };
+  let closed = 0;
+  for (const id of leadIds) {
+    try {
+      const ref = db.collection('leads').doc(id);
+      const snap = await ref.get();
+      if (!snap.exists || !isOpenLeadStatus(snap.data()?.status)) continue;
+      await ref.update(patch);
+      await db.collection('leadActivities').add({
+        leadId: id,
+        teamId: snap.data()?.teamId ?? null,
+        businessId: snap.data()?.businessId ?? null,
+        type: 'converted',
+        title: 'U mbyll automatikisht: personi është klient',
+        body: 'Një klient nuk mban lead të hapur — kërkesat e reja shkojnë si marrëveshje te klienti.',
+        meta: { customerId, auto: true },
+        userId: null,
+        userName: 'Sistemi',
+        createdAt: Timestamp.fromDate(at),
+      }).catch(() => {});
+      closed++;
+    } catch (err) {
+      console.error('[contactIdentity] close lead failed', { leadId: id, customerId, err });
+    }
+  }
+  if (closed) await crossLinkLeadCustomer(db, leadIds[0], customerId);
+  return closed;
+}
+
+/**
+ * A customer record that is a CLIENT was just created or synced (CRM, WHMCS):
+ * close whatever open lead the same person still has, and pair the two.
+ */
+export async function convertLeadsForCustomer(
+  db: Db,
+  customerId: string,
+  lookup: ContactLookup
+): Promise<number> {
+  try {
+    const leads = await findLeadsForContact(db, lookup);
+    const open = leads.filter(d => isOpenLeadStatus(d.data().status)).map(d => d.id);
+    if (open.length) return await closeLeadsForClient(db, open, customerId);
+    if (leads.length) await crossLinkLeadCustomer(db, leads[0].id, customerId);
+  } catch (err) {
+    console.error('[contactIdentity] convert leads for customer failed', { customerId, err });
+  }
+  return 0;
 }

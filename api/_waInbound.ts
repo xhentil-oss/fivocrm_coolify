@@ -7,8 +7,10 @@ import {
   findLeadForContact,
   findCustomerForContact,
   crossLinkLeadCustomer,
+  closeLeadsForClient,
   phoneQueryVariants,
 } from './_contactIdentity.js';
+import { isClientCustomer, isOpenLeadStatus } from './_contactRoute.js';
 import { toWaPhone, waPhoneVariants } from './_waPhone.js';
 import { managerIdsForBusiness } from './_staffRecipients.js';
 import { notifyUser } from './_push.js';
@@ -885,6 +887,12 @@ export async function processWaEvent(rawEvent: WaEvent | Record<string, any>): P
   const customer = (customerSnap?.data() as any) || null;
   if (leadId && customerId && (!lead?.customerId || !customer?.leadId)) {
     await crossLinkLeadCustomer(adminDb, leadId, customerId);
+  }
+  // A client never keeps an open lead (`_contactRoute.ts`): the message belongs
+  // to the client, and the lead left open next to them is closed as converted —
+  // so no playbook, cadence or lead SLA starts on someone who already buys.
+  if (leadId && customerId && lead && isOpenLeadStatus(lead.status) && isClientCustomer({ id: customerId, status: customer?.status })) {
+    if (await closeLeadsForClient(adminDb, [leadId], customerId)) lead.status = 'Converted';
   }
   let leadCreateBlocked: WaInboundResult['leadCreateBlocked'] = null;
   let newLead = false;

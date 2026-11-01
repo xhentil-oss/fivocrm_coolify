@@ -9,7 +9,7 @@ import { sortArchivedLast } from '../lib/projectArchive';
 import {
   ArrowLeft, Building2, Mail, Phone, FileText, DollarSign,
   ClipboardList, Calendar, Plus, Clock, Target, Calculator, Send,
-  Archive, Trash2, CheckSquare, Square, Eye, Download, Copy
+  Archive, Trash2, CheckSquare, Square, Eye, Download, Copy, TrendingUp
 } from 'lucide-react';
 import { downloadQuotePdf } from '../lib/quotePdf';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -23,7 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Separator } from '../components/ui/separator';
-import { safeHref, toAll, canSeeFinancials, currencySymbol } from '../lib/utils';
+import { safeHref, toAll, canSeeFinancials, currencySymbol, getTimestampMs } from '../lib/utils';
 import { getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
 import { computeClientProfitability, clientRowFor } from '../lib/finance/clientProfitability';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
@@ -41,7 +41,8 @@ import { dueState, daysSinceContact, touchContactPatch } from '../lib/crm/follow
 import { Bell, CheckCircle2, ExternalLink } from 'lucide-react';
 import WaOptOutControl from '../components/WaOptOutControl';
 import { projectTaskProgress } from '../lib/projectProgress';
-import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service, FollowUpType, Subscription, Domain, TimeEntry, Expense, TeamMember } from '../types';
+import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service, FollowUpType, Subscription, Domain, TimeEntry, Expense, TeamMember, Deal } from '../types';
+import { OPEN_STAGES, stageLabel, curSymbol } from '../lib/dealStages';
 
 const Customer360View: React.FC = () => {
   const { customerId } = useParams<{ customerId: string }>();
@@ -95,6 +96,28 @@ const Customer360View: React.FC = () => {
   const { data: projects } = useCollection<Project>('projects', byCustomer);
   const { data: requests } = useCollection<ClientRequest>('clientRequests', byCustomer);
   const { data: activities } = useCollection<Activity>('activities', byCustomer);
+  // A client's new requests are DEALS, never leads (crm/contactRoute.ts). They are
+  // shown here for every plan — the Marrëveshjet board is a Pro module, and a
+  // request nobody can see is a request nobody answers.
+  const { data: deals } = useCollection<Deal>('deals', byCustomer);
+  const dealMutation = useMutation<Deal>('deals');
+  const openDeals = useMemo(
+    () => (deals || []).filter(d => OPEN_STAGES.includes(d.stage))
+      .sort((a, b) => getTimestampMs(b.createdAt) - getTimestampMs(a.createdAt)),
+    [deals],
+  );
+  const closeDeal = async (deal: Deal, stage: 'Won' | 'Lost') => {
+    try {
+      await dealMutation.update(deal.id, {
+        stage,
+        ...(stage === 'Won' ? { wonAt: new Date() } : { lostAt: new Date() }),
+        lastActivityAt: new Date(),
+      } as any);
+      toast({ title: stage === 'Won' ? 'Kërkesa u fitua' : 'Kërkesa u shënua e humbur', description: deal.title });
+    } catch {
+      toast({ title: 'Gabim', description: 'Kërkesa nuk u përditësua.', variant: 'destructive' });
+    }
+  };
   // tasks (joined via projectId), quotes (customerId OR leadId), leads
   // (customerId OR email), services (full catalog) need broader reads — left
   // as full-collection loads filtered client-side below.
@@ -624,6 +647,46 @@ const Customer360View: React.FC = () => {
 
         {/* Overview Tab */}
         <TabsContent value="overview">
+          {openDeals.length > 0 && (
+            <Card className="mb-6 border-primary/30">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-primary" />
+                  Kërkesa të hapura ({openDeals.length})
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Shërbime të reja që klienti ka kërkuar — një klient nuk kthehet në lead, kërkesa ndiqet këtu.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {openDeals.map(deal => (
+                  <div key={deal.id} className="flex flex-col sm:flex-row sm:items-center gap-2 rounded-lg border p-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{deal.title}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {stageLabel(deal.stage)}
+                        {deal.kind === 'win-back' ? ' · Rikthim' : ''}
+                        {deal.source ? ` · ${deal.source}` : ''}
+                        {deal.amount ? ` · ${curSymbol(deal.currency)}${Number(deal.amount).toLocaleString('sq-AL')}` : ''}
+                        {getTimestampMs(deal.createdAt) ? ` · ${new Date(getTimestampMs(deal.createdAt)).toLocaleDateString('sq-AL')}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      {moduleEnabled('deals') && (
+                        <Button size="sm" variant="ghost" onClick={() => navigate('/app/deals')}>Marrëveshjet</Button>
+                      )}
+                      {permissions.canEdit && (
+                        <>
+                          <Button size="sm" variant="outline" onClick={() => closeDeal(deal, 'Lost')}>Humbur</Button>
+                          <Button size="sm" onClick={() => closeDeal(deal, 'Won')}>Fituar</Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Customer Info */}
             <Card>
