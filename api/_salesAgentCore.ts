@@ -747,7 +747,9 @@ export function ensureDisclosure(reply: string, persona: SalesAgentPersona, busi
   const hasName = r.toLowerCase().includes(persona.name.toLowerCase());
   const hasVirtual = /virtual/i.test(r);
   if (hasName && hasVirtual) return r;
-  const biz = businessName || persona.businessName;
+  // The name the owner typed for the persona wins; the tenant/team name in FivoCRM
+  // ("Agjencia") is only the fallback when the persona field is empty.
+  const biz = persona.businessName || businessName;
   const intro = `Jam ${persona.name}, asistentja virtuale e ${biz || 'ekipit'}.`;
   return sanitizeAgentReply(`${intro} ${r}`);
 }

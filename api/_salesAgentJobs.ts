@@ -178,7 +178,7 @@ export async function runSalesAgentProspecting(opts: JobOpts = {}): Promise<Reco
             rating: draft.rating, reviewCount: draft.reviewCount, fitScore: fit.score, fitReasons: fit.reasons,
             status: dup ? 'duplicate' : 'new', matchedContactId: dup?.id ?? null, matchedContactKind: dup ? (dup.kind === 'prospect' ? null : dup.kind) : null,
             matchedProspectId: dup?.kind === 'prospect' ? dup.id : null, leadId: dup?.kind === 'lead' ? dup.id : null,
-            firstMessageDraft: buildFirstEmailDraft(input).body, callScript: buildCallScript(input), waVerified: null,
+            firstMessageDraft: buildFirstEmailDraft(input).body, callScript: buildCallScript(input), serviceLine, waVerified: null,
             outreachWa: null, outreachEmail: null, expiresAt: Timestamp.fromDate(prospectExpiresAt(now)), registeredAt: null, registeredByUserId: null,
             createdAt: ts, updatedAt: ts,
           };

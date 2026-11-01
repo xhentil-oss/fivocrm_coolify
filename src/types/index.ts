@@ -2238,6 +2238,8 @@ export interface Prospect {
   /** Agent-drafted first message (email/WhatsApp) + phone-call script for the human. */
   firstMessageDraft?: string | null;
   callScript?: string | null;
+  /** What the drafts pitch ("seo", "website"); lets the UI re-render them with the CURRENT persona. */
+  serviceLine?: string | null;
   /** Whether `phone` was confirmed to be on WhatsApp (VPS `onWhatsApp`). null = not checked. */
   waVerified?: boolean | null;
   expiresAt: Date;

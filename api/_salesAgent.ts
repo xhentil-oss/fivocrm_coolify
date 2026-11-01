@@ -23,7 +23,7 @@ import {
   type HandoffReason, type SalesAgentAutonomy, type SalesAgentBlockReason, type SalesAgentSettings, type SalesDigestFacts,
   type SalesFacts, type KnowledgeFact, type ServiceFact,
 } from './_salesAgentCore.js';
-import { SEARCH_BLOCK_LABELS, estimateSearchRequests, searchBlockReason } from './_salesAgentProspecting.js';
+import { SEARCH_BLOCK_LABELS, buildCallScript, estimateSearchRequests, prospectServiceLine, searchBlockReason, type SalesAgentPersona } from './_salesAgentProspecting.js';
 
 /**
  * Ana — the virtual sales agent. Server side.
@@ -751,6 +751,20 @@ async function handleEnable(res: VercelResponse, c: Caller, body: Record<string,
   return res.status(200).json({ ok: true, settings: toStore });
 }
 
+/**
+ * The call script with the persona as it is NOW. Stored drafts are a snapshot from
+ * the search; renaming the persona ("Agjencia" → "Bos Marketing") must not leave the
+ * old name in what staff read or what lands on the lead.
+ */
+function liveCallScript(p: any, persona: SalesAgentPersona): string {
+  const serviceLine = prospectServiceLine(p);
+  if (!serviceLine) return p?.callScript ? String(p.callScript) : '';
+  return buildCallScript({
+    prospect: { name: String(p.name || ''), category: p.category ?? null, city: p.city ?? null, website: p.website ?? null, rating: p.rating ?? null, reviewCount: p.reviewCount ?? null },
+    persona, serviceLine, senderName: null,
+  });
+}
+
 async function handleSettingsTest(res: VercelResponse, c: Caller, body: Record<string, any>) {
   const gate = await requireStaff(c, str(body.teamId, 128));
   if (isGateError(gate)) return res.status(gate.status).json({ error: gate.error });
@@ -871,7 +885,7 @@ async function handleProspectRegister(res: VercelResponse, c: Caller, body: Reco
     });
     await db.collection('leadActivities').add({
       leadId: leadRef.id, teamId: ctx.teamId, businessId: ctx.businessId, type: 'created', title: 'Lead i regjistruar nga prospektimi në Google Maps',
-      body: p.callScript ? String(p.callScript).slice(0, 300) : '', meta: { prospectId: pid, placeId: p.placeId, fitScore: p.fitScore }, userId: c.uid, userName: null, createdAt: now,
+      body: liveCallScript(p, ctx.settings.persona).slice(0, 300), meta: { prospectId: pid, placeId: p.placeId, fitScore: p.fitScore }, userId: c.uid, userName: null, createdAt: now,
     }).catch(() => {});
     await snap.ref.set({
       status: 'registered', leadId: leadRef.id, registeredAt: now, registeredByUserId: c.uid,

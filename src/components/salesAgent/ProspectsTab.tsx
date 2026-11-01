@@ -14,7 +14,7 @@ import { useToast } from '../../hooks/use-toast';
 import { getTimestampMs } from '../../lib/utils';
 import { safeExternalUrl } from '../../lib/safeUrl';
 import { cancelProspectSearch, createProspectSearch, describeSalesAgentError, registerProspects, rejectProspect, SalesAgentApiError } from '../../lib/salesAgent/api';
-import { estimateSearchRequests, SEARCH_BLOCK_LABELS, PLACES_PAGE_SIZE } from '../../lib/salesAgent/prospecting';
+import { buildCallScript, buildFirstEmailDraft, estimateSearchRequests, prospectServiceLine, SEARCH_BLOCK_LABELS, PLACES_PAGE_SIZE, type SalesAgentPersona } from '../../lib/salesAgent/prospecting';
 import type { Prospect, ProspectSearch } from '../../types';
 import { PROSPECT_STATUS_CLASS, PROSPECT_STATUS_LABELS, SEARCH_STATUS_CLASS, SEARCH_STATUS_LABELS, reasonLabel } from './labels';
 
@@ -29,6 +29,19 @@ interface Props {
   coldWaEnabled: boolean;
   placesUsed: number;
   placesBudget: number;
+  /** Current persona: the drafts are re-rendered with it, never shown from the stale snapshot. */
+  persona: SalesAgentPersona;
+}
+
+/** Drafts with TODAY's persona (a rename must reach them); the stored snapshot only when the service line is unknown. */
+function liveDrafts(p: Prospect, persona: SalesAgentPersona): { email: string; call: string } {
+  const serviceLine = prospectServiceLine(p);
+  if (!serviceLine) return { email: p.firstMessageDraft || '', call: p.callScript || '' };
+  const input = {
+    prospect: { name: p.name || '', category: p.category ?? null, city: p.city ?? null, website: p.website ?? null, rating: p.rating ?? null, reviewCount: p.reviewCount ?? null },
+    persona, serviceLine, senderName: null,
+  };
+  return { email: buildFirstEmailDraft(input).body, call: buildCallScript(input) };
 }
 
 const fmtDate = (v: unknown) => { const ms = getTimestampMs(v); return ms ? new Date(ms).toLocaleString('sq-AL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''; };
@@ -43,7 +56,7 @@ function FitBar({ score }: { score: number }) {
   );
 }
 
-export default function ProspectsTab({ canEdit, coldWaEnabled, placesUsed, placesBudget }: Props) {
+export default function ProspectsTab({ canEdit, coldWaEnabled, placesUsed, placesBudget, persona }: Props) {
   const { toast } = useToast();
   const { data: searches } = useCollection<ProspectSearch>('prospectSearches', { orderBy: { field: 'createdAt', direction: 'desc' } });
   const { data: prospects, loading } = useCollection<Prospect>('prospects', { orderBy: { field: 'fitScore', direction: 'desc' } });
@@ -212,19 +225,19 @@ export default function ProspectsTab({ canEdit, coldWaEnabled, placesUsed, place
                       </div>
                     </div>
                   </div>
-                  {open && (
+                  {open && (() => { const d = liveDrafts(p, persona); return (
                     <div className="mt-3 grid lg:grid-cols-2 gap-3">
                       <div className="rounded-md border p-3 bg-muted/20">
-                        <div className="flex items-center justify-between mb-1"><span className="text-xs font-semibold">Mesazhi i parë (draft)</span>{p.firstMessageDraft && <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => copy(p.firstMessageDraft || '')}><Copy className="w-3 h-3 mr-1" />Kopjo</Button>}</div>
-                        <p className="text-xs whitespace-pre-wrap">{p.firstMessageDraft || 'Gjenerohet kur prospekti regjistrohet.'}</p>
+                        <div className="flex items-center justify-between mb-1"><span className="text-xs font-semibold">Mesazhi i parë (draft)</span>{d.email && <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => copy(d.email)}><Copy className="w-3 h-3 mr-1" />Kopjo</Button>}</div>
+                        <p className="text-xs whitespace-pre-wrap">{d.email || 'Gjenerohet kur prospekti regjistrohet.'}</p>
                       </div>
                       <div className="rounded-md border p-3 bg-muted/20">
-                        <div className="flex items-center justify-between mb-1"><span className="text-xs font-semibold">Skripti i telefonatës</span>{p.callScript && <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => copy(p.callScript || '')}><Copy className="w-3 h-3 mr-1" />Kopjo</Button>}</div>
-                        <p className="text-xs whitespace-pre-wrap">{p.callScript || '—'}</p>
+                        <div className="flex items-center justify-between mb-1"><span className="text-xs font-semibold">Skripti i telefonatës</span>{d.call && <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => copy(d.call)}><Copy className="w-3 h-3 mr-1" />Kopjo</Button>}</div>
+                        <p className="text-xs whitespace-pre-wrap">{d.call || '—'}</p>
                       </div>
                       {p.address && <p className="text-xs text-muted-foreground lg:col-span-2">{p.address}{p.rejectReason ? ` · Arsyeja e refuzimit: ${reasonLabel(p.rejectReason)}` : ''}</p>}
                     </div>
-                  )}
+                  ); })()}
                 </li>
               );
             })}

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizePlace, normalizeWebsite, websiteHost, isSocialOnlyWebsite, normalizeName, dedupeKeysFor, findDuplicate,
-  fitScore, estimateSearchRequests, searchBlockReason, prospectExpiresAt, buildFirstEmailDraft, buildCallScript, buildColdWaDraft,
+  fitScore, estimateSearchRequests, prospectServiceLine, searchBlockReason, prospectExpiresAt, buildFirstEmailDraft, buildCallScript, buildColdWaDraft,
   PLACES_TEXT_SEARCH_FIELD_MASK, PROSPECT_TTL_DAYS, type ProspectDraft, type SalesAgentIcp,
 } from './prospecting';
 import { renderTemplate, SALES_AGENT_DEFAULTS } from './core';
@@ -115,6 +115,16 @@ describe('first-contact drafts', () => {
     expect(e.body).toContain('asistentja virtuale e Bos Marketing');
     expect(e.body).toContain('Jo, faleminderit');
     expect(e.body).toContain('Xhentil');
+  });
+  it('a renamed persona reaches drafts rebuilt from a stored snapshot', () => {
+    const old = buildFirstEmailDraft({ prospect: draft(), persona: { ...persona, businessName: 'Agjencia' }, serviceLine: 'seo', senderName: null });
+    const line = prospectServiceLine({ firstMessageDraft: old.body });
+    expect(line).toBe('seo');
+    expect(prospectServiceLine({ serviceLine: ' website ', firstMessageDraft: old.body })).toBe('website');
+    expect(prospectServiceLine({ firstMessageDraft: null })).toBeNull();
+    const fresh = buildFirstEmailDraft({ prospect: draft(), persona, serviceLine: line!, senderName: null });
+    expect(fresh.body).toContain('asistentja virtuale e Bos Marketing');
+    expect(fresh.body).not.toContain('Agjencia');
   });
   it('call script and cold WA draft', () => {
     const s = buildCallScript({ prospect: draft(), persona, serviceLine: 'SEO lokal', senderName: 'Xhentil' });

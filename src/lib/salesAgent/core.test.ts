@@ -277,6 +277,11 @@ describe('prompt & facts', () => {
     expect(ensureDisclosure('Jam Ana, asistentja virtuale e Bos Marketing. Po.', persona, 'Bos Marketing', true)).toBe('Jam Ana, asistentja virtuale e Bos Marketing. Po.');
     expect(ensureDisclosure('Po, bëjmë SEO.', persona, 'Bos Marketing', false)).toBe('Po, bëjmë SEO.');
   });
+  it('the persona business name wins over the FivoCRM tenant name in the intro', () => {
+    const persona = { ...settings().persona, businessName: 'Bos Marketing' };
+    expect(ensureDisclosure('Si mund të ndihmoj?', persona, 'Agjencia', true)).toContain('asistentja virtuale e Bos Marketing');
+    expect(ensureDisclosure('Po.', { ...persona, businessName: '' }, 'Agjencia', true)).toContain('asistentja virtuale e Agjencia');
+  });
 });
 
 describe('templates & cold WhatsApp', () => {
