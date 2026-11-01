@@ -233,6 +233,12 @@ describe('prompt & facts', () => {
     expect(r).toContain('Website: çmimi me ofertë');
     expect(r).toContain('OBJEKSIONEVE');
   });
+  it('renders a catalogue card duration and features (ServicesView fields)', () => {
+    const r = renderSalesFacts({ ...facts, services: [{ name: 'Social Media', price: 250, currency: 'EUR', unit: 'në muaj', duration: '3 muaj', features: ['12 postime', '4 reels', ''] }] });
+    expect(r).toContain('Social Media: 250 EUR/në muaj');
+    expect(r).toContain('kohëzgjatja: 3 muaj');
+    expect(r).toContain('përfshin: 12 postime; 4 reels');
+  });
   it('the prompt carries persona, disclosure, rules, facts and the JSON contract', () => {
     const p = buildSalesAgentPrompt({
       settings: settings({ autonomy: 2 }), facts, contactName: 'Arben', contactKind: 'lead', leadStatus: 'New', stage: 'qualifying',

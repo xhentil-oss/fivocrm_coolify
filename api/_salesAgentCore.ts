@@ -622,7 +622,7 @@ export function buildLeadSummary(name: string, collected: Record<string, string>
 
 // ── Facts → prompt ──────────────────────────────────────────────────────────
 
-export interface ServiceFact { name: string; category?: string | null; price?: number | null; currency?: string | null; unit?: string | null; description?: string | null }
+export interface ServiceFact { name: string; category?: string | null; price?: number | null; currency?: string | null; unit?: string | null; description?: string | null; duration?: string | null; features?: string[] | null }
 export interface KnowledgeFact { kind: 'faq' | 'objection' | 'policy' | 'service-note'; question: string; answer: string }
 
 export interface SalesFacts {
@@ -644,6 +644,9 @@ export function renderSalesFacts(f: SalesFacts): string {
     for (const s of f.services.slice(0, 40)) {
       const price = typeof s.price === 'number' && s.price > 0 ? `${s.price} ${s.currency || 'EUR'}${s.unit ? `/${s.unit}` : ''}` : 'çmimi me ofertë';
       lines.push(`- ${s.name}${s.category ? ` [${s.category}]` : ''}: ${price}${s.description ? ` — ${s.description.slice(0, 140)}` : ''}`);
+      if (s.duration) lines.push(`  · kohëzgjatja: ${s.duration.slice(0, 60)}`);
+      const feats = (s.features || []).filter(Boolean).slice(0, 6);
+      if (feats.length) lines.push(`  · përfshin: ${feats.map((x) => x.slice(0, 80)).join('; ')}`);
     }
   } else {
     lines.push('SHËRBIMET: (asnjë në katalog — mos thuaj çmime, ofro bisedë me kolegun)');

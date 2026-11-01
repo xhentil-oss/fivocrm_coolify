@@ -153,13 +153,23 @@ export async function loadAgentCtx(teamId: string, businessIdHint?: string | nul
 export async function loadSalesFacts(ctx: AgentCtx): Promise<SalesFacts> {
   const services: ServiceFact[] = [];
   try {
-    let snap = await db.collection('services').where('teamId', '==', ctx.teamId).limit(60).get();
-    if (snap.empty) snap = await db.collection('services').where('businessId', '==', ctx.businessId).limit(60).get();
-    snap.docs.forEach((d) => {
+    // Same scope as /app/services (business-wide, skipTeamFilter), plus legacy rows that
+    // carry only the team id. The catalogue is read on EVERY reply — no cache — so an
+    // edit in Shërbimet reaches Ana on the next message.
+    const [byBiz, byTeam] = await Promise.all([
+      db.collection('services').where('businessId', '==', ctx.businessId).limit(80).get(),
+      db.collection('services').where('teamId', '==', ctx.teamId).limit(80).get(),
+    ]);
+    const seen = new Set<string>();
+    [...byBiz.docs, ...byTeam.docs].forEach((d) => {
+      if (seen.has(d.id)) return;
+      seen.add(d.id);
       const s = d.data() as any;
       if (s?.isActive === false || s?.active === false) return;
-      const name = str(s?.name, 120);
+      // ServicesView writes `title`; older/imported rows use `name`.
+      const name = str(s?.name, 120) || str(s?.title, 120);
       if (!name) return;
+      const features = Array.isArray(s?.features) ? s.features.map((x: unknown) => str(x, 80)).filter(Boolean).slice(0, 6) : null;
       services.push({
         name,
         category: str(s?.category, 60) || null,
@@ -167,6 +177,8 @@ export async function loadSalesFacts(ctx: AgentCtx): Promise<SalesFacts> {
         currency: str(s?.currency, 6) || null,
         unit: str(s?.billingPeriod || s?.unit, 30) || null,
         description: str(s?.description, 200) || null,
+        duration: str(s?.duration, 60) || null,
+        features: features && features.length ? features : null,
       });
     });
   } catch (err) { console.error('[salesAgent] services read failed', err); }
