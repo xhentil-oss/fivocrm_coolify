@@ -16,14 +16,14 @@ import { findCustomerForContact, findLeadForContact } from './_contactIdentity.j
 import { placesKeyProbe, resolvePlacesKey } from './_placesClient.js';
 import {
   SALES_AGENT_AVATAR_PATH, SALES_AGENT_LIMITS, SALES_AGENT_TITLE, SALES_AGENT_UID,
-  agentGateReason, allowedIntentsForAutonomy, buildLeadSummary, buildSalesAgentPrompt, buildSalesDigest, decideDelivery,
+  agentGateReason, allowedIntentsForAutonomy, buildLeadSummary, buildSalesAgentPromptParts, buildSalesDigest, decideDelivery,
   detectHandoffTrigger, ensureDisclosure, inWindow, leadAgentScore, localParts, mergeCollected, monthKeyOf, nextStage,
   parseAgentOutput, qualificationProgress, resolveSalesAgentSettings, salesAgentProfileDocId, salesAgentRunId,
   type AgentModelOutput, type AgentStage, type ConversationAgentLike, type DeliveryDecision, type DeliveryMode,
   type HandoffReason, type SalesAgentAutonomy, type SalesAgentBlockReason, type SalesAgentSettings, type SalesDigestFacts,
   type SalesFacts, type KnowledgeFact, type ServiceFact,
 } from './_salesAgentCore.js';
-import { SEARCH_BLOCK_LABELS, estimateSearchRequests, searchBlockReason } from './_salesAgentProspecting.js';
+import { SEARCH_BLOCK_LABELS, buildCallScript, estimateSearchRequests, prospectServiceLine, searchBlockReason, type SalesAgentPersona } from './_salesAgentProspecting.js';
 
 /**
  * Ana — the virtual sales agent. Server side.
@@ -153,13 +153,23 @@ export async function loadAgentCtx(teamId: string, businessIdHint?: string | nul
 export async function loadSalesFacts(ctx: AgentCtx): Promise<SalesFacts> {
   const services: ServiceFact[] = [];
   try {
-    let snap = await db.collection('services').where('teamId', '==', ctx.teamId).limit(60).get();
-    if (snap.empty) snap = await db.collection('services').where('businessId', '==', ctx.businessId).limit(60).get();
-    snap.docs.forEach((d) => {
+    // Same scope as /app/services (business-wide, skipTeamFilter), plus legacy rows that
+    // carry only the team id. The catalogue is read on EVERY reply — no cache — so an
+    // edit in Shërbimet reaches Ana on the next message.
+    const [byBiz, byTeam] = await Promise.all([
+      db.collection('services').where('businessId', '==', ctx.businessId).limit(80).get(),
+      db.collection('services').where('teamId', '==', ctx.teamId).limit(80).get(),
+    ]);
+    const seen = new Set<string>();
+    [...byBiz.docs, ...byTeam.docs].forEach((d) => {
+      if (seen.has(d.id)) return;
+      seen.add(d.id);
       const s = d.data() as any;
       if (s?.isActive === false || s?.active === false) return;
-      const name = str(s?.name, 120);
+      // ServicesView writes `title`; older/imported rows use `name`.
+      const name = str(s?.name, 120) || str(s?.title, 120);
       if (!name) return;
+      const features = Array.isArray(s?.features) ? s.features.map((x: unknown) => str(x, 80)).filter(Boolean).slice(0, 6) : null;
       services.push({
         name,
         category: str(s?.category, 60) || null,
@@ -167,6 +177,8 @@ export async function loadSalesFacts(ctx: AgentCtx): Promise<SalesFacts> {
         currency: str(s?.currency, 6) || null,
         unit: str(s?.billingPeriod || s?.unit, 30) || null,
         description: str(s?.description, 200) || null,
+        duration: str(s?.duration, 60) || null,
+        features: features && features.length ? features : null,
       });
     });
   } catch (err) { console.error('[salesAgent] services read failed', err); }
@@ -312,6 +324,9 @@ export interface DecideResult {
   model: string | null;
   provider: string | null;
   tokens: number;
+  /** Anthropic prompt caching (0 on other providers). */
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   prompt: string;
   error: string | null;
 }
@@ -320,20 +335,22 @@ export async function decideReply(i: DecideInput): Promise<DecideResult> {
   const s = i.ctx.settings;
   const prevCollected = i.agentState?.collected || {};
   const stage: AgentStage = i.agentState?.stage || 'greeting';
-  const prompt = buildSalesAgentPrompt({
+  const promptParts = buildSalesAgentPromptParts({
     settings: s, facts: i.facts, contactName: i.contactName, contactKind: i.contactKind, leadStatus: i.leadStatus ?? null,
     stage, collected: prevCollected, channel: i.channel, nowLabel: nowLabelFor(i.now), isFirstAgentMessage: i.isFirstAgentMessage,
   });
+  const prompt = `${promptParts.stable}\n\n${promptParts.dynamic}`;
   let output: AgentModelOutput;
-  let model: string | null = null; let provider: string | null = null; let tokens = 0; let error: string | null = null;
+  let model: string | null = null; let provider: string | null = null; let tokens = 0; let cacheReadTokens = 0; let cacheWriteTokens = 0; let error: string | null = null;
   if (i.trigger) {
     // A deterministic trigger needs no model call: the decision is a handoff whatever the model would say.
     output = { reply: '', intent: i.trigger === 'complaint' ? 'complaint' : i.trigger === 'asked-for-human' ? 'human' : 'other', confidence: 1, collected: {}, priceFromFacts: false, handoff: i.trigger, language: 'sq' };
   } else {
     try {
-      const r = await generateChatWith(i.aiCfg, prompt, i.history, { maxTokens: 500, temperature: 0.3 });
+      const r = await generateChatWith(i.aiCfg, promptParts, i.history, { maxTokens: 500, temperature: 0.3 });
       output = parseAgentOutput(r.reply);
       model = r.model; provider = r.provider; tokens = r.tokensUsed || 0;
+      cacheReadTokens = r.cacheReadTokens || 0; cacheWriteTokens = r.cacheWriteTokens || 0;
     } catch (err) {
       const c = classifyAiError(err);
       error = `${c.code}: ${String((err as Error)?.message || err).slice(0, 200)}`;
@@ -353,7 +370,7 @@ export async function decideReply(i: DecideInput): Promise<DecideResult> {
     });
   const progress = qualificationProgress(collected, s.qualificationFields);
   const next = nextStage(stage, { decision, intent: output.intent, progress, autonomy: s.autonomy });
-  return { output, decision, stage: next, collected, progressed, qualified: progress.qualified, model, provider, tokens, prompt, error };
+  return { output, decision, stage: next, collected, progressed, qualified: progress.qualified, model, provider, tokens, cacheReadTokens, cacheWriteTokens, prompt, error };
 }
 
 // ── Sending as the agent ──────────────────────────────────────────────────────
@@ -515,7 +532,7 @@ export async function runSalesAgentOnInbound(a: InboundHookArgs): Promise<SalesA
     if (result.model) {
       db.collection('aiUsageLogs').add({
         userId: null, teamId: a.teamId, businessId: a.businessId, feature: AGENT_AUTOMATION_KIND, conversationId: a.conversationId,
-        tokensUsed: result.tokens, model: result.model, provider: result.provider, createdAt: new Date(),
+        tokensUsed: result.tokens, cacheReadTokens: result.cacheReadTokens, cacheWriteTokens: result.cacheWriteTokens, model: result.model, provider: result.provider, createdAt: new Date(),
       }).catch(() => {});
     }
     const target: AgentSendTarget = {
@@ -525,7 +542,7 @@ export async function runSalesAgentOnInbound(a: InboundHookArgs): Promise<SalesA
     const outcome = await executeDecision({ ctx, result, target, conversationId: a.conversationId, conv, agentState, leadId: a.leadId, lead: a.lead, customerId: a.customerId, contactName: a.contactName, waMessageId: a.event.waMessageId, isFirstAgentMessage, dateKey, now, conversationOwnerId: a.conversationOwnerId ?? conv?.ownerId ?? null });
     await runRef.set({
       decision: outcome.decision, blockReason: outcome.blockReason, handoffReason: result.decision.handoffReason,
-      intent: result.output.intent, confidence: result.output.confidence, model: result.model, tokens: result.tokens,
+      intent: result.output.intent, confidence: result.output.confidence, model: result.model, tokens: result.tokens, cacheReadTokens: result.cacheReadTokens, cacheWriteTokens: result.cacheWriteTokens,
       replyText: outcome.replyText, error: result.error || outcome.error, stage: result.stage, updatedAt: Timestamp.now(),
     }, { merge: true }).catch(() => {});
     return { decision: outcome.decision, blockReason: outcome.blockReason, handoffReason: result.decision.handoffReason, intent: result.output.intent, model: result.model };
@@ -734,6 +751,20 @@ async function handleEnable(res: VercelResponse, c: Caller, body: Record<string,
   return res.status(200).json({ ok: true, settings: toStore });
 }
 
+/**
+ * The call script with the persona as it is NOW. Stored drafts are a snapshot from
+ * the search; renaming the persona ("Agjencia" → "Bos Marketing") must not leave the
+ * old name in what staff read or what lands on the lead.
+ */
+function liveCallScript(p: any, persona: SalesAgentPersona): string {
+  const serviceLine = prospectServiceLine(p);
+  if (!serviceLine) return p?.callScript ? String(p.callScript) : '';
+  return buildCallScript({
+    prospect: { name: String(p.name || ''), category: p.category ?? null, city: p.city ?? null, website: p.website ?? null, rating: p.rating ?? null, reviewCount: p.reviewCount ?? null },
+    persona, serviceLine, senderName: null,
+  });
+}
+
 async function handleSettingsTest(res: VercelResponse, c: Caller, body: Record<string, any>) {
   const gate = await requireStaff(c, str(body.teamId, 128));
   if (isGateError(gate)) return res.status(gate.status).json({ error: gate.error });
@@ -854,7 +885,7 @@ async function handleProspectRegister(res: VercelResponse, c: Caller, body: Reco
     });
     await db.collection('leadActivities').add({
       leadId: leadRef.id, teamId: ctx.teamId, businessId: ctx.businessId, type: 'created', title: 'Lead i regjistruar nga prospektimi në Google Maps',
-      body: p.callScript ? String(p.callScript).slice(0, 300) : '', meta: { prospectId: pid, placeId: p.placeId, fitScore: p.fitScore }, userId: c.uid, userName: null, createdAt: now,
+      body: liveCallScript(p, ctx.settings.persona).slice(0, 300), meta: { prospectId: pid, placeId: p.placeId, fitScore: p.fitScore }, userId: c.uid, userName: null, createdAt: now,
     }).catch(() => {});
     await snap.ref.set({
       status: 'registered', leadId: leadRef.id, registeredAt: now, registeredByUserId: c.uid,
@@ -935,7 +966,7 @@ async function handleSimulate(res: VercelResponse, c: Caller, body: Record<strin
     minutesSinceHumanReply: null, now, trigger: detectHandoffTrigger(h.clientText),
   });
   if (r.model) {
-    db.collection('aiUsageLogs').add({ userId: c.uid, teamId: ctx.teamId, businessId: ctx.businessId, feature: 'sales-agent-sim', tokensUsed: r.tokens, model: r.model, provider: r.provider, createdAt: new Date() }).catch(() => {});
+    db.collection('aiUsageLogs').add({ userId: c.uid, teamId: ctx.teamId, businessId: ctx.businessId, feature: 'sales-agent-sim', tokensUsed: r.tokens, cacheReadTokens: r.cacheReadTokens, cacheWriteTokens: r.cacheWriteTokens, model: r.model, provider: r.provider, createdAt: new Date() }).catch(() => {});
   }
   if (r.error) return res.status(502).json({ error: 'Modeli nuk u përgjigj', detail: r.error });
   const reply = r.decision.mode === 'handoff' ? (ctx.settings.autonomy >= 1 ? HANDOFF_LINE : '') : ensureDisclosure(r.output.reply, ctx.settings.persona, ctx.tenantName, !h.history.some((m) => m.role === 'assistant'));
@@ -972,7 +1003,7 @@ async function handleReplyDraft(res: VercelResponse, c: Caller, body: Record<str
     minutesSinceHumanReply: null, now, trigger: null,
   });
   if (r.model) {
-    db.collection('aiUsageLogs').add({ userId: c.uid, teamId: ctx.teamId, businessId: ctx.businessId, feature: AGENT_AUTOMATION_KIND, conversationId: conv.ref.id, tokensUsed: r.tokens, model: r.model, provider: r.provider, createdAt: new Date() }).catch(() => {});
+    db.collection('aiUsageLogs').add({ userId: c.uid, teamId: ctx.teamId, businessId: ctx.businessId, feature: AGENT_AUTOMATION_KIND, conversationId: conv.ref.id, tokensUsed: r.tokens, cacheReadTokens: r.cacheReadTokens, cacheWriteTokens: r.cacheWriteTokens, model: r.model, provider: r.provider, createdAt: new Date() }).catch(() => {});
   }
   if (r.error) return res.status(502).json({ error: 'Modeli nuk u përgjigj', detail: r.error });
   const text = r.decision.mode === 'handoff' ? HANDOFF_LINE : ensureDisclosure(r.output.reply, ctx.settings.persona, ctx.tenantName, !thread.agentSpokeBefore);

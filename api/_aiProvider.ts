@@ -26,6 +26,20 @@ import { AI_PROVIDERS, classifyAiError, resolveProviderChoice, type AiProviderNa
 export type { AiProviderName } from './_aiErrors.js';
 export type ChatMsg = { role: 'user' | 'assistant'; content: string };
 
+/**
+ * A system prompt, optionally split for prompt caching. `stable` must be
+ * byte-identical between calls (persona, rules, facts) and is cached on Anthropic
+ * (`cache_control` on that block, re-read at ~10 % of the input price within the
+ * 5-min TTL); `dynamic` (clock, contact, state) follows the breakpoint. Gemini and
+ * OpenAI receive the two joined; their own caching is automatic and prefix-based,
+ * so the stable-first order helps there too.
+ */
+export type SystemPrompt = string | { stable: string; dynamic?: string };
+
+export function systemPromptText(s: SystemPrompt): string {
+  return typeof s === 'string' ? s : [s.stable, s.dynamic].filter(Boolean).join('\n\n');
+}
+
 export interface AiGenOptions {
   /** Hard cap on the answer length in tokens (default 400 for text, 1500 for chat). */
   maxTokens?: number;
@@ -46,6 +60,9 @@ export interface AiGenOptions {
 export interface AiChatResult {
   reply: string;
   tokensUsed: number;
+  /** Anthropic prompt caching: input tokens served from / written to the cache. */
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   model: string;
   provider: AiProviderName;
 }
@@ -216,7 +233,7 @@ const ANTHROPIC_THINKING_HEADROOM = 2048;
 
 async function callAnthropicChat(
   apiKey: string,
-  system: string,
+  system: SystemPrompt,
   msgs: ChatMsg[],
   model: string,
   opts: AiGenOptions = {},
@@ -236,10 +253,21 @@ async function callAnthropicChat(
   const modern = anthropicSupportsEffort(model);
   // `temperature` is deliberately NOT sent: the 5.x models reject sampling
   // parameters, and the defaults are right for an assistant.
+  // Prompt caching: a split prompt caches its stable block (5-min ephemeral TTL,
+  // refreshed on every hit). Below the model's minimum prefix (512–4096 tokens) the
+  // marker is silently ignored: no error, just no cache. A plain string is sent as
+  // before, because caching a prompt that changes every call only adds the 25 %
+  // write surcharge with no reads.
+  const systemParam: string | Anthropic.TextBlockParam[] | undefined = typeof system === 'string'
+    ? (system || undefined)
+    : [
+        { type: 'text', text: system.stable, cache_control: { type: 'ephemeral' } },
+        ...(system.dynamic ? [{ type: 'text' as const, text: system.dynamic }] : []),
+      ];
   const params: Anthropic.MessageCreateParamsNonStreaming = {
     model,
     max_tokens: modern ? replyCap + ANTHROPIC_THINKING_HEADROOM : replyCap,
-    ...(system ? { system } : {}),
+    ...(systemParam ? { system: systemParam } : {}),
     messages,
     ...(modern ? { output_config: { effort: 'low' } } : {}),
   };
@@ -263,9 +291,14 @@ async function callAnthropicChat(
     throw err;
   }
   const usage: any = response.usage || {};
+  const cacheReadTokens = Number(usage.cache_read_input_tokens) || 0;
+  const cacheWriteTokens = Number(usage.cache_creation_input_tokens) || 0;
   return {
     reply,
-    tokensUsed: (Number(usage.input_tokens) || 0) + (Number(usage.output_tokens) || 0),
+    // `input_tokens` excludes cached tokens, so the total adds both cache legs.
+    tokensUsed: (Number(usage.input_tokens) || 0) + (Number(usage.output_tokens) || 0) + cacheReadTokens + cacheWriteTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
     // `response.model` is the model that actually answered (a fallback may have).
     model: response.model || model,
     provider: 'anthropic',
@@ -290,13 +323,13 @@ export async function callAnthropicText(apiKey: string, model: string, prompt: s
 function callProviderChat(
   p: AiProviderName,
   apiKey: string,
-  system: string,
+  system: SystemPrompt,
   msgs: ChatMsg[],
   model: string,
   opts: AiGenOptions,
 ): Promise<AiChatResult> {
-  if (p === 'gemini') return callGeminiChat(apiKey, system, msgs, model, opts);
-  if (p === 'openai') return callOpenAiChat(apiKey, system, msgs, model, opts);
+  if (p === 'gemini') return callGeminiChat(apiKey, systemPromptText(system), msgs, model, opts);
+  if (p === 'openai') return callOpenAiChat(apiKey, systemPromptText(system), msgs, model, opts);
   return callAnthropicChat(apiKey, system, msgs, model, opts);
 }
 
@@ -323,7 +356,7 @@ export function providerOrder(cfg: ResolvedAiConfig): AiProviderName[] {
  */
 export async function generateChatWith(
   cfg: ResolvedAiConfig,
-  system: string,
+  system: SystemPrompt,
   messages: ChatMsg[],
   opts: AiGenOptions = {},
 ): Promise<AiChatResult> {
@@ -383,7 +416,7 @@ export async function generateChatWith(
 /** Chat completion using the tenant's configured provider (env fallback). */
 export async function generateChat(
   teamId: string | null | undefined,
-  system: string,
+  system: SystemPrompt,
   messages: ChatMsg[],
   opts: AiGenOptions = {},
 ): Promise<AiChatResult> {

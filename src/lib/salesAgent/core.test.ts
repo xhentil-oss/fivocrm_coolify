@@ -10,7 +10,7 @@ import {
   SALES_AGENT_DEFAULTS, SALES_AGENT_MAX_AUTONOMY, SALES_AGENT_LIMITS,
   resolveSalesAgentSettings, agentGateReason, decideDelivery, parseAgentOutput, sanitizeAgentReply,
   detectHandoffTrigger, qualificationProgress, mergeCollected, nextStage, leadAgentScore, buildLeadSummary,
-  buildSalesAgentPrompt, renderSalesFacts, ensureDisclosure, renderTemplate, ensureColdWaCompliance,
+  buildSalesAgentPrompt, buildSalesAgentPromptParts, renderSalesFacts, ensureDisclosure, renderTemplate, ensureColdWaCompliance,
   coldWaDailyQuota, coldWaBlockReason, coldWaPauseAfterFailure, nudgeBlockReason, buildNudgeText,
   handoffOverdue, buildSalesDigest, inWindow, localParts, salesAgentRunId, allowedIntentsForAutonomy,
   SALES_AGENT_BLOCK_LABELS, COLD_WA_BLOCK_LABELS, HANDOFF_LABELS,
@@ -233,6 +233,25 @@ describe('prompt & facts', () => {
     expect(r).toContain('Website: çmimi me ofertë');
     expect(r).toContain('OBJEKSIONEVE');
   });
+  it('renders a catalogue card duration and features (ServicesView fields)', () => {
+    const r = renderSalesFacts({ ...facts, services: [{ name: 'Social Media', price: 250, currency: 'EUR', unit: 'në muaj', duration: '3 muaj', features: ['12 postime', '4 reels', ''] }] });
+    expect(r).toContain('Social Media: 250 EUR/në muaj');
+    expect(r).toContain('kohëzgjatja: 3 muaj');
+    expect(r).toContain('përfshin: 12 postime; 4 reels');
+  });
+  it('the cached part is byte-stable across turns, contacts and clock; volatile state lives in the dynamic part', () => {
+    const base = { settings: settings({ autonomy: 2 }), facts, contactKind: 'lead' as const, leadStatus: 'New', channel: 'whatsapp' as const };
+    const a = buildSalesAgentPromptParts({ ...base, contactName: 'Arben', stage: 'greeting', collected: {}, nowLabel: 'e hënë, 3 nëntor 2026, 10:15', isFirstAgentMessage: true });
+    const b = buildSalesAgentPromptParts({ ...base, contactName: 'Elira', stage: 'qualifying', collected: { service: 'SEO' }, nowLabel: 'e martë, 4 nëntor 2026, 16:40', isFirstAgentMessage: false });
+    expect(a.stable).toBe(b.stable);
+    expect(a.stable).toContain('300 EUR/muaj');
+    expect(a.stable).not.toContain('Arben');
+    expect(a.stable).not.toContain('10:15');
+    expect(a.dynamic).toContain('Arben');
+    expect(a.dynamic).toContain('10:15');
+    expect(a.dynamic).toContain('Prezantohu');
+    expect(b.dynamic).not.toContain('Prezantohu');
+  });
   it('the prompt carries persona, disclosure, rules, facts and the JSON contract', () => {
     const p = buildSalesAgentPrompt({
       settings: settings({ autonomy: 2 }), facts, contactName: 'Arben', contactKind: 'lead', leadStatus: 'New', stage: 'qualifying',
@@ -257,6 +276,11 @@ describe('prompt & facts', () => {
     expect(ensureDisclosure('Po, bëjmë SEO.', persona, 'Bos Marketing', true)).toBe('Jam Ana, asistentja virtuale e Bos Marketing. Po, bëjmë SEO.');
     expect(ensureDisclosure('Jam Ana, asistentja virtuale e Bos Marketing. Po.', persona, 'Bos Marketing', true)).toBe('Jam Ana, asistentja virtuale e Bos Marketing. Po.');
     expect(ensureDisclosure('Po, bëjmë SEO.', persona, 'Bos Marketing', false)).toBe('Po, bëjmë SEO.');
+  });
+  it('the persona business name wins over the FivoCRM tenant name in the intro', () => {
+    const persona = { ...settings().persona, businessName: 'Bos Marketing' };
+    expect(ensureDisclosure('Si mund të ndihmoj?', persona, 'Agjencia', true)).toContain('asistentja virtuale e Bos Marketing');
+    expect(ensureDisclosure('Po.', { ...persona, businessName: '' }, 'Agjencia', true)).toContain('asistentja virtuale e Agjencia');
   });
 });
 

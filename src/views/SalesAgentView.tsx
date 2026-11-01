@@ -75,7 +75,7 @@ export default function SalesAgentView() {
             lastRun={lastRun} dailyReplyCap={agent.dailyReplyCap} placesBudget={agent.placesMonthlyBudget} onUsage={onUsage} />
         </TabsContent>
         <TabsContent value="prospects" className="mt-4">
-          <ProspectsTab canEdit={canAct} coldWaEnabled={agent.coldWa.enabled} placesUsed={usage.placesRequestsMonth} placesBudget={agent.placesMonthlyBudget} />
+          <ProspectsTab canEdit={canAct} coldWaEnabled={agent.coldWa.enabled} placesUsed={usage.placesRequestsMonth} placesBudget={agent.placesMonthlyBudget} persona={agent.persona} />
         </TabsContent>
         <TabsContent value="conversations" className="mt-4">
           <ConversationsTab personaName={agent.persona.name} canAct={canAct} />

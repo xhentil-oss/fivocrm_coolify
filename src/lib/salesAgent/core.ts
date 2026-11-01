@@ -622,7 +622,7 @@ export function buildLeadSummary(name: string, collected: Record<string, string>
 
 // ── Facts → prompt ──────────────────────────────────────────────────────────
 
-export interface ServiceFact { name: string; category?: string | null; price?: number | null; currency?: string | null; unit?: string | null; description?: string | null }
+export interface ServiceFact { name: string; category?: string | null; price?: number | null; currency?: string | null; unit?: string | null; description?: string | null; duration?: string | null; features?: string[] | null }
 export interface KnowledgeFact { kind: 'faq' | 'objection' | 'policy' | 'service-note'; question: string; answer: string }
 
 export interface SalesFacts {
@@ -644,6 +644,9 @@ export function renderSalesFacts(f: SalesFacts): string {
     for (const s of f.services.slice(0, 40)) {
       const price = typeof s.price === 'number' && s.price > 0 ? `${s.price} ${s.currency || 'EUR'}${s.unit ? `/${s.unit}` : ''}` : 'çmimi me ofertë';
       lines.push(`- ${s.name}${s.category ? ` [${s.category}]` : ''}: ${price}${s.description ? ` — ${s.description.slice(0, 140)}` : ''}`);
+      if (s.duration) lines.push(`  · kohëzgjatja: ${s.duration.slice(0, 60)}`);
+      const feats = (s.features || []).filter(Boolean).slice(0, 6);
+      if (feats.length) lines.push(`  · përfshin: ${feats.map((x) => x.slice(0, 80)).join('; ')}`);
     }
   } else {
     lines.push('SHËRBIMET: (asnjë në katalog — mos thuaj çmime, ofro bisedë me kolegun)');
@@ -675,8 +678,17 @@ export interface SalesPromptContext {
   isFirstAgentMessage: boolean;
 }
 
-/** The system prompt. Persona + hard rules + facts + state + the JSON contract. */
-export function buildSalesAgentPrompt(c: SalesPromptContext): string {
+/**
+ * The system prompt in two parts, for prompt caching (Anthropic):
+ * - `stable`  = persona + hard rules + FACTS + JSON contract. Identical for every
+ *   conversation of a tenant until the owner edits settings / catalogue /
+ *   knowledge, so it is cached and re-read at ~10 % of the input price.
+ * - `dynamic` = clock, channel, contact, stage, collected fields, this turn's hint.
+ *   Changes on every call, so it goes AFTER the cache breakpoint. Never move
+ *   anything volatile (time, names, ids) into `stable`: one changed byte there and
+ *   every call becomes a cache write instead of a read.
+ */
+export function buildSalesAgentPromptParts(c: SalesPromptContext): { stable: string; dynamic: string } {
   const s = c.settings;
   const p = s.persona;
   const business = p.businessName || c.facts.businessName || 'biznesit';
@@ -691,12 +703,12 @@ export function buildSalesAgentPrompt(c: SalesPromptContext): string {
     if (progress.qualified) return 'Klienti është i kualifikuar: përmblidh çfarë kuptove dhe propozo një takim të shkurtër me kolegun.';
     return `Mblidh me natyrshmëri fushën tjetër: ${progress.nextField ? QUALIFICATION_FIELDS[progress.nextField].label : '—'} ("${progress.nextQuestion || ''}"). NJË pyetje për mesazh.`;
   })();
-  return [
-    `Ti je ${p.name}, asistentja virtuale e shitjeve e ${business}. Punon në FivoCRM. Sot: ${c.nowLabel}. Kanali: ${c.channel}.`,
+  const stable = [
+    `Ti je ${p.name}, asistentja virtuale e shitjeve e ${business}. Punon në FivoCRM.`,
     `Gjuhët: ${langs}. Përgjigju në gjuhën e klientit (default shqip). ${tone}`,
     '',
     'RREGULLA TË PANEGOCIUESHME:',
-    `1. ${c.isFirstAgentMessage ? `Prezantohu në fjalinë e parë: "${p.name}, asistentja virtuale e ${business}".` : 'Nëse të pyesin a je robot/AI, thuaj sinqerisht që je asistente virtuale dhe ofro një koleg.'}`,
+    '1. Je asistente virtuale, jo njeri. Nëse të pyesin a je robot/AI, thuaj sinqerisht që je asistente virtuale dhe ofro një koleg.',
     '2. Shifrat (çmime, afate, zbritje) VETËM nga FAKTET më poshtë. Nëse fakti mungon: thuaj "këtë ua konfirmon kolegu im" dhe vendos handoff "custom-price". KURRË mos shpik çmim, mos premto afat, mos jep zbritje.',
     '3. Mos komento konkurrentët. Mos kërko të dhëna sensitive (karta, ID, fjalëkalime).',
     '4. Maksimumi 400 karaktere, NJË pyetje për mesazh, pa markdown, pa lista.',
@@ -706,15 +718,26 @@ export function buildSalesAgentPrompt(c: SalesPromptContext): string {
     'FAKTET:',
     renderSalesFacts(c.facts),
     '',
-    `KONTAKTI: ${c.contactName || 'i panjohur'} (${c.contactKind}${c.leadStatus ? `, statusi ${c.leadStatus}` : ''}). Faza: ${c.stage}.`,
-    'TË MBLEDHURA DERI TANI:',
-    collectedLines,
-    `UDHËZIM PËR KËTË KTHESË: ${stageHint}`,
-    '',
     'FORMATI I PËRGJIGJES — VETËM JSON, pa tekst tjetër:',
     '{"reply": "teksti për klientin", "intent": "greeting|question|answer|price|booking|complaint|human|off-topic|opt-out|bot-check|other", "confidence": 0.0-1.0, "collected": {"service"?: "...", "city"?: "...", "timeline"?: "...", "budget"?: "...", "decisionMaker"?: "..."}, "priceFromFacts": true|false, "handoff": null|"asked-for-human"|"complaint"|"sensitive-topic"|"custom-price"|"low-confidence"|"unsupported-language", "language": "sq"}',
     '"collected" përmban VETËM fushat që klienti i tha në këtë mesazh. "confidence" = sa e sigurt je që përgjigja është e saktë dhe e mjaftueshme.',
   ].join('\n');
+  const dynamic = [
+    'GJENDJA E KËSAJ BISEDE:',
+    `Sot: ${c.nowLabel}. Kanali: ${c.channel}.`,
+    ...(c.isFirstAgentMessage ? [`Ky është mesazhi yt i parë këtu. Prezantohu në fjalinë e parë: "${p.name}, asistentja virtuale e ${business}".`] : []),
+    `KONTAKTI: ${c.contactName || 'i panjohur'} (${c.contactKind}${c.leadStatus ? `, statusi ${c.leadStatus}` : ''}). Faza: ${c.stage}.`,
+    'TË MBLEDHURA DERI TANI:',
+    collectedLines,
+    `UDHËZIM PËR KËTË KTHESË: ${stageHint}`,
+  ].join('\n');
+  return { stable, dynamic };
+}
+
+/** The whole system prompt as one string (audit copy on the run doc, non-caching providers). */
+export function buildSalesAgentPrompt(c: SalesPromptContext): string {
+  const { stable, dynamic } = buildSalesAgentPromptParts(c);
+  return `${stable}\n\n${dynamic}`;
 }
 
 /** Guarantees the disclosure on the FIRST agent message of a thread (law 8), without doubling it. */
@@ -724,7 +747,9 @@ export function ensureDisclosure(reply: string, persona: SalesAgentPersona, busi
   const hasName = r.toLowerCase().includes(persona.name.toLowerCase());
   const hasVirtual = /virtual/i.test(r);
   if (hasName && hasVirtual) return r;
-  const biz = businessName || persona.businessName;
+  // The name the owner typed for the persona wins; the tenant/team name in FivoCRM
+  // ("Agjencia") is only the fallback when the persona field is empty.
+  const biz = persona.businessName || businessName;
   const intro = `Jam ${persona.name}, asistentja virtuale e ${biz || 'ekipit'}.`;
   return sanitizeAgentReply(`${intro} ${r}`);
 }

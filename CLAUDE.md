@@ -852,6 +852,14 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
   `stop_reason: 'refusal'` throws `code: 'ai-refusal'` → classified `refused` (502),
   never "invalid key". The form's radio cards / links / placeholders come from
   `AI_PROVIDER_META` (`src/lib/aiClient.ts`) and a pasted key re-selects its provider.
+- **Prompt caching is opt-in per caller** (1 Nov 2026): `generateChatWith` takes a
+  `SystemPrompt` = string | `{ stable, dynamic }`. Only the split form gets
+  `cache_control: ephemeral` on the `stable` block (Anthropic); Gemini/OpenAI get the
+  two joined. `stable` must be byte-identical between calls (persona, rules, facts,
+  JSON contract) — a clock, a name or an id in it turns every call into a cache WRITE
+  (+25 %). Ana uses it (`buildSalesAgentPromptParts`, test-pinned); `cacheReadTokens` /
+  `cacheWriteTokens` land on `salesAgentRuns` + `aiUsageLogs`. A plain-string caller
+  is unchanged.
 
 ### WhatsApp via Baileys (VPS): agent lifecycle & honest send status
 

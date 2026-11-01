@@ -285,6 +285,16 @@ export function buildFirstEmailDraft(i: FirstContactInput): { subject: string; b
   return { subject, body };
 }
 
+/**
+ * The service line a prospect's drafts were written for. New rows store it; older
+ * rows only have it inside the stored email draft ("… me <serviceLine>.").
+ */
+export function prospectServiceLine(p: { serviceLine?: string | null; firstMessageDraft?: string | null }): string | null {
+  if (p.serviceLine && p.serviceLine.trim()) return p.serviceLine.trim();
+  const m = /Ndihmojmë biznese si juaji[^\n]*? me ([^\n]+?)\.(?:\n|$)/.exec(p.firstMessageDraft || '');
+  return m ? m[1].trim() : null;
+}
+
 /** The script a HUMAN reads when calling. Never sent anywhere. */
 export function buildCallScript(i: FirstContactInput): string {
   const p = i.prospect;
