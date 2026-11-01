@@ -94,6 +94,9 @@ export const NOTIFICATION_TYPES = {
   lead_created:             { category: 'projects', priority: 'info',     groupLabel: 'lead të rinj' },
   lead_assigned:            { category: 'projects', priority: 'info',     groupLabel: 'lead të caktuar' },
   lead_converted:           { category: 'projects', priority: 'success' },
+  // A CLIENT asked for something new (landing / portal brief): a Deal on the client,
+  // never a second lead (src/lib/crm/contactRoute.ts).
+  deal_created:             { category: 'projects', priority: 'info',     groupLabel: 'kërkesa nga klientët' },
   // Emitted through notifyStaff() when a portal client self-registers
   // (useClientPortal) — was live but unregistered, so it had no icon and no mute.
   new_client:               { category: 'projects', priority: 'success',  groupLabel: 'klientë të rinj' },

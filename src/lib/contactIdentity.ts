@@ -1,9 +1,10 @@
 /**
  * Contact identity — the single source of truth for "is this the same person?".
  *
- * A contact can legitimately be BOTH a lead and a customer (a client who asks
- * for a new service is still a prospect for that service). What must never
- * happen is two records for the same person that don't know about each other.
+ * A lead is the person BEFORE they are a client. Once they are one, the lead
+ * is closed (`Converted`) and kept as history, and new business from them is a
+ * Deal — `routeContact()` / `crm/contactRoute.ts` decide which (Nov 2026; it
+ * used to be "a client may also be an open lead"). Email OR phone is identity.
  * Every write path — manual create in CRM/Customers, landing form, portal
  * login, WHMCS sync — resolves identity through these helpers so the matching
  * rules can't drift apart per screen.
@@ -12,6 +13,7 @@
  */
 
 import { normalizeAlbanianPhone } from './utils';
+import { resolveContactRoute, type ContactIntent, type ContactRoute } from './crm/contactRoute';
 
 /** Minimum digits before a phone number is trustworthy enough to match on. */
 const MIN_PHONE_DIGITS = 7;
@@ -100,4 +102,29 @@ export function findContactMatch<T extends ContactLike & { id: string }>(
 /** Albanian label for the matched field, for toasts and dialogs. */
 export function matchFieldLabel(on: MatchField): string {
   return on === 'email' ? 'email-i' : 'numri i telefonit';
+}
+
+/**
+ * Lead or client? Matches the candidate (email OR phone) against the tenant's
+ * leads and customers and asks `resolveContactRoute` — the one decision every
+ * write path shares (a client never gets an open lead; see crm/contactRoute.ts).
+ */
+export function routeContact<
+  L extends ContactLike & { id: string; status?: string | null; customerId?: string | null },
+  C extends ContactLike & { id: string; status?: string | null },
+>(
+  candidate: ContactLike,
+  leads: L[] | null | undefined,
+  customers: C[] | null | undefined,
+  intent: ContactIntent,
+): ContactRoute & { customer: C | null; matchedLeads: L[]; customerMatchedOn: MatchField | null } {
+  const matchedLeads = findContactMatches(candidate, leads).map(m => m.record);
+  const customerMatch = findContactMatch(candidate, customers);
+  const customer = customerMatch?.record ?? null;
+  return {
+    ...resolveContactRoute({ leads: matchedLeads, customer, intent }),
+    customer,
+    matchedLeads,
+    customerMatchedOn: customerMatch?.on ?? null,
+  };
 }

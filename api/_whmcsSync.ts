@@ -20,7 +20,7 @@ import {
   type MappedClient,
   type MappedClientFull,
 } from './_whmcs.js';
-import { findLeadForContact, crossLinkLeadCustomer } from './_contactIdentity.js';
+import { convertLeadsForCustomer } from './_contactIdentity.js';
 
 /**
  * WHMCS → FivoCRM sync layer.
@@ -170,8 +170,10 @@ async function resolveCustomer(client: MappedClient | null, teamId: string | nul
 }
 
 /**
- * Cross-links a WHMCS-sourced customer with a matching CRM lead, when one
- * exists. Best-effort: a failed link must never fail the sync.
+ * A WHMCS client is a paying client: every OPEN lead of the same person (email
+ * or phone) is closed as `Converted` and paired with the customer — a client
+ * never keeps an open lead (`_contactRoute.ts`). Best-effort: a failed link
+ * must never fail the sync.
  */
 async function linkExistingLead(
   customerId: string,
@@ -179,8 +181,7 @@ async function linkExistingLead(
 ): Promise<void> {
   try {
     const businessId = await resolveBusinessId(lookup.teamId);
-    const lead = await findLeadForContact(db, { ...lookup, businessId });
-    if (lead) await crossLinkLeadCustomer(db, lead.id, customerId);
+    await convertLeadsForCustomer(db, customerId, { ...lookup, businessId });
   } catch (err) {
     console.error('[whmcsSync] lead cross-link failed', { customerId, err });
   }
