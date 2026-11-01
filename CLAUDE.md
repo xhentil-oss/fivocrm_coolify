@@ -1461,6 +1461,12 @@ Full runbook: `workspace/WHMCS_SYNC.md`.
   agent → invoice team's → any, connected first) and sent with the AGENT's teamId —
   the number often lives on another department. `normalizeInvoiceWaPhone` turns
   Albanian local numbers (`69…`, `069…`, `00355…`) into `355…`.
+- **WHMCS invoices are chased BEFORE the due date on a cadence** (1 Nov 2026,
+  `whmcsCadence`, default ON): from 20 days ahead every 5 calendar days, from ≤10
+  days every 2, plus "skadon sot" on the due day (`waWhmcs*` settings). The
+  interval is CALENDAR days in Tirane (the job ticks every 2h inside a window),
+  each send increments `preDueWaCount` (its idempotency `n`). FivoCRM invoices keep
+  the once-only `preDueDays` stage.
 - WHMCS invoices are created with every FivoCRM reminder flag already `true`
   and `createdByUserId: null` — WHMCS emails them itself. `overdueEmailSkipWhmcs`
   stops FivoCRM's weekly overdue email duplicating that.

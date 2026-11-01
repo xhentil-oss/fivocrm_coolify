@@ -137,6 +137,16 @@ export interface TeamSettings {
   waInvoiceHourEnd?: number;
   /** Skip FivoCRM's weekly overdue EMAIL for WHMCS invoices (WHMCS mails them itself). Default false. */
   overdueEmailSkipWhmcs?: boolean;
+  /** WHMCS invoices: repeated pre-due reminders (default ON) instead of the once-only stage. */
+  waWhmcsCadenceEnabled?: boolean;
+  /** Cadence start, days before the due date (1–30). Default 20. */
+  waWhmcsWindowDays?: number;
+  /** Repeat every N calendar days while far from the due date. Default 5. */
+  waWhmcsEveryDays?: number;
+  /** From this many days left (inclusive)… Default 10. */
+  waWhmcsUrgentDays?: number;
+  /** …repeat every N calendar days. Default 2. */
+  waWhmcsUrgentEveryDays?: number;
   /** Written by the cron after each tick: { at, sent, blocked: {reason: n} }. */
   waInvoiceLastRun?: { at?: any; sent?: number; considered?: number; blocked?: Record<string, number> };
   leadAssignCursor?: number;              // round-robin cursor for landing-page auto-assignment

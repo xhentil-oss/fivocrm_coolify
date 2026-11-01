@@ -41,6 +41,8 @@ const cfg = (over: Partial<InvoiceWaConfig> = {}): InvoiceWaConfig => ({
   ...INVOICE_WA_DEFAULTS,
   enabled: true,
   channel: 'baileys',
+  // The fixtures are WHMCS invoices; the legacy-stage tests run without the cadence.
+  whmcsCadence: false,
   ...over,
 });
 const inv = (over: Partial<InvoiceWaInvoiceFacts> = {}): InvoiceWaInvoiceFacts => ({
@@ -81,6 +83,7 @@ describe('resolveInvoiceWaConfig', () => {
       enabled: true, sources: 'whmcs', channel: 'baileys', agentId: 'a1', text: 'Hi {{name}}', templateId: 't1',
       channelPhoneNumberId: 'p1', preDueDays: 3, onDue: true, overdueDays: 30, renotifyDays: 7, overdueMaxSends: 5, hourStart: 8, hourEnd: 20,
       emailSkipWhmcs: true,
+      whmcsCadence: true, whmcsWindowDays: 20, whmcsEveryDays: 5, whmcsUrgentDays: 10, whmcsUrgentEveryDays: 2,
     });
   });
   it('an invalid value falls back individually, never resetting its neighbours', () => {
@@ -134,6 +137,61 @@ describe('invoiceWaStage', () => {
     expect(invoiceWaStage(inv({ dueDateMs: dueIn(2), preDueWaSentAtMs: NOW - DAY }), cfg({ preDueDays: 3 }), ctx())).toEqual({ ok: false, reason: 'already-sent' });
   });
   it('no due date is a named reason', () => {
+    expect(invoiceWaStage(inv({ dueDateMs: null }), cfg(), ctx())).toEqual({ ok: false, reason: 'no-due-date' });
+  });
+});
+
+describe('WHMCS pre-due cadence (20 ditë → çdo 5, ≤10 → çdo 2)', () => {
+  const c = cfg({ whmcsCadence: true });
+  // Sent at 18:00 local `daysAgo` calendar days before NOW (12:00 local).
+  const sentDaysAgo = (n: number) => Date.parse('2026-09-14T16:00:00Z') - n * DAY;
+
+  it('is on by default with 20 / 5 / 10 / 2, and the urgent band never exceeds the window', () => {
+    const d = resolveInvoiceWaConfig({});
+    expect([d.whmcsCadence, d.whmcsWindowDays, d.whmcsEveryDays, d.whmcsUrgentDays, d.whmcsUrgentEveryDays]).toEqual([true, 20, 5, 10, 2]);
+    expect(resolveInvoiceWaConfig({ waWhmcsCadenceEnabled: false }).whmcsCadence).toBe(false);
+    expect(resolveInvoiceWaConfig({ waWhmcsWindowDays: 7, waWhmcsUrgentDays: 10 }).whmcsUrgentDays).toBe(7);
+    expect(resolveInvoiceWaConfig({ waWhmcsWindowDays: 31 }).whmcsWindowDays).toBe(20);
+  });
+  it('nothing before the window; the first send at 20 days left', () => {
+    expect(invoiceWaStage(inv({ dueDateMs: dueIn(21) }), c, ctx())).toEqual({ ok: false, reason: 'not-due' });
+    expect(invoiceWaStage(inv({ dueDateMs: dueIn(20) }), c, ctx())).toEqual({ ok: true, stage: 'pre-due', daysLate: -20 });
+  });
+  it('far from the due date: every 5 calendar days', () => {
+    expect(invoiceWaStage(inv({ dueDateMs: dueIn(16), preDueWaSentAtMs: sentDaysAgo(4) }), c, ctx())).toEqual({ ok: false, reason: 'already-sent' });
+    // Sent at 18:00 five days ago, now 12:00 → < 5×24h but 5 calendar days: goes.
+    expect(invoiceWaStage(inv({ dueDateMs: dueIn(15), preDueWaSentAtMs: sentDaysAgo(5) }), c, ctx())).toEqual({ ok: true, stage: 'pre-due', daysLate: -15 });
+  });
+  it('10 days or fewer: every 2 calendar days', () => {
+    expect(invoiceWaStage(inv({ dueDateMs: dueIn(10), preDueWaSentAtMs: sentDaysAgo(5) }), c, ctx())).toMatchObject({ ok: true });
+    expect(invoiceWaStage(inv({ dueDateMs: dueIn(9), preDueWaSentAtMs: sentDaysAgo(1) }), c, ctx())).toEqual({ ok: false, reason: 'already-sent' });
+    expect(invoiceWaStage(inv({ dueDateMs: dueIn(8), preDueWaSentAtMs: sentDaysAgo(2) }), c, ctx())).toEqual({ ok: true, stage: 'pre-due', daysLate: -8 });
+    expect(invoiceWaStage(inv({ dueDateMs: dueIn(2), preDueWaSentAtMs: sentDaysAgo(2) }), c, ctx())).toMatchObject({ ok: true });
+  });
+  it('a full run from 20 days out sends on 20, 15, 10, 8, 6, 4, 2 and "skadon sot" on the due day', () => {
+    const due = dueIn(20);
+    const sent: number[] = [];
+    let last: number | null = null;
+    let dueSent: number | null = null;
+    for (let day = 0; day <= 20; day++) {
+      const now = NOW + day * DAY;
+      const r = invoiceWaStage(inv({ dueDateMs: due, preDueWaSentAtMs: last, dueWaSentAtMs: dueSent }), c, ctx({ nowMs: now }));
+      if (!r.ok) continue;
+      sent.push(0 - r.daysLate || 0);
+      if (r.stage === 'pre-due') last = now; else dueSent = now;
+    }
+    expect(sent).toEqual([20, 15, 10, 8, 6, 4, 2, 0]);
+  });
+  it('the due day is sent once even without onDue; FivoCRM invoices keep the once-only stage', () => {
+    expect(invoiceWaStage(inv({ dueDateMs: NOW }), c, ctx())).toEqual({ ok: true, stage: 'due', daysLate: 0 });
+    expect(invoiceWaStage(inv({ dueDateMs: NOW, dueWaSentAtMs: NOW - 1000 }), c, ctx())).toEqual({ ok: false, reason: 'already-sent' });
+    expect(invoiceWaStage(inv({ source: 'fivocrm', dueDateMs: dueIn(15) }), c, ctx())).toEqual({ ok: false, reason: 'not-due' });
+    expect(invoiceWaStage(inv({ source: null, dueDateMs: NOW }), c, ctx())).toEqual({ ok: false, reason: 'not-due' });
+  });
+});
+
+describe('invoiceWaStage — misc', () => {
+  it('no due date is a named reason (cadence on)', () => {
     expect(invoiceWaStage(inv({ dueDateMs: null }), cfg(), ctx())).toEqual({ ok: false, reason: 'no-due-date' });
   });
 });
@@ -302,6 +360,8 @@ describe('idempotency key', () => {
     expect(invoiceWaIdempotencyKey('abc', 'overdue', 2)).toBe('inv_abc_overdue_2');
     expect(invoiceWaIdempotencyKey('abc', 'due', 7)).toBe('inv_abc_due_1');
     expect(invoiceWaIdempotencyKey('abc', 'pre-due', 0)).toBe('inv_abc_pre-due_1');
+    // The WHMCS cadence repeats the pre-due stage — each send has its own key.
+    expect(invoiceWaIdempotencyKey('abc', 'pre-due', 3)).toBe('inv_abc_pre-due_3');
   });
 });
 

@@ -1204,7 +1204,10 @@ async function runOverdueRemindersLeased(opts?: { businessId?: string | null }) 
     };
     const stampField = invoiceWaStageField(decision.stage);
     const isOverdueStage = decision.stage === 'overdue';
-    const sendsAfter = (Number(inv.overdueWaCount || 0) || 0) + 1;
+    const isPreDueStage = decision.stage === 'pre-due';
+    // The send number of THIS stage — the idempotency key's `n`. The WHMCS
+    // cadence repeats the pre-due stage, so it has its own counter.
+    const sendsAfter = (Number((isPreDueStage ? inv.preDueWaCount : inv.overdueWaCount) || 0) || 0) + 1;
     const reachesMax = isOverdueStage && sendsAfter >= cfg.overdueMaxSends && !inv.overdueWaMaxNotifiedAt;
 
     // Everything below happens ONLY after the provider accepted the message:
@@ -1217,6 +1220,7 @@ async function runOverdueRemindersLeased(opts?: { businessId?: string | null }) 
       await doc.ref.update({
         [stampField]: admin.firestore.Timestamp.now(),
         ...(isOverdueStage ? { overdueWaCount: admin.firestore.FieldValue.increment(1) } : {}),
+        ...(isPreDueStage ? { preDueWaCount: admin.firestore.FieldValue.increment(1) } : {}),
         ...(reachesMax ? { overdueWaMaxNotifiedAt: admin.firestore.Timestamp.now() } : {}),
         overdueWaLastError: null,
       });

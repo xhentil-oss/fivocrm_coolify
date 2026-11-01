@@ -7,7 +7,9 @@
 // hosting client gets a WhatsApp nudge.
 //
 // Three stages, each with its own idempotency stamp on the invoice:
-//   pre-due  → `preDueWaSentAt`   ("skadon për N ditë", once)
+//   pre-due  → `preDueWaSentAt`   ("skadon për N ditë", once — or, for a WHMCS
+//                                  invoice, the CADENCE below, counted in
+//                                  `preDueWaCount`)
 //   due      → `dueWaSentAt`      ("skadon sot", once)
 //   overdue  → `overdueWaSentAt`  (after `overdueDays` late, repeated every
 //                                  `renotifyDays`, at most `overdueMaxSends`
@@ -22,6 +24,15 @@
 // An email that FAILED (SMTP down, `overdueEmailFailedAt` newer than the last
 // success) does not count as "can go out": the email gate must never hold the
 // WhatsApp leg hostage to a broken mail server.
+//
+// WHMCS CADENCE (`whmcsCadence`, on by default): a WHMCS invoice is chased
+// BEFORE its due date on a rhythm, not once — from `whmcsWindowDays` (20) days
+// ahead every `whmcsEveryDays` (5), and from `whmcsUrgentDays` (10) days ahead
+// every `whmcsUrgentEveryDays` (2); the due day itself always gets "skadon sot"
+// once. Intervals are CALENDAR days in Europe/Tirane, never 24h blocks: the job
+// ticks every ~2h inside a send window, so a 5×24h gap would slip a day every
+// time the first send landed later in the window than the next tick.
+// FivoCRM's own invoices keep the once-only `preDueDays` stage.
 //
 // Every non-send is a NAMED reason (never a silent `continue`), counted into
 // `teamSettings.waInvoiceLastRun.blocked` so the panel can show "38 shqyrtuar →
@@ -62,6 +73,16 @@ export interface InvoiceWaConfig {
   hourEnd: number;
   /** Skip FivoCRM's weekly overdue EMAIL for WHMCS invoices (WHMCS mails them itself). */
   emailSkipWhmcs: boolean;
+  /** WHMCS invoices: repeated pre-due reminders instead of the once-only `preDueDays`. */
+  whmcsCadence: boolean;
+  /** Start the cadence this many days before the due date. */
+  whmcsWindowDays: number;
+  /** …and repeat every N calendar days… */
+  whmcsEveryDays: number;
+  /** …until this many days are left (inclusive)… */
+  whmcsUrgentDays: number;
+  /** …from where it repeats every N calendar days. */
+  whmcsUrgentEveryDays: number;
 }
 
 export const INVOICE_WA_DEFAULTS: Readonly<InvoiceWaConfig> = Object.freeze({
@@ -80,6 +101,11 @@ export const INVOICE_WA_DEFAULTS: Readonly<InvoiceWaConfig> = Object.freeze({
   hourStart: 9,
   hourEnd: 19,
   emailSkipWhmcs: false,
+  whmcsCadence: true,
+  whmcsWindowDays: 20,
+  whmcsEveryDays: 5,
+  whmcsUrgentDays: 10,
+  whmcsUrgentEveryDays: 2,
 });
 
 export const INVOICE_WA_LIMITS = Object.freeze({
@@ -88,6 +114,11 @@ export const INVOICE_WA_LIMITS = Object.freeze({
   renotifyDays: { min: 1, max: 90 },
   overdueMaxSends: { min: 1, max: 10 },
   hour: { min: 0, max: 23 },
+  // The cron reads open invoices up to 30 days ahead (MAX_PRE_DUE_DAYS) — keep the window inside it.
+  whmcsWindowDays: { min: 1, max: 30 },
+  whmcsEveryDays: { min: 1, max: 30 },
+  whmcsUrgentDays: { min: 0, max: 30 },
+  whmcsUrgentEveryDays: { min: 1, max: 30 },
 });
 
 export const DEFAULT_INVOICE_WA_TEXT =
@@ -114,6 +145,10 @@ export function resolveInvoiceWaConfig(settings: Record<string, any> | null | un
   const hourStart = intInRange(s.waInvoiceHourStart, INVOICE_WA_LIMITS.hour.min, INVOICE_WA_LIMITS.hour.max) ?? d.hourStart;
   let hourEnd = intInRange(s.waInvoiceHourEnd, INVOICE_WA_LIMITS.hour.min, INVOICE_WA_LIMITS.hour.max + 1) ?? d.hourEnd;
   if (hourEnd <= hourStart) hourEnd = Math.min(24, hourStart + 1); // a zero-width window would silently send nothing
+  const L = INVOICE_WA_LIMITS;
+  const whmcsWindowDays = intInRange(s.waWhmcsWindowDays, L.whmcsWindowDays.min, L.whmcsWindowDays.max) ?? d.whmcsWindowDays;
+  // The urgent band lives INSIDE the window; a bigger value would make the slow rhythm unreachable.
+  const whmcsUrgentDays = Math.min(whmcsWindowDays, intInRange(s.waWhmcsUrgentDays, L.whmcsUrgentDays.min, L.whmcsUrgentDays.max) ?? d.whmcsUrgentDays);
   return {
     enabled: s.waOverdueEnabled === true,
     sources,
@@ -130,6 +165,11 @@ export function resolveInvoiceWaConfig(settings: Record<string, any> | null | un
     hourStart,
     hourEnd,
     emailSkipWhmcs: s.overdueEmailSkipWhmcs === true,
+    whmcsCadence: s.waWhmcsCadenceEnabled !== false,
+    whmcsWindowDays,
+    whmcsEveryDays: intInRange(s.waWhmcsEveryDays, L.whmcsEveryDays.min, L.whmcsEveryDays.max) ?? d.whmcsEveryDays,
+    whmcsUrgentDays,
+    whmcsUrgentEveryDays: intInRange(s.waWhmcsUrgentEveryDays, L.whmcsUrgentEveryDays.min, L.whmcsUrgentEveryDays.max) ?? d.whmcsUrgentEveryDays,
   };
 }
 
@@ -166,6 +206,7 @@ export interface InvoiceWaInvoiceFacts {
   dueDateMs: number | null;
   total: number;
   paidAmount: number;
+  /** The LAST pre-due send (the cadence repeats from it). */
   preDueWaSentAtMs?: number | null;
   dueWaSentAtMs?: number | null;
   overdueWaSentAtMs?: number | null;
@@ -262,6 +303,16 @@ export function invoiceEmailUsable(inv: InvoiceWaInvoiceFacts): boolean {
   return !(failed && failed > (inv.overdueEmailSentAtMs || 0));
 }
 
+/** Does the WHMCS pre-due cadence (not the once-only `preDueDays`) govern this invoice? */
+export function usesWhmcsCadence(inv: Pick<InvoiceWaInvoiceFacts, 'source'>, cfg: InvoiceWaConfig): boolean {
+  return cfg.whmcsCadence && inv.source === 'whmcs';
+}
+
+/** Calendar days (in the zone) to wait after the last pre-due send, given the days still left. */
+export function whmcsCadenceInterval(daysLeft: number, cfg: InvoiceWaConfig): number {
+  return daysLeft <= cfg.whmcsUrgentDays ? cfg.whmcsUrgentEveryDays : cfg.whmcsEveryDays;
+}
+
 /** Which stage (if any) the invoice is in RIGHT NOW, honouring the stamps. */
 export function invoiceWaStage(inv: InvoiceWaInvoiceFacts, cfg: InvoiceWaConfig, ctx: InvoiceWaContext): InvoiceWaDecision {
   if (inv.dueDateMs == null || !Number.isFinite(inv.dueDateMs)) return { ok: false, reason: 'no-due-date' };
@@ -276,12 +327,22 @@ export function invoiceWaStage(inv: InvoiceWaInvoiceFacts, cfg: InvoiceWaConfig,
     if (last && ctx.nowMs - last < cfg.renotifyDays * INVOICE_WA_DAY_MS) return { ok: false, reason: 'already-sent' };
     return { ok: true, stage: 'overdue', daysLate };
   }
+  const cadence = usesWhmcsCadence(inv, cfg);
   if (daysLate === 0) {
-    if (!cfg.onDue) return { ok: false, reason: 'not-due' };
+    if (!cfg.onDue && !cadence) return { ok: false, reason: 'not-due' };
     if (inv.dueWaSentAtMs) return { ok: false, reason: 'already-sent' };
     return { ok: true, stage: 'due', daysLate };
   }
   // Ahead of the due date.
+  if (cadence) {
+    const daysLeft = -daysLate;
+    if (daysLeft > cfg.whmcsWindowDays) return { ok: false, reason: 'not-due' };
+    const last = inv.preDueWaSentAtMs || 0;
+    if (last && zonedDayIndex(ctx.nowMs, tz) - zonedDayIndex(last, tz) < whmcsCadenceInterval(daysLeft, cfg)) {
+      return { ok: false, reason: 'already-sent' };
+    }
+    return { ok: true, stage: 'pre-due', daysLate };
+  }
   if (cfg.preDueDays <= 0 || -daysLate > cfg.preDueDays) return { ok: false, reason: 'not-due' };
   if (inv.preDueWaSentAtMs) return { ok: false, reason: 'already-sent' };
   return { ok: true, stage: 'pre-due', daysLate };
@@ -344,11 +405,12 @@ export function normalizeInvoiceWaPhone(phone: string | null | undefined): strin
 /**
  * Deterministic idempotency key for one reminder send: the VPS refuses a second
  * send with the same key within 24h, so a died run or a racing manual trigger
- * cannot WhatsApp the same reminder twice. `n` = the overdue send number (1-based);
- * pre-due/due stages are once-only, so n = 1.
+ * cannot WhatsApp the same reminder twice. `n` = the send number of that stage
+ * (1-based: `overdueWaCount + 1` / `preDueWaCount + 1`); the due stage is
+ * once-only, so n = 1. A once-only pre-due send has count 0 → n = 1, as before.
  */
 export function invoiceWaIdempotencyKey(invoiceId: string, stage: InvoiceWaStage, n: number): string {
-  return `inv_${invoiceId}_${stage}_${stage === 'overdue' ? Math.max(1, Math.floor(n)) : 1}`;
+  return `inv_${invoiceId}_${stage}_${stage === 'due' ? 1 : Math.max(1, Math.floor(n))}`;
 }
 
 /** The stamp field a successful send of `stage` must write. */

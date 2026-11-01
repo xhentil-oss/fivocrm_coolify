@@ -1325,8 +1325,10 @@ export interface Invoice {
   /** Last write-back failure (WHMCS API message). Cleared on success. */
   whmcsPaymentSyncError?: string | null;
   // ── WhatsApp invoice reminders (overdue-reminders cron) ──────────────────────
-  /** One-shot stages: "skadon për N ditë" and "skadon sot". */
+  /** "skadon për N ditë" (the LAST send — a WHMCS invoice repeats it) and "skadon sot". */
   preDueWaSentAt?: Date;
+  /** Pre-due WhatsApp sends so far (the WHMCS cadence's idempotency counter). */
+  preDueWaCount?: number;
   dueWaSentAt?: Date;
   /** Overdue-stage WhatsApp sends so far (capped by `waOverdueMaxSends`). */
   overdueWaCount?: number;
@@ -2162,6 +2164,10 @@ export interface Lead extends FollowUpFields {
   estimatedValue?: number;
   lostReason?: string;
   convertedAt?: Date;
+  /** Set when a Lost / orphaned Converted lead asked again and went back to New (contactRoute.ts). */
+  reopenedAt?: Date | null;
+  reopenedFromStatus?: string | null;
+  previousLostReason?: string | null;
   businessCategory?: string;
   notes?: string;
   attachments?: FileAttachment[]; // documents uploaded from the lead drawer (tab "Dokumente")
@@ -2343,6 +2349,11 @@ export interface Deal {
   customerId?: string;
   customerName?: string;        // denormalized for display
   leadId?: string;              // origin lead, if converted from one
+  /** Where a client's new request came from (landing page, portal brief, CRM). */
+  source?: string | null;
+  /** `new-business` (client asked for more) | `win-back` (an Inactive client returned) — contactRoute.ts. */
+  kind?: 'new-business' | 'win-back' | null;
+  serviceInquiryId?: string | null;
   amount: number;
   currency?: string;            // 'EUR' | 'ALL' | 'USD'
   stage: DealStage;
@@ -2533,6 +2544,8 @@ export interface ServiceInquiry {
   isDraft?: boolean;
   lastSavedStep?: number;
   leadId?: string;
+  /** Set instead of `leadId` when the person was already a client: their request became a Deal (crm/contactRoute.ts). */
+  dealId?: string;
   customerId?: string;
   clientUserId?: string;
   createdAt: Date;

@@ -46,7 +46,8 @@ const SECTION_KEYS = {
     'waAutoReminderDays', 'waAutoReminderStatuses', 'waAutoReminderTemplateId', 'waAutoReminderChannelPhoneNumberId',
     'waOverdueEnabled', 'waOverdueDays', 'waOverdueTemplateId', 'waOverdueChannelPhoneNumberId',
     'waInvoiceSources', 'waInvoiceChannel', 'waInvoiceAgentId', 'waInvoiceText', 'waInvoicePreDueDays', 'waInvoiceOnDue',
-    'waInvoiceRenotifyDays', 'waOverdueMaxSends', 'waInvoiceHourStart', 'waInvoiceHourEnd', 'overdueEmailSkipWhmcs'],
+    'waInvoiceRenotifyDays', 'waOverdueMaxSends', 'waInvoiceHourStart', 'waInvoiceHourEnd', 'overdueEmailSkipWhmcs',
+    'waWhmcsCadenceEnabled', 'waWhmcsWindowDays', 'waWhmcsEveryDays', 'waWhmcsUrgentDays', 'waWhmcsUrgentEveryDays'],
   newLead: ['waAutoCreateLead', 'waAutoCreateLeadDailyCap'],
   playbooks: ['followUpPlaybooks'],
 } as const satisfies Record<string, readonly (keyof TeamSettings)[]>;
@@ -119,6 +120,11 @@ function draftFrom(s: TeamSettings | null, inferredInvoiceChannel?: 'meta' | 'ba
     waInvoiceHourStart: invoiceWa.hourStart,
     waInvoiceHourEnd: invoiceWa.hourEnd,
     overdueEmailSkipWhmcs: invoiceWa.emailSkipWhmcs,
+    waWhmcsCadenceEnabled: invoiceWa.whmcsCadence,
+    waWhmcsWindowDays: invoiceWa.whmcsWindowDays,
+    waWhmcsEveryDays: invoiceWa.whmcsEveryDays,
+    waWhmcsUrgentDays: invoiceWa.whmcsUrgentDays,
+    waWhmcsUrgentEveryDays: invoiceWa.whmcsUrgentEveryDays,
     waAutoCreateLead: s?.waAutoCreateLead !== false,
     waAutoCreateLeadDailyCap: s?.waAutoCreateLeadDailyCap ?? 50,
     followUpPlaybooks: resolvePlaybooks(s),
@@ -304,6 +310,8 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
         Object.assign(patch, {
           waOverdueDays: wa.overdueDays, waInvoicePreDueDays: wa.preDueDays, waInvoiceRenotifyDays: wa.renotifyDays,
           waOverdueMaxSends: wa.overdueMaxSends, waInvoiceHourStart: wa.hourStart, waInvoiceHourEnd: wa.hourEnd, waInvoiceAgentId: wa.agentId,
+          waWhmcsCadenceEnabled: wa.whmcsCadence, waWhmcsWindowDays: wa.whmcsWindowDays, waWhmcsEveryDays: wa.whmcsEveryDays,
+          waWhmcsUrgentDays: wa.whmcsUrgentDays, waWhmcsUrgentEveryDays: wa.whmcsUrgentEveryDays,
           waInvoiceText: String(draft.waInvoiceText || '').trim(),
         });
       }
@@ -568,7 +576,7 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
             </p>
             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <NumberField label="Para afatit" value={draft.waInvoicePreDueDays} onChange={(v) => set('waInvoicePreDueDays', v)}
-                min={INVOICE_WA_LIMITS.preDueDays.min} max={INVOICE_WA_LIMITS.preDueDays.max} suffix="ditë (0 = fikur)" hint="“Skadon për N ditë”, një herë" disabled={off} />
+                min={INVOICE_WA_LIMITS.preDueDays.min} max={INVOICE_WA_LIMITS.preDueDays.max} suffix="ditë (0 = fikur)" hint={draft.waWhmcsCadenceEnabled ? '“Skadon për N ditë”, një herë — vetëm faturat FivoCRM' : '“Skadon për N ditë”, një herë'} disabled={off} />
               <NumberField label="Pas vonesës" value={draft.waOverdueDays} onChange={(v) => set('waOverdueDays', v)}
                 min={INVOICE_WA_LIMITS.overdueDays.min} max={INVOICE_WA_LIMITS.overdueDays.max} suffix="ditë" hint="“Ka N ditë vonesë”" disabled={off} />
               <NumberField label="Përsërit çdo" value={draft.waInvoiceRenotifyDays} onChange={(v) => set('waInvoiceRenotifyDays', v)}
@@ -576,6 +584,20 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
               <NumberField label="Maks. kujtesa WhatsApp" value={draft.waOverdueMaxSends} onChange={(v) => set('waOverdueMaxSends', v)}
                 min={INVOICE_WA_LIMITS.overdueMaxSends.min} max={INVOICE_WA_LIMITS.overdueMaxSends.max} suffix="herë" hint="Pas kësaj ndalet dhe njoftohet stafi" disabled={off} />
             </div>
+            <ToggleRow label="Faturat WHMCS: kujtesa të përsëritura para afatit" checked={!!draft.waWhmcsCadenceEnabled} onChange={(v) => set('waWhmcsCadenceEnabled', v)} disabled={off}
+              hint="Në vend të një kujtese të vetme: nga dita e parë e dritares çdo disa ditë, pastaj më shpesh afër afatit, dhe “skadon sot” ditën e afatit." />
+            {draft.waWhmcsCadenceEnabled && (
+              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <NumberField label="WHMCS: nis para afatit" value={draft.waWhmcsWindowDays} onChange={(v) => set('waWhmcsWindowDays', v)}
+                  min={INVOICE_WA_LIMITS.whmcsWindowDays.min} max={INVOICE_WA_LIMITS.whmcsWindowDays.max} suffix="ditë" disabled={off} />
+                <NumberField label="Përsërit çdo" value={draft.waWhmcsEveryDays} onChange={(v) => set('waWhmcsEveryDays', v)}
+                  min={INVOICE_WA_LIMITS.whmcsEveryDays.min} max={INVOICE_WA_LIMITS.whmcsEveryDays.max} suffix="ditë" disabled={off} />
+                <NumberField label="Kur mbeten ≤" value={draft.waWhmcsUrgentDays} onChange={(v) => set('waWhmcsUrgentDays', v)}
+                  min={INVOICE_WA_LIMITS.whmcsUrgentDays.min} max={INVOICE_WA_LIMITS.whmcsUrgentDays.max} suffix="ditë" disabled={off} />
+                <NumberField label="përsërit çdo" value={draft.waWhmcsUrgentEveryDays} onChange={(v) => set('waWhmcsUrgentEveryDays', v)}
+                  min={INVOICE_WA_LIMITS.whmcsUrgentEveryDays.min} max={INVOICE_WA_LIMITS.whmcsUrgentEveryDays.max} suffix="ditë" disabled={off} />
+              </div>
+            )}
             <ToggleRow label="Kujtesë edhe ditën e afatit" checked={!!draft.waInvoiceOnDue} onChange={(v) => set('waInvoiceOnDue', v)} disabled={off}
               hint="“Fatura skadon sot” — një herë." />
             <div className="grid sm:grid-cols-2 gap-4">
