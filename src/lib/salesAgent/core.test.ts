@@ -10,7 +10,7 @@ import {
   SALES_AGENT_DEFAULTS, SALES_AGENT_MAX_AUTONOMY, SALES_AGENT_LIMITS,
   resolveSalesAgentSettings, agentGateReason, decideDelivery, parseAgentOutput, sanitizeAgentReply,
   detectHandoffTrigger, qualificationProgress, mergeCollected, nextStage, leadAgentScore, buildLeadSummary,
-  buildSalesAgentPrompt, renderSalesFacts, ensureDisclosure, renderTemplate, ensureColdWaCompliance,
+  buildSalesAgentPrompt, buildSalesAgentPromptParts, renderSalesFacts, ensureDisclosure, renderTemplate, ensureColdWaCompliance,
   coldWaDailyQuota, coldWaBlockReason, coldWaPauseAfterFailure, nudgeBlockReason, buildNudgeText,
   handoffOverdue, buildSalesDigest, inWindow, localParts, salesAgentRunId, allowedIntentsForAutonomy,
   SALES_AGENT_BLOCK_LABELS, COLD_WA_BLOCK_LABELS, HANDOFF_LABELS,
@@ -238,6 +238,19 @@ describe('prompt & facts', () => {
     expect(r).toContain('Social Media: 250 EUR/në muaj');
     expect(r).toContain('kohëzgjatja: 3 muaj');
     expect(r).toContain('përfshin: 12 postime; 4 reels');
+  });
+  it('the cached part is byte-stable across turns, contacts and clock; volatile state lives in the dynamic part', () => {
+    const base = { settings: settings({ autonomy: 2 }), facts, contactKind: 'lead' as const, leadStatus: 'New', channel: 'whatsapp' as const };
+    const a = buildSalesAgentPromptParts({ ...base, contactName: 'Arben', stage: 'greeting', collected: {}, nowLabel: 'e hënë, 3 nëntor 2026, 10:15', isFirstAgentMessage: true });
+    const b = buildSalesAgentPromptParts({ ...base, contactName: 'Elira', stage: 'qualifying', collected: { service: 'SEO' }, nowLabel: 'e martë, 4 nëntor 2026, 16:40', isFirstAgentMessage: false });
+    expect(a.stable).toBe(b.stable);
+    expect(a.stable).toContain('300 EUR/muaj');
+    expect(a.stable).not.toContain('Arben');
+    expect(a.stable).not.toContain('10:15');
+    expect(a.dynamic).toContain('Arben');
+    expect(a.dynamic).toContain('10:15');
+    expect(a.dynamic).toContain('Prezantohu');
+    expect(b.dynamic).not.toContain('Prezantohu');
   });
   it('the prompt carries persona, disclosure, rules, facts and the JSON contract', () => {
     const p = buildSalesAgentPrompt({

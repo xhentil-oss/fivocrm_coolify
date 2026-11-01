@@ -16,7 +16,7 @@ import { findCustomerForContact, findLeadForContact } from './_contactIdentity.j
 import { placesKeyProbe, resolvePlacesKey } from './_placesClient.js';
 import {
   SALES_AGENT_AVATAR_PATH, SALES_AGENT_LIMITS, SALES_AGENT_TITLE, SALES_AGENT_UID,
-  agentGateReason, allowedIntentsForAutonomy, buildLeadSummary, buildSalesAgentPrompt, buildSalesDigest, decideDelivery,
+  agentGateReason, allowedIntentsForAutonomy, buildLeadSummary, buildSalesAgentPromptParts, buildSalesDigest, decideDelivery,
   detectHandoffTrigger, ensureDisclosure, inWindow, leadAgentScore, localParts, mergeCollected, monthKeyOf, nextStage,
   parseAgentOutput, qualificationProgress, resolveSalesAgentSettings, salesAgentProfileDocId, salesAgentRunId,
   type AgentModelOutput, type AgentStage, type ConversationAgentLike, type DeliveryDecision, type DeliveryMode,
@@ -324,6 +324,9 @@ export interface DecideResult {
   model: string | null;
   provider: string | null;
   tokens: number;
+  /** Anthropic prompt caching (0 on other providers). */
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   prompt: string;
   error: string | null;
 }
@@ -332,20 +335,22 @@ export async function decideReply(i: DecideInput): Promise<DecideResult> {
   const s = i.ctx.settings;
   const prevCollected = i.agentState?.collected || {};
   const stage: AgentStage = i.agentState?.stage || 'greeting';
-  const prompt = buildSalesAgentPrompt({
+  const promptParts = buildSalesAgentPromptParts({
     settings: s, facts: i.facts, contactName: i.contactName, contactKind: i.contactKind, leadStatus: i.leadStatus ?? null,
     stage, collected: prevCollected, channel: i.channel, nowLabel: nowLabelFor(i.now), isFirstAgentMessage: i.isFirstAgentMessage,
   });
+  const prompt = `${promptParts.stable}\n\n${promptParts.dynamic}`;
   let output: AgentModelOutput;
-  let model: string | null = null; let provider: string | null = null; let tokens = 0; let error: string | null = null;
+  let model: string | null = null; let provider: string | null = null; let tokens = 0; let cacheReadTokens = 0; let cacheWriteTokens = 0; let error: string | null = null;
   if (i.trigger) {
     // A deterministic trigger needs no model call: the decision is a handoff whatever the model would say.
     output = { reply: '', intent: i.trigger === 'complaint' ? 'complaint' : i.trigger === 'asked-for-human' ? 'human' : 'other', confidence: 1, collected: {}, priceFromFacts: false, handoff: i.trigger, language: 'sq' };
   } else {
     try {
-      const r = await generateChatWith(i.aiCfg, prompt, i.history, { maxTokens: 500, temperature: 0.3 });
+      const r = await generateChatWith(i.aiCfg, promptParts, i.history, { maxTokens: 500, temperature: 0.3 });
       output = parseAgentOutput(r.reply);
       model = r.model; provider = r.provider; tokens = r.tokensUsed || 0;
+      cacheReadTokens = r.cacheReadTokens || 0; cacheWriteTokens = r.cacheWriteTokens || 0;
     } catch (err) {
       const c = classifyAiError(err);
       error = `${c.code}: ${String((err as Error)?.message || err).slice(0, 200)}`;
@@ -365,7 +370,7 @@ export async function decideReply(i: DecideInput): Promise<DecideResult> {
     });
   const progress = qualificationProgress(collected, s.qualificationFields);
   const next = nextStage(stage, { decision, intent: output.intent, progress, autonomy: s.autonomy });
-  return { output, decision, stage: next, collected, progressed, qualified: progress.qualified, model, provider, tokens, prompt, error };
+  return { output, decision, stage: next, collected, progressed, qualified: progress.qualified, model, provider, tokens, cacheReadTokens, cacheWriteTokens, prompt, error };
 }
 
 // ── Sending as the agent ──────────────────────────────────────────────────────
@@ -527,7 +532,7 @@ export async function runSalesAgentOnInbound(a: InboundHookArgs): Promise<SalesA
     if (result.model) {
       db.collection('aiUsageLogs').add({
         userId: null, teamId: a.teamId, businessId: a.businessId, feature: AGENT_AUTOMATION_KIND, conversationId: a.conversationId,
-        tokensUsed: result.tokens, model: result.model, provider: result.provider, createdAt: new Date(),
+        tokensUsed: result.tokens, cacheReadTokens: result.cacheReadTokens, cacheWriteTokens: result.cacheWriteTokens, model: result.model, provider: result.provider, createdAt: new Date(),
       }).catch(() => {});
     }
     const target: AgentSendTarget = {
@@ -537,7 +542,7 @@ export async function runSalesAgentOnInbound(a: InboundHookArgs): Promise<SalesA
     const outcome = await executeDecision({ ctx, result, target, conversationId: a.conversationId, conv, agentState, leadId: a.leadId, lead: a.lead, customerId: a.customerId, contactName: a.contactName, waMessageId: a.event.waMessageId, isFirstAgentMessage, dateKey, now, conversationOwnerId: a.conversationOwnerId ?? conv?.ownerId ?? null });
     await runRef.set({
       decision: outcome.decision, blockReason: outcome.blockReason, handoffReason: result.decision.handoffReason,
-      intent: result.output.intent, confidence: result.output.confidence, model: result.model, tokens: result.tokens,
+      intent: result.output.intent, confidence: result.output.confidence, model: result.model, tokens: result.tokens, cacheReadTokens: result.cacheReadTokens, cacheWriteTokens: result.cacheWriteTokens,
       replyText: outcome.replyText, error: result.error || outcome.error, stage: result.stage, updatedAt: Timestamp.now(),
     }, { merge: true }).catch(() => {});
     return { decision: outcome.decision, blockReason: outcome.blockReason, handoffReason: result.decision.handoffReason, intent: result.output.intent, model: result.model };
@@ -947,7 +952,7 @@ async function handleSimulate(res: VercelResponse, c: Caller, body: Record<strin
     minutesSinceHumanReply: null, now, trigger: detectHandoffTrigger(h.clientText),
   });
   if (r.model) {
-    db.collection('aiUsageLogs').add({ userId: c.uid, teamId: ctx.teamId, businessId: ctx.businessId, feature: 'sales-agent-sim', tokensUsed: r.tokens, model: r.model, provider: r.provider, createdAt: new Date() }).catch(() => {});
+    db.collection('aiUsageLogs').add({ userId: c.uid, teamId: ctx.teamId, businessId: ctx.businessId, feature: 'sales-agent-sim', tokensUsed: r.tokens, cacheReadTokens: r.cacheReadTokens, cacheWriteTokens: r.cacheWriteTokens, model: r.model, provider: r.provider, createdAt: new Date() }).catch(() => {});
   }
   if (r.error) return res.status(502).json({ error: 'Modeli nuk u përgjigj', detail: r.error });
   const reply = r.decision.mode === 'handoff' ? (ctx.settings.autonomy >= 1 ? HANDOFF_LINE : '') : ensureDisclosure(r.output.reply, ctx.settings.persona, ctx.tenantName, !h.history.some((m) => m.role === 'assistant'));
@@ -984,7 +989,7 @@ async function handleReplyDraft(res: VercelResponse, c: Caller, body: Record<str
     minutesSinceHumanReply: null, now, trigger: null,
   });
   if (r.model) {
-    db.collection('aiUsageLogs').add({ userId: c.uid, teamId: ctx.teamId, businessId: ctx.businessId, feature: AGENT_AUTOMATION_KIND, conversationId: conv.ref.id, tokensUsed: r.tokens, model: r.model, provider: r.provider, createdAt: new Date() }).catch(() => {});
+    db.collection('aiUsageLogs').add({ userId: c.uid, teamId: ctx.teamId, businessId: ctx.businessId, feature: AGENT_AUTOMATION_KIND, conversationId: conv.ref.id, tokensUsed: r.tokens, cacheReadTokens: r.cacheReadTokens, cacheWriteTokens: r.cacheWriteTokens, model: r.model, provider: r.provider, createdAt: new Date() }).catch(() => {});
   }
   if (r.error) return res.status(502).json({ error: 'Modeli nuk u përgjigj', detail: r.error });
   const text = r.decision.mode === 'handoff' ? HANDOFF_LINE : ensureDisclosure(r.output.reply, ctx.settings.persona, ctx.tenantName, !thread.agentSpokeBefore);
