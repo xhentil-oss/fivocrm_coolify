@@ -19,6 +19,7 @@ import {
   invoiceWaIdempotencyKey,
   invoiceWaTemplateParams,
   invoiceEmailUsable,
+  coversWhmcs,
   INVOICE_WA_PARAM_FIELDS,
   invoiceWaStage,
   invoiceWaStageField,
@@ -352,6 +353,16 @@ describe('undeliverable numbers', () => {
       .toEqual({ ok: false, reason: 'undeliverable' });
     expect(invoiceWaDecision(inv(), { ...customer, waUndeliverablePhone: '355690000000' }, cfg(), ctx()))
       .toMatchObject({ ok: true });
+  });
+});
+
+describe('coversWhmcs — which team panel drives a WHMCS invoice', () => {
+  it('an enabled panel on all / whmcs covers WHMCS; fivocrm-only or disabled does not', () => {
+    expect(coversWhmcs(cfg({ sources: 'all' }))).toBe(true);
+    expect(coversWhmcs(cfg({ sources: 'whmcs' }))).toBe(true);
+    expect(coversWhmcs(cfg({ sources: 'fivocrm' }))).toBe(false);
+    expect(coversWhmcs(cfg({ enabled: false, sources: 'whmcs' }))).toBe(false);
+    expect(coversWhmcs(resolveInvoiceWaConfig(null))).toBe(false);
   });
 });
 

@@ -521,6 +521,9 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
                   <option value="whmcs">Vetëm nga WHMCS (hosting/domain)</option>
                   <option value="fivocrm">Vetëm të FivoCRM</option>
                 </NativeSelect>
+                {draft.waInvoiceSources === 'whmcs' && (
+                  <p className="text-[11px] text-muted-foreground">Ky ekip dërgon kujtesat për faturat WHMCS të gjithë biznesit, edhe kur fatura është e regjistruar te një ekip tjetër.</p>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Kanali</Label>

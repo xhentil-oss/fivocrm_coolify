@@ -31,7 +31,7 @@ import { sendBaileysText, sendMetaTemplate, isPermanentWaError, isUndeliverableN
 import {
   INVOICE_WA_DEFAULT_TZ, resolveInvoiceWaConfig, invoiceWaDecision, invoiceWaStageField, invoiceWaDueText,
   renderInvoiceWaText, invoiceWaFirstName, normalizeInvoiceWaPhone, tallyInvoiceWaBlocked,
-  daysLateOn, invoiceWaIdempotencyKey, invoiceWaTemplateParams, type InvoiceWaBlockReason,
+  daysLateOn, invoiceWaIdempotencyKey, invoiceWaTemplateParams, coversWhmcs, type InvoiceWaBlockReason,
 } from '../_invoiceWaReminders.js';
 // WhatsApp campaign/automation engine — byte-identical copy of
 // src/lib/marketing/waAutomationCore.ts (test-enforced). Aliased with a `wa`
@@ -1049,6 +1049,20 @@ async function runOverdueRemindersLeased(opts?: { businessId?: string | null }) 
     tplCache.set(id, data);
     return data;
   };
+  // WHMCS invoices are configured ONCE per business: the team whose panel says
+  // Burimi = WHMCS (see "ONE WHMCS PANEL PER BUSINESS" in _invoiceWaReminders.ts).
+  // The sync stamps every mirror with one team, which need not be the team that
+  // chases hosting renewals. Small read: only teams with WA reminders on.
+  const whmcsWaTeamByBusiness = new Map<string, string>();
+  try {
+    const enabledSnap = await db.collection('teamSettings').where('waOverdueEnabled', '==', true).get();
+    for (const d of enabledSnap.docs) {
+      if (d.data().waInvoiceSources !== 'whmcs') continue;
+      const bid = (await db.collection('teams').doc(d.id).get()).data()?.businessId;
+      if (bid && !whmcsWaTeamByBusiness.has(bid)) whmcsWaTeamByBusiness.set(bid, d.id);
+    }
+  } catch (e) { console.error('[overdue-wa] WHMCS team lookup failed', e); }
+
   const whmcsBase = (() => {
     const raw = (process.env.WHMCS_API_URL || '').trim();
     if (!raw) return '';
@@ -1081,14 +1095,23 @@ async function runOverdueRemindersLeased(opts?: { businessId?: string | null }) 
     if (inv.businessId && suspendedBusinessIds.has(inv.businessId)) { suspendedSkipped++; continue; }
     if (!inv.customerId) continue;
     const customer = await getCustomer(inv.customerId);
-    const settings = inv.teamId ? await getTeamSettings(inv.teamId) : null;
-    const cfg = resolveInvoiceWaConfig(settings);
+    const isWhmcs = inv.source === 'whmcs';
+    // The team whose settings drive this invoice: its own, or — for a WHMCS
+    // mirror its own team does not cover — the business's WHMCS team.
+    let cfgTeamId: string | null = inv.teamId || null;
+    let settings = cfgTeamId ? await getTeamSettings(cfgTeamId) : null;
+    let cfg = resolveInvoiceWaConfig(settings);
+    const whmcsTeamId = isWhmcs && inv.businessId ? whmcsWaTeamByBusiness.get(inv.businessId) : undefined;
+    if (whmcsTeamId && whmcsTeamId !== cfgTeamId && !coversWhmcs(cfg)) {
+      cfgTeamId = whmcsTeamId;
+      settings = await getTeamSettings(whmcsTeamId);
+      cfg = resolveInvoiceWaConfig(settings);
+    }
 
     const dueMs = ms(inv.dueDate);
     // Calendar days in Tirane — the same count the WA engine and its text use.
     const daysOverdue = dueMs ? Math.max(0, daysLateOn(dueMs, now, INVOICE_WA_DEFAULT_TZ)) : 0;
     const invoiceLabel = inv.invoiceNumber || doc.id.slice(0, 8).toUpperCase();
-    const isWhmcs = inv.source === 'whmcs';
     const balanceDue = (Number(inv.total ?? inv.amount ?? 0) || 0) - (Number(inv.paidAmount || 0) || 0);
     // Late = flipped to Overdue, or a Partial (never flips) / Pending (flip
     // happens only in the daily run-all) whose due day has passed.
@@ -1139,9 +1162,9 @@ async function runOverdueRemindersLeased(opts?: { businessId?: string | null }) 
     }
 
     // 2) WhatsApp — the engine decides, the job only fetches facts + sends.
-    if (!inv.teamId || !settings) continue;
+    if (!cfgTeamId || !settings) continue;
     if (!cfg.enabled) continue; // not tallied: a disabled tenant has no run to report
-    const t = tally(inv.teamId);
+    const t = tally(cfgTeamId);
     t.considered++;
 
     let metaChannel: any = null;

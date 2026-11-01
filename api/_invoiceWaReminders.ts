@@ -34,6 +34,12 @@
 // time the first send landed later in the window than the next tick.
 // FivoCRM's own invoices keep the once-only `preDueDays` stage.
 //
+// ONE WHMCS PANEL PER BUSINESS: the WHMCS sync stamps every mirrored invoice
+// with one team (whichever owns the integration), but the people who chase
+// hosting renewals may sit in another department. A WHMCS invoice whose own
+// team does not cover WHMCS (`coversWhmcs`) is therefore configured by the
+// business's team whose panel says Burimi = WHMCS — chosen by the cron.
+//
 // Every non-send is a NAMED reason (never a silent `continue`), counted into
 // `teamSettings.waInvoiceLastRun.blocked` so the panel can show "38 shqyrtuar →
 // 5 dërguar, 20 jashtë orarit, 9 pa telefon".
@@ -301,6 +307,11 @@ export function invoiceEmailUsable(inv: InvoiceWaInvoiceFacts): boolean {
   if (!inv.emailChannelAvailable) return false;
   const failed = inv.overdueEmailFailedAtMs || 0;
   return !(failed && failed > (inv.overdueEmailSentAtMs || 0));
+}
+
+/** Does this team's panel send reminders for WHMCS invoices? */
+export function coversWhmcs(cfg: InvoiceWaConfig): boolean {
+  return cfg.enabled && cfg.sources !== 'fivocrm';
 }
 
 /** Does the WHMCS pre-due cadence (not the once-only `preDueDays`) govern this invoice? */

@@ -1467,6 +1467,10 @@ Full runbook: `workspace/WHMCS_SYNC.md`.
   interval is CALENDAR days in Tirane (the job ticks every 2h inside a window),
   each send increments `preDueWaCount` (its idempotency `n`). FivoCRM invoices keep
   the once-only `preDueDays` stage.
+- **WHMCS reminders are configured ONCE per business**: the sync stamps every mirror
+  with one team, so a WHMCS invoice whose own team does not cover WHMCS
+  (`coversWhmcs`) uses the business's team whose panel says Burimi = WHMCS
+  (`whmcsWaTeamByBusiness` in `runOverdueReminders`); its run summary lands there.
 - WHMCS invoices are created with every FivoCRM reminder flag already `true`
   and `createdByUserId: null` — WHMCS emails them itself. `overdueEmailSkipWhmcs`
   stops FivoCRM's weekly overdue email duplicating that.
