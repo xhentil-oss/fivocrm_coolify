@@ -5,7 +5,8 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { phoneKeyDown, formatCurrency } from '../lib/utils';
 import { saveOrShareFile } from '../lib/native';
 import { getInvoiceCollectedAll, getInvoiceTotalAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
-import { findContactMatch, matchFieldLabel } from '../lib/contactIdentity';
+import { findContactMatch, findContactMatches, matchFieldLabel } from '../lib/contactIdentity';
+import { convertLeadPatch, isClientCustomer, isOpenLeadStatus } from '../lib/crm/contactRoute';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { getStatusColor, getPriorityColor } from '../lib/statusColors';
@@ -378,9 +379,29 @@ const CustomersView: React.FC = () => {
   // Bulk selection helpers
   const toggleSelect = (id: string) => setSelectedIds(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
   const clearSelection = () => setSelectedIds(new Set());
+  /**
+   * A client never keeps an open lead (crm/contactRoute.ts): once this customer
+   * is a client (any status but Pending), every OPEN lead of the same person —
+   * linked by id, or matching on email OR phone — is closed as Converted.
+   */
+  const closeClientLeads = async (customerId: string, contact: { email?: string | null; phone?: string | null }, status?: string | null) => {
+    if (!isClientCustomer({ id: customerId, status })) return 0;
+    const byContact = findContactMatches(contact, scopedLeads as Lead[]).map(m => m.record);
+    const byLink = (scopedLeads as Lead[]).filter(l => l.customerId === customerId);
+    const open = [...new Map([...byContact, ...byLink].map(l => [l.id, l])).values()].filter(l => isOpenLeadStatus(l.status));
+    const res = await Promise.allSettled(open.map(l => leadMutation.update(l.id, convertLeadPatch(customerId, new Date()) as any)));
+    const closed = res.filter(r => r.status === 'fulfilled').length;
+    if (closed) toast({ title: closed === 1 ? 'Lead-i u mbyll' : `${closed} lead-e u mbyllën`, description: 'Personi është klient — lead-i u shënua i konvertuar.' });
+    return closed;
+  };
+
   const bulkSetStatus = async (status: string) => {
     const ids = [...selectedIds];
     const res = await Promise.allSettled(ids.map(id => customerMutation.update(id, { status } as any)));
+    for (const id of ids) {
+      const c = (scopedCustomers as Customer[]).find(x => x.id === id);
+      if (c) void closeClientLeads(id, c, status);
+    }
     const failed = res.filter(r => r.status === 'rejected').length;
     toast(failed ? { title: `${ids.length - failed}/${ids.length} u përditësuan`, variant: 'destructive' } : { title: `${ids.length} klientë u përditësuan` });
     clearSelection();
@@ -438,15 +459,15 @@ const CustomersView: React.FC = () => {
     } as any);
     setIsCreateDialogOpen(false);
 
-    // Pair the lead back to this client (and mark it converted — the prospect
-    // became a customer, which is exactly what this form just recorded).
+    // Pair the lead back to this client, and close every open lead of theirs —
+    // the prospect became a customer, which is exactly what this form recorded
+    // (a Pending portal prospect is only linked; its lead stays open).
     if (matchedLead && created?.id) {
-      leadMutation.update(matchedLead.id, {
-        customerId: created.id,
-        ...(matchedLead.status !== 'Converted' ? { status: 'Converted', probability: 100, convertedAt: new Date() } : {}),
-      } as any)
-        .then(() => toast({ title: 'Lead-i u lidh', description: `"${matchedLead.name}" u lidh me këtë klient dhe u shënua si i konvertuar.` }))
-        .catch(err => console.error('[CustomersView] lead→customer link failed', err));
+      if (!matchedLead.customerId) {
+        leadMutation.update(matchedLead.id, { customerId: created.id } as any)
+          .catch(err => console.error('[CustomersView] lead→customer link failed', err));
+      }
+      void closeClientLeads(created.id, data, data.status);
     }
 
     // Auto-grant portal access if customer has email
@@ -605,6 +626,9 @@ const CustomersView: React.FC = () => {
       leadMutation.update(matchedLead.id, { customerId: selectedCustomer.id } as any)
         .catch(err => console.error('[CustomersView] lead→customer link failed', err));
     }
+    // Pending → Active (or a new email/phone that matches an open lead) makes
+    // the person a client now: their open leads close.
+    void closeClientLeads(selectedCustomer.id, data, data.status);
     setIsEditDialogOpen(false);
     setSelectedCustomer(null);
   };

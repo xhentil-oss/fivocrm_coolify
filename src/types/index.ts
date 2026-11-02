@@ -2381,6 +2381,12 @@ export interface ConversationAgentState {
   resumedByUserId?: string | null;
   nudgesSent?: number;
   lastNudgeAt?: Date | null;
+  /** 'auto' when `handoffAutoResumeHours` gave the thread back to Ana. */
+  resumedBy?: string | null;
+  /** Level 1 in office hours: Ana's held reply and when `sales-agent-pending` sends it. */
+  pendingDueAt?: Date | null;
+  pendingSend?: { text: string; forMessageId: string; dueAt?: Date | null } | null;
+  draftNotifiedAt?: Date | null;
 }
 
 // ── Opportunities / Deals (qualified pipeline, split from Lead) ─────────────

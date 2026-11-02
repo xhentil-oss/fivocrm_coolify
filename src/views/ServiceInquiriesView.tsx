@@ -1,7 +1,5 @@
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 import { useCollection, useMutation, getGlobalBusinessId } from '../hooks/useFirestore';
 import { useToast } from '../hooks/use-toast';
 import { getStatusColor } from '../lib/statusColors';
@@ -20,7 +18,9 @@ import {
   Image as ImageIcon, Briefcase,
   Quote, Download, X, ChevronLeft, ChevronRight, FileArchive, Film, Pencil,
 } from 'lucide-react';
-import type { ServiceInquiry, Lead, Project } from '../types';
+import type { ServiceInquiry, Lead, Project, Customer, Deal } from '../types';
+import { routeContact } from '../lib/contactIdentity';
+import { clientDealDraft, convertLeadPatch, reopenLeadPatch } from '../lib/crm/contactRoute';
 import { safeHref } from '../lib/utils';
 import { buildProjectDescription, appendBrief, getInquiryCompleteness, getInquirySections, canSeeInquiryPricing } from '../lib/inquiryBrief';
 import { FolderKanban } from 'lucide-react';
@@ -54,7 +54,12 @@ const ServiceInquiriesView: React.FC = () => {
   });
   const inquiryMutation = useMutation<ServiceInquiry>('serviceInquiries');
   const leadMutation = useMutation<Lead>('leads');
+  const dealMutation = useMutation<Deal>('deals');
   const projectMutation = useMutation<Project>('projects');
+  // Identity sources for "lead or client?" (crm/contactRoute.ts): the whole
+  // tenant, not a role-filtered list — a duplicate is a tenant-level problem.
+  const { data: rawLeads } = useCollection<Lead>('leads', { skipTeamFilter: true });
+  const { data: rawCustomers } = useCollection<Customer>('customers', { skipTeamFilter: true });
 
   const filtered = React.useMemo(() => {
     if (!inquiries) return [];
@@ -124,29 +129,48 @@ const ServiceInquiriesView: React.FC = () => {
     if (convertingId) return;
     setConvertingId(inquiry.id);
     try {
-      // Check if a lead with the same email already exists.
-      // businessId makes the query provable under the leads read rule — an
-      // email-only list was denied for normal staff, so conversion failed.
-      if (inquiry.email) {
-        const dedupeBid = (inquiry as any).businessId || getGlobalBusinessId();
-        const existingSnap = await getDocs(
-          query(
-            collection(db, 'leads'),
-            ...(dedupeBid ? [where('businessId', '==', dedupeBid)] : []),
-            where('email', '==', inquiry.email),
-          )
-        );
-        if (!existingSnap.empty) {
-          // Link inquiry to existing lead instead of creating a duplicate
-          const existingLead = existingSnap.docs[0];
-          await inquiryMutation.update(inquiry.id, {
-            status: 'Converted',
-            leadId: existingLead.id,
-          });
-          setSelectedInquiry(prev => prev ? { ...prev, status: 'Converted', leadId: existingLead.id } : null);
-          toast({ title: 'Lead ekziston tashmë', description: `${inquiry.contactName} u lidh me lead-in ekzistues në CRM.` });
-          return;
-        }
+      // Lead or client? (crm/contactRoute.ts — email OR phone is identity.)
+      // A client's brief is a DEAL on the client, never a lead; an open lead is
+      // reused, a lost one reopened; only an unknown person gets a new lead.
+      const bid = (inquiry as any).businessId || getGlobalBusinessId();
+      const inTenant = (d: any) => !bid || !d.businessId || d.businessId === bid;
+      const route = routeContact(
+        { email: inquiry.email, phone: inquiry.phoneNumber },
+        (rawLeads || []).filter(inTenant),
+        (rawCustomers || []).filter(inTenant),
+        'inquiry',
+      );
+      if (route.action === 'customer-deal' && route.customer) {
+        const customer = route.customer;
+        await Promise.allSettled(route.closeLeadIds.map(id => leadMutation.update(id, convertLeadPatch(customer.id, new Date()) as any)));
+        const deal = await dealMutation.create({
+          ...clientDealDraft({
+            customer,
+            subject: (inquiry.servicesInterestedIn || []).join(', ') || null,
+            source: 'Service Questionnaire',
+            notes: buildProjectDescription(inquiry),
+            at: new Date(),
+          }),
+          serviceInquiryId: inquiry.id,
+        } as any);
+        await inquiryMutation.update(inquiry.id, { status: 'Converted', dealId: deal.id, customerId: customer.id } as any);
+        setSelectedInquiry(prev => prev ? { ...prev, status: 'Converted', dealId: deal.id } as any : null);
+        toast({ title: 'Marrëveshje e re te klienti', description: `${customer.name} është klient — kërkesa u shtua si marrëveshje, jo si lead.` });
+        return;
+      }
+      if (route.leadId && (route.action === 'update-lead' || route.action === 'reopen-lead')) {
+        const existingLead = route.matchedLeads.find(l => l.id === route.leadId)!;
+        if (route.action === 'reopen-lead') await leadMutation.update(existingLead.id, reopenLeadPatch(existingLead, new Date()) as any);
+        await inquiryMutation.update(inquiry.id, {
+          status: 'Converted',
+          leadId: existingLead.id,
+        });
+        setSelectedInquiry(prev => prev ? { ...prev, status: 'Converted', leadId: existingLead.id } : null);
+        toast({
+          title: route.action === 'reopen-lead' ? 'Lead-i u rihap' : 'Lead ekziston tashmë',
+          description: `${inquiry.contactName} u lidh me lead-in ekzistues në CRM.`,
+        });
+        return;
       }
 
       const score = [
@@ -171,6 +195,8 @@ const ServiceInquiriesView: React.FC = () => {
         status: 'New',
         serviceInquiryId: inquiry.id,
         score,
+        // A Pending portal prospect keeps its lead, linked to its portal record.
+        ...(route.customer ? { customerId: route.customer.id } : {}),
       });
 
       if (newLead?.id) {

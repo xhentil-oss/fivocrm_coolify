@@ -1,9 +1,6 @@
 import React from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { addDoc, collection, Timestamp } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
 import { useClientPortal } from '../../hooks/useClientPortal';
-import { usePortalTenant } from '../../hooks/usePortalTenant';
 import { useAuth } from '../../contexts/AuthContext';
 import { useMutation, useDocument } from '../../hooks/useFirestore';
 import { Card, CardContent } from '../../components/ui/card';
@@ -38,8 +35,7 @@ const PortalInquiryView: React.FC = () => {
   const { inquiryId } = useParams<{ inquiryId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { customerId, businessId } = useClientPortal();
-  const { tenantBusinessId } = usePortalTenant();
+  const { customerId } = useClientPortal();
   const { toast } = useToast();
 
   const { data: inquiry, loading } = useDocument<ServiceInquiry>('serviceInquiries', inquiryId || '');
@@ -48,13 +44,10 @@ const PortalInquiryView: React.FC = () => {
   const inquiryMutation = useMutation<ServiceInquiry>('serviceInquiries');
   // The portal never reads `teamMembers` (cross-tenant staff data). The follow-up
   // task + notifications are created server-side by /api/notify-staff, which assigns
-  // them to sales staff of THIS client's business. The teamId for the lead comes from
-  // the tenant we resolved (subdomain), not from an arbitrary member.
-  const { tenantTeamId } = usePortalTenant();
-  const resolvedTeamId = tenantTeamId || null;
+  // them to sales staff of THIS client's business.
 
   const createLeadAndAutomations = async (formData: any, id: string) => {
-    if ((inquiry as any)?.leadId) return; // already converted
+    if ((inquiry as any)?.leadId || (inquiry as any)?.dealId) return; // already routed
 
     const tags: string[] = [];
     if (formData.servicesInterestedIn.includes('Web Design')) tags.push('Web Design Lead');
@@ -64,49 +57,51 @@ const PortalInquiryView: React.FC = () => {
     if (estimatedValue >= 150000) tags.push('High Value Lead');
     if (formData.timeline === 'Menjëherë') tags.push('Urgent Lead');
 
-    const leadData: Record<string, any> = {
-      name: formData.contactName,
-      email: formData.email,
-      phoneNumber: formData.phoneNumber,
-      company: formData.businessName,
-      status: 'New',
-      source: 'Service Questionnaire',
-      estimatedValue,
-      tags,
-      notes: `Shërbime: ${formData.servicesInterestedIn.join(', ')}\nObjektivi: ${formData.mainGoal}\nBuxheti: ${formData.budgetRange}\nAfati: ${formData.timeline}\n\nPërshkrimi: ${formData.projectNeedDescription}\nSfida: ${formData.currentMainChallenge}`,
-      serviceInquiryId: id,
-      ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
-      // Business-scoped CRM reads filter on businessId; without it the lead is invisible in /app/crm.
-      // Use the REAL businessId from useClientPortal (never the teamId — that failed isBusinessMember).
-      ...(businessId ? { businessId } : {}),
-      createdAt: Timestamp.now(),
-      updatedAt: Timestamp.now(),
-      createdByUserId: user?.uid || null,
-    };
-    if (formData.jobTitle) leadData.jobTitle = formData.jobTitle;
-    if (formData.website) leadData.website = formData.website;
-    const leadRef = await addDoc(collection(db, 'leads'), leadData);
-
-    await inquiryMutation.update(id, { leadId: leadRef.id });
+    // Lead OR deal is decided on the server (`_contactRoute.ts`): a client asking
+    // for more gets a Deal on their record — never a second lead — and a portal
+    // prospect gets (or reuses) one lead. The portal can write neither collection
+    // for that decision, and must not: it cannot see the client's other records.
+    if (!customerId) return;
+    let leadId: string | null = null;
+    let dealId: string | null = null;
+    try {
+      const token = await user?.getIdToken();
+      const res = await fetch('/api/link-contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ customerId, serviceInquiryId: id, estimatedValue, tags }),
+      });
+      if (res.ok) ({ leadId = null, dealId = null } = await res.json());
+    } catch { /* the follow-up task below still reaches the sales team */ }
 
     const taskPriority = formData.timeline === 'Menjëherë' || formData.isUrgent === 'Po' ? 'urgent' : 'high';
 
-    // The follow-up task + the "new lead" notifications are created SERVER-SIDE:
+    // The follow-up task + the notifications are created SERVER-SIDE:
     // assigning the task needs the tenant's sales staff, and the portal must not read
     // `teamMembers` (that was a cross-tenant read of every business's staff records).
     // /api/notify-staff resolves both from this client's own customer → businessId.
     await notifyStaff({
-      type: 'lead_created',
-      title: 'Lead i Ri nga Pyetësori',
-      message: `${formData.contactName} (${formData.businessName}) dorëzoi pyetësorin për: ${formData.servicesInterestedIn.join(', ')}`,
-      actionUrl: '/app/crm',
-      actionLabel: 'Shiko Lead-in',
+      ...(dealId
+        ? {
+            type: 'deal_created',
+            title: 'Kërkesë e re nga klienti',
+            message: `${formData.contactName} (${formData.businessName}) — klient — kërkon: ${formData.servicesInterestedIn.join(', ')}`,
+            actionUrl: `/app/customers/${customerId}`,
+            actionLabel: 'Hap klientin',
+          }
+        : {
+            type: 'lead_created',
+            title: 'Lead i Ri nga Pyetësori',
+            message: `${formData.contactName} (${formData.businessName}) dorëzoi pyetësorin për: ${formData.servicesInterestedIn.join(', ')}`,
+            actionUrl: '/app/crm',
+            actionLabel: 'Shiko Lead-in',
+          }),
       task: {
-        title: `Kontakto lead: ${formData.contactName} (${formData.businessName})`,
-        description: `Lead i ri nga pyetësori i shërbimeve.\n\nShërbime: ${formData.servicesInterestedIn.join(', ')}\nObjektivi: ${formData.mainGoal}\nBuxheti: ${formData.budgetRange}\nAfati: ${formData.timeline}\nKontakt: ${formData.email} / ${formData.phoneNumber}${formData.preferredContactMethod ? '\nMënyra e preferuar: ' + formData.preferredContactMethod : ''}`,
+        title: `${dealId ? 'Kontakto klientin (kërkesë e re)' : 'Kontakto lead'}: ${formData.contactName} (${formData.businessName})`,
+        description: `${dealId ? 'Klient ekzistues — kërkesë e re (marrëveshje në "Kualifikim")' : 'Lead i ri'} nga pyetësori i shërbimeve.\n\nShërbime: ${formData.servicesInterestedIn.join(', ')}\nObjektivi: ${formData.mainGoal}\nBuxheti: ${formData.budgetRange}\nAfati: ${formData.timeline}\nKontakt: ${formData.email} / ${formData.phoneNumber}${formData.preferredContactMethod ? '\nMënyra e preferuar: ' + formData.preferredContactMethod : ''}`,
         priority: taskPriority,
         dueInDays: 1,
-        leadId: leadRef.id,
+        ...(leadId ? { leadId } : {}),
       },
     });
   };

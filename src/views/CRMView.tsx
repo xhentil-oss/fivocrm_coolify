@@ -72,6 +72,7 @@ import { TEMP_META } from '../lib/leadIntel';
 import { LEAD_STAGES, SELECTABLE_STATUSES, leadStageLabel } from '../lib/leadStages';
 import { calculateLeadScore } from '../lib/leadScore';
 import { findContactMatch, matchFieldLabel, type MatchField } from '../lib/contactIdentity';
+import { convertLeadPatch, isClientCustomer, isOpenLeadStatus } from '../lib/crm/contactRoute';
 import { findDuplicateGroups } from '../lib/contactMerge';
 import MergeContactsDialog from '../components/MergeContactsDialog';
 import DuplicateContactsPanel from '../components/DuplicateContactsPanel';
@@ -209,6 +210,42 @@ const CRMView: React.FC = () => {
     [rawLeads, activeBusinessId]
   );
   const duplicateLeadGroups = useMemo(() => findDuplicateGroups(scopedLeads as any), [scopedLeads]);
+
+  // ── A client never keeps an open lead (src/lib/crm/contactRoute.ts) ────────
+  /** The CLIENT this lead belongs to — by its link, else by email OR phone — or null. */
+  const clientOfLead = (lead: Lead): Customer | null => {
+    const linked = lead.customerId ? (scopedCustomers as Customer[]).find(c => c.id === lead.customerId) : undefined;
+    const matched = linked ?? (findContactMatch(
+      { email: lead.email, phone: lead.phoneNumber || lead.phone },
+      scopedCustomers as any,
+    )?.record as Customer | undefined);
+    return matched && isClientCustomer(matched) ? matched : null;
+  };
+  /** Open leads of people who are already clients — left over from before the law, or a missed path. */
+  const openClientLeads = useMemo(
+    () => (scopedLeads as Lead[])
+      .filter(l => isOpenLeadStatus(l.status))
+      .map(l => ({ lead: l, customer: clientOfLead(l) }))
+      .filter((x): x is { lead: Lead; customer: Customer } => !!x.customer),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scopedLeads, scopedCustomers],
+  );
+  const [closingClientLeads, setClosingClientLeads] = useState(false);
+  const closeOpenClientLeads = async () => {
+    if (closingClientLeads || !openClientLeads.length) return;
+    setClosingClientLeads(true);
+    try {
+      const res = await Promise.allSettled(openClientLeads.map(({ lead, customer }) =>
+        leadMutation.update(lead.id, convertLeadPatch(customer.id, new Date()) as any)
+          .then(() => logLead(lead.id, 'converted', `U mbyll: është klient ("${customer.name}")`))));
+      const ok = res.filter(r => r.status === 'fulfilled').length;
+      toast(ok === res.length
+        ? { title: `${ok} lead-e u mbyllën`, description: 'Ishin tashmë klientë — kërkesat e reja shkojnë si marrëveshje.' }
+        : { title: `${ok}/${res.length} u mbyllën`, variant: 'destructive' });
+    } finally {
+      setClosingClientLeads(false);
+    }
+  };
   // Merging rewrites quotes/contracts/deals/activities across the tenant.
   const canMerge = permissions.isAdmin || permissions.isManager || permissions.isOwner;
   const openMerge = (primaryId?: string, duplicateId?: string) => {
@@ -387,11 +424,11 @@ const CRMView: React.FC = () => {
       assignedToUserId: resolvedAssigned,
     };
 
-    // Identity check against the UNFILTERED sources, so a restricted role can't
-    // bypass a teammate's record. A second lead for the same person is always
-    // wrong — block it. An existing CLIENT is a different story: a client asking
-    // for a new service is a legitimate lead, so we offer a choice instead of a
-    // dead end (see the dialog below).
+    // Identity check (email OR phone) against the UNFILTERED sources, so a
+    // restricted role can't bypass a teammate's record. A second lead for the
+    // same person is always wrong — block it. An existing CLIENT never becomes a
+    // lead again: their new request is a deal (see the dialog below; only a
+    // Pending portal prospect may still get a linked lead).
     const candidate = { email, phone: phoneNumber, phoneNumber };
     const dupLead = findContactMatch(candidate, rawLeads);
     if (dupLead) {
@@ -437,8 +474,10 @@ const CRMView: React.FC = () => {
         amount: payload.estimatedValue || 0,
         currency: 'ALL', // the form's "Vlera e Parashikuar (L)" is in Lek
         stage: 'Qualification',
-        ownerId: payload.assignedToUserId || undefined,
+        ownerId: payload.assignedToUserId || customer.assignedToUserId || undefined,
         notes: payload.notes || undefined,
+        source: payload.source || 'CRM',
+        kind: customer.status === 'Inactive' ? 'win-back' : 'new-business',
         lastActivityAt: new Date(),
       } as any);
       toast({ title: 'Marrëveshje e krijuar', description: `${customer.name} → marrëveshje e re në "Kualifikim".` });
@@ -497,6 +536,20 @@ const CRMView: React.FC = () => {
       const matchedCustomer = editLead.customerId
         ? null
         : findContactMatch(candidate, scopedCustomers as any)?.record as Customer | undefined;
+      // The person is a client → this lead closes (or stays closed); it can never
+      // be (re)opened next to them. New business from a client is a deal.
+      const clientNow = matchedCustomer && isClientCustomer(matchedCustomer)
+        ? matchedCustomer
+        : (editLead.customerId ? clientOfLead(editLead) : null);
+      if (clientNow && isOpenLeadStatus(status) && !isOpenLeadStatus(editLead.status)) {
+        toast({
+          title: 'Ky person është klient',
+          description: `"${clientNow.name}" nuk mund të jetë sërish lead. Krijo një marrëveshje te klienti.`,
+          variant: 'destructive',
+        });
+        setSaving(false); return;
+      }
+      const closeAsClient = !!clientNow && isOpenLeadStatus(status);
 
       const address = formData.get('address') as string;
       const company = formData.get('company') as string;
@@ -536,6 +589,7 @@ const CRMView: React.FC = () => {
         score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: estimatedValue && !isNaN(parseFloat(estimatedValue)) ? parseFloat(estimatedValue) : undefined }),
         assignedToUserId: resolvedAssigned,
         ...(matchedCustomer ? { customerId: matchedCustomer.id } : {}),
+        ...(closeAsClient && clientNow ? convertLeadPatch(clientNow.id, new Date()) : {}),
       });
 
       // The edited contact details now match an existing client — pair the two so
@@ -545,7 +599,12 @@ const CRMView: React.FC = () => {
           customerMutation.update(matchedCustomer.id, { leadId: editLead.id } as any)
             .catch(err => console.error('[CRMView] customer→lead link failed', err));
         }
-        toast({ title: 'U lidh me klientin', description: `Ky lead u lidh me klientin "${matchedCustomer.name}".` });
+        toast({
+          title: 'U lidh me klientin',
+          description: closeAsClient
+            ? `"${matchedCustomer.name}" është klient — lead-i u lidh dhe u mbyll si i konvertuar.`
+            : `Ky lead u lidh me klientin "${matchedCustomer.name}".`,
+        });
       }
 
       // Notify if lead was reassigned to a different user
@@ -813,6 +872,20 @@ const CRMView: React.FC = () => {
   };
 
   const handleStatusChange = async (lead: Lead, newStatus: string) => {
+    // A client's lead is history: putting it back into an open stage would make
+    // the person a lead and a client at once. New business is a deal.
+    if (isOpenLeadStatus(newStatus) && !isOpenLeadStatus(lead.status)) {
+      const client = clientOfLead(lead);
+      if (client) {
+        toast({
+          title: 'Ky person është klient',
+          description: `"${client.name}" nuk mund të jetë sërish lead. Krijo një marrëveshje te klienti.`,
+          variant: 'destructive',
+          action: <ToastAction altText="Hap klientin" onClick={() => navigate(`/app/customers/${client.id}`)}>Hap klientin</ToastAction>,
+        });
+        return;
+      }
+    }
     // If status is "Lost", prompt for reason before proceeding
     if (newStatus === 'Lost') {
       setLostReasonLead(lead);
@@ -1521,6 +1594,27 @@ const CRMView: React.FC = () => {
           })()}
         </Card>
       </div>
+
+      {openClientLeads.length > 0 && (
+        <Card className="p-3 border-warning/40 bg-warning/5 flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="flex-1 min-w-0 text-sm">
+            <p className="font-medium text-foreground">
+              {openClientLeads.length === 1 ? '1 lead i hapur është' : `${openClientLeads.length} lead-e të hapura janë`} tashmë klient
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {openClientLeads.slice(0, 3).map(x => x.lead.name).join(', ')}
+              {openClientLeads.length > 3 ? ` +${openClientLeads.length - 3}` : ''}
+              {' — një klient nuk mban lead të hapur; mbylli si të konvertuar, kërkesat e reja shkojnë si marrëveshje.'}
+            </p>
+          </div>
+          {permissions.canEdit && (
+            <Button size="sm" variant="outline" onClick={closeOpenClientLeads} disabled={closingClientLeads} className="shrink-0">
+              <CheckCircle2 className="w-4 h-4 mr-1.5" />
+              {closingClientLeads ? 'Duke mbyllur…' : 'Mbyll si të konvertuar'}
+            </Button>
+          )}
+        </Card>
+      )}
 
       {viewMode === 'duplicates' && canMerge ? (
         <DuplicateContactsPanel
@@ -2688,8 +2782,8 @@ const CRMView: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
-      {/* Existing client detected — a repeat request from a client is legitimate,
-          so offer the three sensible outcomes instead of blocking the save. */}
+      {/* Existing client detected — their new request is a DEAL on the client
+          (crm/contactRoute.ts); a Pending portal prospect may still get a lead. */}
       <Dialog open={!!dupCustomerPrompt} onOpenChange={(open) => { if (!open && !dupResolving) setDupCustomerPrompt(null); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -2699,7 +2793,10 @@ const CRMView: React.FC = () => {
             <>
               <p className="text-sm text-muted-foreground">
                 <span className="font-semibold text-foreground">{dupCustomerPrompt.customer.name}</span> është
-                tashmë klient dhe {matchFieldLabel(dupCustomerPrompt.on)} përputhet. Zgjidh si të vazhdojmë:
+                tashmë {isClientCustomer(dupCustomerPrompt.customer) ? 'klient' : 'i regjistruar në portal'} dhe {matchFieldLabel(dupCustomerPrompt.on)} përputhet.
+                {isClientCustomer(dupCustomerPrompt.customer)
+                  ? ' Një klient nuk bëhet sërish lead — kërkesa e re shkon si marrëveshje.'
+                  : ' Zgjidh si të vazhdojmë:'}
               </p>
               <div className="space-y-2 pt-1">
                 <Button variant="outline" className="w-full justify-start" onClick={dupOpenCustomer} disabled={dupResolving}>
@@ -2710,10 +2807,14 @@ const CRMView: React.FC = () => {
                   <TrendingUp className="w-4 h-4 mr-2 shrink-0" />
                   <span className="text-left">Krijo marrëveshje të re<span className="block text-xs text-muted-foreground font-normal">Shërbim i re për një klient ekzistues</span></span>
                 </Button>
-                <Button variant="outline" className="w-full justify-start" onClick={dupCreateLinkedLead} disabled={dupResolving}>
-                  <Plus className="w-4 h-4 mr-2 shrink-0" />
-                  <span className="text-left">Krijo lead dhe lidhe<span className="block text-xs text-muted-foreground font-normal">Mbaje në pipeline, i lidhur me klientin</span></span>
-                </Button>
+                {/* A client is never a lead again — only a Pending portal prospect
+                    (registered, bought nothing) may still enter the pipeline. */}
+                {!isClientCustomer(dupCustomerPrompt.customer) && (
+                  <Button variant="outline" className="w-full justify-start" onClick={dupCreateLinkedLead} disabled={dupResolving}>
+                    <Plus className="w-4 h-4 mr-2 shrink-0" />
+                    <span className="text-left">Krijo lead dhe lidhe<span className="block text-xs text-muted-foreground font-normal">I regjistruar në portal, ende pa blerë</span></span>
+                  </Button>
+                )}
               </div>
               <div className="flex justify-end pt-1">
                 <Button variant="ghost" onClick={() => setDupCustomerPrompt(null)} disabled={dupResolving}>Anulo</Button>

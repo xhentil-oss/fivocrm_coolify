@@ -1,7 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminDb, Timestamp } from './_firebaseAdmin.js';
 import { FieldValue } from 'firebase-admin/firestore';
-import { normContactEmail, findLeadForContact, findCustomerForContact, crossLinkLeadCustomer } from './_contactIdentity.js';
+import { normContactEmail, findLeadsForContact, findCustomerForContact, crossLinkLeadCustomer, closeLeadsForClient, leadRouteFacts } from './_contactIdentity.js';
+import { resolveContactRoute, reopenLeadPatch, clientDealDraft } from './_contactRoute.js';
 import { notifyUser } from './_push.js';
 import { checkPersistentRateLimit } from './_rateLimit.js';
 import { clientIp } from './_callerIdentity.js';
@@ -16,6 +17,8 @@ import { clientIp } from './_callerIdentity.js';
 // ── Rate limiting (POST only) ────────────────────────────────────────
 const ipLimitMap = new Map<string, { count: number; resetAt: number }>();
 const MAX_PER_HOUR = 5;
+/** `activities` row type for a client's new request (an activity, not a notification). */
+const CLIENT_REQUEST_ACTIVITY_TYPE = 'request_created';
 
 function checkIpRateLimit(ip: string): boolean {
   const now = Date.now();
@@ -265,23 +268,63 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
       } catch { /* non-blocking */ }
     }
 
-    // Identity resolution: reuse an existing lead for this person instead of
-    // creating a duplicate on repeat submissions, AND link to their customer
-    // record when they're already a client — an existing client asking for a
-    // new service is a real lead, but it must never become an orphan record
-    // sitting next to their client profile.
+    // Identity resolution (email OR phone, `_contactRoute.ts`):
+    //   - already a CLIENT → this request is new business on the client: a Deal,
+    //     never a lead (and any lead of theirs still open is closed now);
+    //   - an open lead → reuse it; a lost one → reopen it (history kept);
+    //   - nobody known → a new lead.
     let leadRef: FirebaseFirestore.DocumentReference | null = null;
+    let dealRef: FirebaseFirestore.DocumentReference | null = null;
     let existingCustomerId: string | null = null;
+    let clientName: string | null = null;
     try {
       const lookup = { email: sEmail, phone: sPhone, teamId, businessId };
-      const [existingLead, existingCustomer] = await Promise.all([
-        findLeadForContact(adminDb, lookup),
+      const [leadDocs, existingCustomer] = await Promise.all([
+        findLeadsForContact(adminDb, lookup),
         findCustomerForContact(adminDb, lookup),
       ]);
       existingCustomerId = existingCustomer?.id ?? null;
-      if (existingLead) {
+      const customerData = existingCustomer?.data() || null;
+      const route = resolveContactRoute({
+        leads: leadRouteFacts(leadDocs),
+        customer: existingCustomer ? { id: existingCustomer.id, status: customerData?.status ?? null } : null,
+        intent: 'inquiry',
+      });
+      if (route.action === 'customer-deal' && existingCustomer) {
+        clientName = customerData?.name || sName;
+        await closeLeadsForClient(adminDb, route.closeLeadIds, existingCustomer.id);
+        dealRef = await adminDb.collection('deals').add({
+          ...clientDealDraft({
+            customer: { id: existingCustomer.id, name: clientName, status: customerData?.status ?? null, assignedToUserId: customerData?.assignedToUserId ?? null },
+            subject: sPackageName || sCategory,
+            source: sSource,
+            notes: leadData.notes,
+            amount: leadData.estimatedValue,
+            at: now.toDate(),
+          }),
+          serviceInquiryId: inquiryRef.id,
+          ...tenantStamp,
+          createdAt: now,
+          createdByUserId: null,
+        });
+        await adminDb.collection('activities').add({
+          type: CLIENT_REQUEST_ACTIVITY_TYPE,
+          title: `Kërkesë e re nga ${sSource}`,
+          description: [sPackageName ? `Paketa: ${sPackageName}` : '', sMessage].filter(Boolean).join(' — ') || sCategory,
+          entityType: 'customer',
+          entityId: existingCustomer.id,
+          customerId: existingCustomer.id,
+          meta: { dealId: dealRef.id, serviceInquiryId: inquiryRef.id },
+          userId: null,
+          userName: 'Sistemi',
+          ...tenantStamp,
+          createdAt: now,
+        }).catch(() => {});
+      } else if (route.leadId && (route.action === 'update-lead' || route.action === 'reopen-lead')) {
+        const existingLead = leadDocs.find(d => d.id === route.leadId)!;
         leadRef = existingLead.ref;
         await existingLead.ref.update({
+          ...(route.action === 'reopen-lead' ? { ...reopenLeadPatch(existingLead.data() as any, now.toDate()), reopenedAt: now } : {}),
           serviceInquiryId: inquiryRef.id,
           updatedAt: now,
           ...(existingCustomerId && !existingLead.data()?.customerId ? { customerId: existingCustomerId } : {}),
@@ -292,19 +335,24 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
       // Non-blocking — fall through to create a new lead rather than lose the submission.
       console.error('[landing] contact identity lookup failed', err);
     }
-    if (!leadRef) {
+    if (!leadRef && !dealRef) {
       leadRef = await adminDb.collection('leads').add({
         ...leadData,
         ...(existingCustomerId ? { customerId: existingCustomerId } : {}),
       });
     }
-    // Reverse link (customer → lead) so the client profile shows this inquiry.
-    if (existingCustomerId) {
+    // Reverse link (portal prospect → its lead) so the profile shows this inquiry.
+    if (leadRef && existingCustomerId) {
       await crossLinkLeadCustomer(adminDb, leadRef.id, existingCustomerId);
     }
 
-    // 3. Link inquiry → lead
-    await inquiryRef.update({ leadId: leadRef.id });
+    // 3. Link inquiry → lead (or → the client's deal)
+    await inquiryRef.update(dealRef
+      ? { dealId: dealRef.id, customerId: existingCustomerId }
+      : { leadId: leadRef!.id });
+    // The record the owner + task follow: the client's deal, else the lead.
+    const ownedRef = (dealRef ?? leadRef)!;
+    const ownerField = dealRef ? 'ownerId' : 'assignedToUserId';
 
     // 4. Follow-up task
     const tomorrow = new Date();
@@ -333,22 +381,23 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
         } catch { /* keep cursor=1 */ }
         assigneeId = eligible[(cursor - 1) % eligible.length].data().userId || '';
       }
-      // Assign the lead to the chosen rep if it has no owner yet (dedup-reused
-      // leads keep their existing owner, and the task follows that owner).
-      if (assigneeId) {
-        try {
-          const leadSnap = await leadRef.get();
-          const existingOwner = leadSnap.data()?.assignedToUserId;
-          if (existingOwner) assigneeId = existingOwner;
-          else await leadRef.update({ assignedToUserId: assigneeId, updatedAt: now });
-        } catch { /* non-blocking */ }
-      }
     }
+    // Assign the lead / deal to the chosen rep if it has no owner yet (reused
+    // leads keep their owner, a client's deal its account owner, and the task
+    // follows that owner).
+    try {
+      const ownedSnap = await ownedRef.get();
+      const existingOwner = ownedSnap.data()?.[ownerField];
+      if (existingOwner) assigneeId = existingOwner;
+      else if (assigneeId) await ownedRef.update({ [ownerField]: assigneeId, updatedAt: now });
+    } catch { /* non-blocking */ }
 
     await adminDb.collection('tasks').add({
-      title: `Kontakto lead ${sCategory}: ${sName}`,
+      title: dealRef
+        ? `Kontakto klientin (kërkesë e re ${sCategory}): ${clientName || sName}`
+        : `Kontakto lead ${sCategory}: ${sName}`,
       description: [
-        `Lead i ri nga faqja ${sSource}.`,
+        dealRef ? `Klient ekzistues — kërkesë e re nga faqja ${sSource} (marrëveshje në "Kualifikim").` : `Lead i ri nga faqja ${sSource}.`,
         `Email: ${sEmail}`,
         sPhone ? `Telefon: ${sPhone}` : '',
         sWebsite ? `Website: ${sWebsite}` : '',
@@ -361,6 +410,7 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
       endDate: tomorrow,
       dueDate: tomorrow,
       assignedToUserId: assigneeId,
+      ...(dealRef && existingCustomerId ? { relatedCustomerId: existingCustomerId } : {}),
       ...tenantStamp,
       createdAt: now,
       updatedAt: now,
@@ -374,13 +424,25 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
       // A fresh inbound lead is time-critical, so it goes out over push + email
       // too. It used to be a batched document write only: the sales team saw a red
       // dot the next time somebody opened the CRM, and nothing before that.
-      await Promise.allSettled(adminDocs.map((m: any) => notifyUser({
-        userId: m.data().userId,
-        type: 'lead_created',
-        title: `Lead i Ri ${sCategory} — Landing Page`,
-        message: `${sName} dorëzoi kërkesë nga faqja ${sSource}${sPackageName ? ` (${sPackageName})` : ''}`,
-        actionUrl: '/app/crm',
-        actionLabel: 'Shiko CRM',
+      const recipients = new Set<string>(adminDocs.map((m: any) => m.data().userId).filter(Boolean));
+      if (dealRef && assigneeId) recipients.add(assigneeId);
+      await Promise.allSettled([...recipients].map((userId) => notifyUser({
+        userId,
+        ...(dealRef
+          ? {
+              type: 'deal_created',
+              title: `Kërkesë e re nga klienti — ${sCategory}`,
+              message: `${clientName || sName} (klient) dorëzoi kërkesë nga faqja ${sSource}${sPackageName ? ` (${sPackageName})` : ''}`,
+              actionUrl: existingCustomerId ? `/app/customers/${existingCustomerId}` : '/app/deals',
+              actionLabel: 'Hap klientin',
+            }
+          : {
+              type: 'lead_created',
+              title: `Lead i Ri ${sCategory} — Landing Page`,
+              message: `${sName} dorëzoi kërkesë nga faqja ${sSource}${sPackageName ? ` (${sPackageName})` : ''}`,
+              actionUrl: '/app/crm',
+              actionLabel: 'Shiko CRM',
+            }),
         businessId: (tenantStamp as any).businessId ?? null,
         teamId: (tenantStamp as any).teamId ?? null,
       })));
@@ -388,7 +450,8 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({
       success: true,
-      leadId: leadRef.id,
+      leadId: leadRef?.id ?? null,
+      dealId: dealRef?.id ?? null,
       inquiryId: inquiryRef.id,
     });
   } catch (err: any) {

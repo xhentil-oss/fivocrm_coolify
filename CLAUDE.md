@@ -186,11 +186,28 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
 
 ### Contact identity & duplicate merge
 
-- **One person, one pair of records.** A contact may legitimately be BOTH a lead and a
-  customer; what must never exist is two records for the same person that don't know
-  about each other. Matching lives in `src/lib/contactIdentity.ts` + the server mirror
-  `api/_contactIdentity.ts`; every write path (CRM, landing form, portal, WHMCS) resolves
-  identity through them and cross-links. Portal writes go via `POST /api/link-contact`.
+- **A client is never an open lead** (Nov 2026, Salesforce/HubSpot model — replaces "a
+  contact may be both"). A lead is the person BEFORE they buy; once they are a client
+  (a `customers` doc with any status but `Pending`) every open lead of theirs is closed
+  `Converted` + `customerId` and kept as history. New business from a client (another
+  service, a returning `Inactive` ex-client = `kind: 'win-back'`) is a **Deal** on the
+  client, never a new lead. A `Pending` customer is a portal signup that bought nothing:
+  its lead stays open. Identity = email OR phone.
+- **`src/lib/crm/contactRoute.ts` decides, the write paths execute.** Import-free,
+  `api/_contactRoute.ts` is a byte-identical copy (test-enforced).
+  `resolveContactRoute({ leads, customer, intent })` → `customer-deal` /
+  `customer-touch` / `update-lead` / `reopen-lead` (a Lost lead that asks again goes
+  back to New, `reopenedFromStatus` + `previousLostReason` kept) / `create-lead`, plus
+  `closeLeadIds`. Used by landing, `/api/link-contact` (portal signup AND the portal
+  brief — the portal no longer writes `leads` itself), WhatsApp inbound, WHMCS sync
+  (`convertLeadsForCustomer`), CRM create/edit/stage change (a client's closed lead
+  cannot be dragged back open), Klientët create/edit/bulk status, ServiceInquiries.
+  CRMView shows a banner for open leads that are already clients (one-click close);
+  Customer360 → Përmbledhje shows the client's open deals ("Kërkesa të hapura", Won/Lost)
+  for EVERY plan — the Marrëveshjet board is Pro-only;
+  `scripts/close-client-leads.mjs` (dry-run by default) repairs old data. Matching
+  lives in `src/lib/contactIdentity.ts` (`routeContact`) + `api/_contactIdentity.ts`
+  (`findLeadsForContact`, `closeLeadsForClient`). Adding a lead write path? → route it.
 - **Merging duplicates is the repair path** for records that slipped through: pure logic
   (grouping + field resolution) in `src/lib/contactMerge.ts`, execution in
   `api/_merge-contacts.ts` (`POST /api/merge-contacts`, `?type=merge-contacts`).
@@ -1137,6 +1154,18 @@ Nazmije speaks to staff, Ana speaks to clients — they never merge.
   with claims) + `src/lib/salesAgent/api.ts`. Adding a collection? → the usual six
   places (tests 85a–85h are the pattern). Open: `meeting.book`, `quote.draft`, cold
   EMAIL drain, portal/landing channels, level 3.
+- **Ana never goes silent without a trace** (2 Nov 2026 — "she answers once, then
+  nothing"). (1) Level 1 in office hours HOLDS the reply (`deferMinutes`,
+  `agent.pendingSend` + `agent.pendingDueAt`) and `sales-agent-pending` (every 5 min,
+  VPS, NOT in run-all) sends it unless `pendingSendBlockReason()` says a person
+  answered / a newer message came / handoff / opt-out / level lowered; same
+  idempotency key as an immediate send. The old rule compared "minutes since the
+  inbound" (always 0) and so never sent. (2) No 60s `burst` drop: the hook waits
+  `settleMs` and answers only the NEWEST text message (`isSupersededInbound`, needs
+  `conversations.lastInboundKind`), and re-checks before sending. (3) Every draft
+  notifies the thread owner once per 30 min (`notifyDraft`, type
+  `sales_agent_handoff`). (4) `handoffAutoResumeHours` (default 0 = off) lets Ana take
+  a handoff back when no person wrote since it.
 
 ### Daily staff report (mandatory, 16:50)
 

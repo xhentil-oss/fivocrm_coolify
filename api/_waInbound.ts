@@ -7,8 +7,10 @@ import {
   findLeadForContact,
   findCustomerForContact,
   crossLinkLeadCustomer,
+  closeLeadsForClient,
   phoneQueryVariants,
 } from './_contactIdentity.js';
+import { isClientCustomer, isOpenLeadStatus } from './_contactRoute.js';
 import { toWaPhone, waPhoneVariants } from './_waPhone.js';
 import { managerIdsForBusiness } from './_staffRecipients.js';
 import { notifyUser } from './_push.js';
@@ -886,6 +888,12 @@ export async function processWaEvent(rawEvent: WaEvent | Record<string, any>): P
   if (leadId && customerId && (!lead?.customerId || !customer?.leadId)) {
     await crossLinkLeadCustomer(adminDb, leadId, customerId);
   }
+  // A client never keeps an open lead (`_contactRoute.ts`): the message belongs
+  // to the client, and the lead left open next to them is closed as converted —
+  // so no playbook, cadence or lead SLA starts on someone who already buys.
+  if (leadId && customerId && lead && isOpenLeadStatus(lead.status) && isClientCustomer({ id: customerId, status: customer?.status })) {
+    if (await closeLeadsForClient(adminDb, [leadId], customerId)) lead.status = 'Converted';
+  }
   let leadCreateBlocked: WaInboundResult['leadCreateBlocked'] = null;
   let newLead = false;
   if (!leadId && !customerId) {
@@ -1012,6 +1020,8 @@ export async function processWaEvent(rawEvent: WaEvent | Record<string, any>): P
     lastInboundAt: tsStamp,
     lastInboundText: preview(event.text, event.kind),
     lastInboundMessageId: event.waMessageId,
+    // Ana coalesces a burst on the newest TEXT message; a photo must not swallow the question before it.
+    lastInboundKind: event.kind,
     // Never move lastMessageAt backwards (a replayed/late event must not reorder the inbox).
     lastMessageAt: ts.getTime() >= toMs(existing?.lastMessageAt) ? tsStamp : existing?.lastMessageAt,
     updatedAt: now,

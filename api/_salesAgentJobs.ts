@@ -7,6 +7,7 @@
  *   sales-agent-nudges        hourly        — nudges a silent prospect; escalates a stale handoff
  *   sales-agent-digest        08:15 local   — "dje në shitje" to the managers
  *   sales-agent-prospect-ttl  03:30 local   — PLATFORM-ONLY: deletes unregistered prospects > 30 days
+ *   sales-agent-pending       every 5 min   — sends a held level-1 reply nobody answered in time
  *
  * Every read is tenant-scoped and capped; a manual run is ONE tenant (`opts.businessId`,
  * filtered BEFORE any send); suspended tenants are skipped; every non-action is a
@@ -21,11 +22,13 @@ import { withJobLease, isLeaseHeld } from './_jobLease.js';
 import { PlacesError, placesTextSearchAll, resolvePlacesKey } from './_placesClient.js';
 import {
   SALES_AGENT_TZ as TZ, agentStateOf, baileysCoordsOf, buildDigestFacts, bumpMonthlyUsage, bumpUsage, loadAgentCtx, loadSalesFacts,
-  notifyHandoff, readMonthlyUsage, sendAgentWaText, shiftDateKey, writeLeadActivity, type AgentCtx,
+  contactOptedOut, lastHumanOutboundMs, notifyHandoff, readMonthlyUsage, readUsage, sendAgentWaText, shiftDateKey, stampAgentSend,
+  writeLeadActivity, type AgentCtx,
 } from './_salesAgent.js';
 import {
   COLD_WA_BLOCK_LABELS, buildNudgeText, buildSalesDigest, coldWaBlockReason, coldWaPauseAfterFailure, ensureColdWaCompliance,
-  handoffOverdue, localParts, nudgeBlockReason, qualificationProgress, renderTemplate, salesAgentRunId, salesDigestDocId,
+  handoffOverdue, isSupersededInbound, localParts, nudgeBlockReason, pendingSendBlockReason, qualificationProgress, renderTemplate,
+  salesAgentRunId, salesDigestDocId,
   type ColdWaBlockReason,
 } from './_salesAgentCore.js';
 import {
@@ -41,6 +44,9 @@ const NUDGE_READ_CAP = 100;
 const TTL_BATCH = 200;
 const TTL_MAX_BATCHES = 5;
 const COLD_WA_AUTOMATION_KIND = 'sales-agent-cold';
+/** Starts with 'sales-agent' so the thread reader counts it as Ana's own row. */
+const AGENT_PENDING_AUTOMATION_KIND = 'sales-agent-pending';
+const PENDING_READ_CAP = 100;
 
 interface JobOpts { businessId?: string | null; now?: Date }
 
@@ -461,6 +467,92 @@ export async function runSalesAgentDigest(opts: JobOpts = {}): Promise<Record<st
     }
   }
   return { date: yesterday, posted, blocked: tally.counts };
+}
+
+// ── 6. Held level-1 replies (every 5 min) ────────────────────────────────────
+
+/**
+ * Level 1 inside office hours holds Ana's reply for `humanSilenceMinutes` so a person
+ * can answer first (`conversations.agent.pendingSend`). This job sends the ones whose
+ * wait is over, after asking `pendingSendBlockReason()` again: a person who answered,
+ * a newer client message, a handoff, an opt-out or a lowered level cancels it (the
+ * text stays as the thread's draft). Reads only due rows — a range on one indexed field.
+ */
+export async function runSalesAgentPending(opts: JobOpts = {}): Promise<Record<string, unknown>> {
+  const scopeId = opts.businessId || null;
+  const r = await withJobLease('sales-agent-pending', scopeId, LEASE_MS, async () => {
+    const now = opts.now || new Date();
+    const dateKey = localParts(now, TZ).date;
+    const tally = new Tally();
+    let sent = 0, cancelled = 0;
+    const due = await db.collection('conversations').where('agent.pendingDueAt', '<=', Timestamp.fromDate(now)).limit(PENDING_READ_CAP).get().catch((err) => {
+      console.error('[salesAgent] pending read failed', err); return null;
+    });
+    const ctxByTeam = new Map<string, AgentCtx | null>();
+    for (const d of due?.docs || []) {
+      const conv = d.data() as any;
+      const bid = String(conv.businessId || '');
+      if (scopeId && bid !== scopeId) { tally.add('out-of-scope'); continue; }
+      const p = conv.agent?.pendingSend;
+      const forMessageId = typeof p?.forMessageId === 'string' ? p.forMessageId : '';
+      // Claim: only the run that clears the due date may send (overlapping ticks, retries).
+      const claimed = await db.runTransaction(async (tx) => {
+        const fresh = await tx.get(d.ref);
+        const fp = (fresh.data() as any)?.agent?.pendingSend;
+        if (!fp || fp.forMessageId !== forMessageId || !(fresh.data() as any)?.agent?.pendingDueAt) return false;
+        tx.set(d.ref, { agent: { pendingDueAt: admin.firestore.FieldValue.delete() } }, { merge: true });
+        return true;
+      }).catch(() => false);
+      if (!claimed || !forMessageId) { tally.add('claimed-elsewhere'); continue; }
+      const runRef = db.collection('salesAgentRuns').doc(salesAgentRunId(bid, 'reply', d.id, forMessageId));
+      const cancel = async (reason: string) => {
+        cancelled++; tally.add(reason);
+        await d.ref.set({ agent: { pendingSend: admin.firestore.FieldValue.delete() } }, { merge: true }).catch(() => {});
+        await runRef.set({ decision: 'draft', blockReason: reason, pendingCancelledAt: Timestamp.now(), updatedAt: Timestamp.now() }, { merge: true }).catch(() => {});
+      };
+      const teamId = String(conv.teamId || '');
+      if (!ctxByTeam.has(teamId)) ctxByTeam.set(teamId, await loadAgentCtx(teamId, bid).catch(() => null));
+      const ctx = ctxByTeam.get(teamId) || null;
+      if (!ctx) { await cancel('team-missing'); continue; }
+      if (ctx.tenantStatus === 'suspended') { await cancel('suspended'); continue; }
+      const target = p.target || {};
+      const phone = toWaPhone(String(target.phone || conv.phone || ''));
+      if (!phone) { await cancel('no-phone'); continue; }
+      const [usage, humanMs, optedOut] = await Promise.all([
+        readUsage(ctx.businessId, dateKey),
+        lastHumanOutboundMs(ctx.teamId, phone),
+        contactOptedOut(p.leadId ?? conv.leadId ?? null, p.customerId ?? conv.customerId ?? null),
+      ]);
+      const reason = pendingSendBlockReason({
+        settings: ctx.settings, dueAt: toDate(p.dueAt), createdAt: toDate(p.createdAt), now,
+        agentState: agentStateOf(conv),
+        superseded: isSupersededInbound({ waMessageId: forMessageId, lastInboundMessageId: conv.lastInboundMessageId ?? null, lastInboundKind: conv.lastInboundKind ?? null }),
+        lastHumanOutboundMs: humanMs, optedOut, repliesToday: Number(usage.replies) || 0,
+      });
+      if (reason) { await cancel(reason); continue; }
+      const text = String(p.text || '');
+      const res = await sendAgentWaText({
+        ctx, target: { channel: target.channel === 'meta' ? 'meta' : 'baileys', agentId: target.agentId ?? null, metaPhoneNumberId: target.metaPhoneNumberId ?? null, phone, jid: target.jid ?? null, channelPhone: target.channelPhone ?? null },
+        // The SAME key the immediate send would have used: one message per inbound, whoever sends it.
+        text, idempotencyKey: `sa_${d.id}_${forMessageId}`, automationKind: AGENT_PENDING_AUTOMATION_KIND,
+        leadId: p.leadId ?? null, customerId: p.customerId ?? null, contactName: String(p.contactName || conv.subject || phone),
+      });
+      if (!res.ok) { await cancel('send-failed'); continue; }
+      sent++;
+      const ts = Timestamp.fromDate(now);
+      const lead = p.leadId ? ((await db.collection('leads').doc(p.leadId).get().catch(() => null))?.data() ?? null) : null;
+      await stampAgentSend({
+        ctx, conversationId: d.id, conv, agentPatch: { pendingSend: admin.firestore.FieldValue.delete() }, now: ts, dateKey, text, sentId: res.id,
+        leadId: p.leadId ?? null, lead, customerId: p.customerId ?? null, contactName: String(p.contactName || conv.subject || phone),
+        conversationOwnerId: p.conversationOwnerId ?? conv.ownerId ?? null,
+        collected: p.collected && typeof p.collected === 'object' ? p.collected : {}, qualified: p.qualified === true,
+        intent: String(p.intent || 'question'), stage: String(p.stage || 'qualifying'),
+      });
+      await runRef.set({ decision: 'send', blockReason: null, sentAfterWait: true, replyText: text, sentAt: ts, updatedAt: ts }, { merge: true }).catch(() => {});
+    }
+    return { scanned: due?.size || 0, sent, cancelled, blocked: tally.counts };
+  });
+  return isLeaseHeld(r) ? r : (r as Record<string, unknown>);
 }
 
 // ── 5. Prospect TTL (platform-only; Places terms) ─────────────────────────────
