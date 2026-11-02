@@ -107,6 +107,11 @@ export interface SalesAgentSettings {
   humanSilenceMinutes: number;
   /** A handoff nobody picks up within this many minutes escalates to managers. */
   handoffSlaMinutes: number;
+  /**
+   * Hours after a handoff with NO staff reply after which Ana takes the thread back
+   * when the client writes again. 0 = never (the thread stays with the person).
+   */
+  handoffAutoResumeHours: number;
   /** Turns without a new collected field before the agent hands off (`no-progress`). */
   maxTurnsWithoutProgress: number;
   channels: { whatsapp: boolean; email: boolean; portal: boolean; landingForm: boolean };
@@ -125,7 +130,12 @@ export interface SalesAgentSettings {
 
 export const SALES_AGENT_LIMITS = {
   replyMaxChars: 400,
+  /** Legacy: the old "a reply was produced < 60s ago" drop. No longer gates anything. */
   burstMs: 60_000,
+  /** Wait before answering so a burst of client messages gets ONE reply (to the last). */
+  settleMs: 4_000,
+  /** At most one "Ana has a draft" notification per conversation in this window. */
+  draftNotifyThrottleMs: 30 * 60_000,
   historyLimit: 12,
   knowledgeMaxItems: 200,
   dailyReplyCapMax: 1000,
@@ -151,6 +161,7 @@ export const SALES_AGENT_DEFAULTS: SalesAgentSettings = {
   officeTo: '18:00',
   humanSilenceMinutes: 10,
   handoffSlaMinutes: 30,
+  handoffAutoResumeHours: 0,
   maxTurnsWithoutProgress: 6,
   channels: { whatsapp: true, email: true, portal: true, landingForm: true },
   qualificationFields: ['service', 'city', 'timeline', 'budget', 'decisionMaker'],
@@ -215,6 +226,7 @@ export function resolveSalesAgentSettings(raw: unknown, opts: { maxAutonomy?: Sa
     officeTo: hhmm(r.officeTo, d.officeTo),
     humanSilenceMinutes: clampInt(r.humanSilenceMinutes, 1, 240, d.humanSilenceMinutes),
     handoffSlaMinutes: clampInt(r.handoffSlaMinutes, 5, 1440, d.handoffSlaMinutes),
+    handoffAutoResumeHours: clampInt(r.handoffAutoResumeHours, 0, 72, d.handoffAutoResumeHours),
     maxTurnsWithoutProgress: clampInt(r.maxTurnsWithoutProgress, 2, 20, d.maxTurnsWithoutProgress),
     channels: {
       whatsapp: channels.whatsapp !== false,
@@ -303,7 +315,10 @@ export type SalesAgentBlockReason =
   | 'intent-not-allowed'    // this intent needs a higher level → draft
   | 'inside-hours-human'    // level 1 inside office hours, a human is around
   | 'daily-cap'             // tenant reply cap reached today
-  | 'burst'                 // a reply/draft was produced < 60s ago for this thread
+  | 'burst'                 // legacy (runs before Nov 2026): a reply/draft < 60s ago dropped the message
+  | 'superseded'            // the client wrote again; Ana answers the NEWEST message instead
+  | 'awaiting-human'        // level 1 in office hours: Ana sends after humanSilenceMinutes unless a person answers
+  | 'human-replied'         // a person answered while Ana was waiting; her pending reply was dropped
   | 'reply-to-automated'    // the contact answers one of our automated rows (invoice, campaign)
   | 'duplicate-run'         // run doc already exists (idempotency)
   | 'empty'                 // model returned nothing usable
@@ -324,6 +339,9 @@ export const SALES_AGENT_BLOCK_LABELS: Record<SalesAgentBlockReason, string> = {
   'inside-hours-human': 'Brenda orarit — pritet përgjigja e një personi',
   'daily-cap': 'Kuota ditore e përgjigjeve u arrit',
   'burst': 'U prodhua një përgjigje para pak sekondash',
+  'superseded': 'Klienti shkroi sërish — Ana i përgjigjet mesazhit të fundit',
+  'awaiting-human': 'Brenda orarit — Ana përgjigjet vetë nëse askush nuk përgjigjet brenda kohës së pritjes',
+  'human-replied': 'Një person u përgjigj ndërkohë — përgjigjja e Anës u anulua',
   'reply-to-automated': 'Kontakti i përgjigjet një mesazhi tonë automatik (faturë/fushatë)',
   'duplicate-run': 'Ky mesazh u trajtua tashmë',
   'empty': 'Modeli nuk ktheu asgjë të përdorshme',
@@ -462,6 +480,12 @@ export interface DeliveryDecision {
   mode: DeliveryMode;
   blockReason: SalesAgentBlockReason | null;
   handoffReason: HandoffReason | null;
+  /**
+   * Level 1 inside office hours: a SEND held back for this many minutes so a person
+   * can answer first. The `sales-agent-pending` job sends it when the wait is over and
+   * nobody replied. Present only with `mode: 'draft'` + `blockReason: 'awaiting-human'`.
+   */
+  deferMinutes?: number;
 }
 
 export interface DeliveryInput {
@@ -473,8 +497,6 @@ export interface DeliveryInput {
   insideOfficeHours: boolean;
   /** Minutes since the last STAFF (human) outbound message in this thread; null = never. */
   minutesSinceHumanReply: number | null;
-  /** Minutes since the inbound we are answering. */
-  minutesSinceInbound: number;
   turnsWithoutProgress: number;
   /** Whether this message collected anything new. */
   progressed: boolean;
@@ -501,15 +523,73 @@ export function decideDelivery(i: DeliveryInput): DeliveryDecision {
   if (twp >= s.maxTurnsWithoutProgress) return handoff('no-progress');
 
   if (s.autonomy === 0) return draft('autonomy-draft');
-  if (s.autonomy === 1 && i.insideOfficeHours) {
-    const humanAround = i.minutesSinceHumanReply !== null && i.minutesSinceHumanReply < s.humanSilenceMinutes * 6;
-    if (humanAround || i.minutesSinceInbound < s.humanSilenceMinutes) return draft('inside-hours-human');
-  }
+  // Level 1 in office hours: a person who is ACTIVE in the thread keeps it (draft only).
+  const levelOneInHours = s.autonomy === 1 && i.insideOfficeHours;
+  if (levelOneInHours && i.minutesSinceHumanReply !== null && i.minutesSinceHumanReply < s.humanSilenceMinutes * 6) return draft('inside-hours-human');
   if (!allowedIntentsForAutonomy(s.autonomy).has(o.intent)) return draft('intent-not-allowed');
   if (o.confidence < CONFIDENCE_DRAFT_MIN) return handoff('low-confidence');
   if (o.confidence < CONFIDENCE_SEND_MIN) return draft('low-confidence');
   if (!o.reply) return draft('empty');
+  // Otherwise level 1 in office hours WAITS for a person, then sends. It used to compare
+  // "minutes since the inbound" (always 0 at decision time), so it never sent at all
+  // and nothing came back to it later.
+  if (levelOneInHours) return { mode: 'draft', blockReason: 'awaiting-human', handoffReason: null, deferMinutes: s.humanSilenceMinutes };
   return { mode: 'send', blockReason: null, handoffReason: null };
+}
+
+/**
+ * A handoff Ana may take back: the owner opted in (`handoffAutoResumeHours` > 0), the
+ * hours have passed, and NO person wrote in the thread since the handoff. A thread a
+ * person answered is theirs for good; only "Rifillo" gives it back.
+ */
+export function handoffAutoResumeDue(i: { autoResumeHours: number; handoffAt: Date | null; lastHumanOutboundMs: number | null; now: Date }): boolean {
+  if (!(i.autoResumeHours > 0) || !i.handoffAt) return false;
+  const at = i.handoffAt.getTime();
+  if (i.now.getTime() - at < i.autoResumeHours * 3_600_000) return false;
+  return !(i.lastHumanOutboundMs !== null && i.lastHumanOutboundMs >= at);
+}
+
+/** One "Ana has a draft / will answer at …" notification per conversation per window. */
+export function shouldNotifyDraft(lastNotifiedAt: Date | null, now: Date): boolean {
+  return !lastNotifiedAt || now.getTime() - lastNotifiedAt.getTime() >= SALES_AGENT_LIMITS.draftNotifyThrottleMs;
+}
+
+/**
+ * A newer client message makes this run's answer stale, but only a TEXT one: a photo
+ * or a reaction gets no answer of its own, so it must not swallow the question before it.
+ */
+export function isSupersededInbound(i: { waMessageId: string; lastInboundMessageId: string | null | undefined; lastInboundKind: string | null | undefined }): boolean {
+  if (!i.lastInboundMessageId || i.lastInboundMessageId === i.waMessageId) return false;
+  return (i.lastInboundKind ?? 'text') === 'text';
+}
+
+export type PendingSendBlockReason = SalesAgentBlockReason | 'autonomy-changed' | 'not-due';
+
+export interface PendingSendInput {
+  settings: SalesAgentSettings;
+  dueAt: Date | null;
+  createdAt: Date | null;
+  now: Date;
+  agentState: Pick<ConversationAgentLike, 'active' | 'stage'> | null;
+  superseded: boolean;
+  lastHumanOutboundMs: number | null;
+  optedOut: boolean;
+  repliesToday: number;
+}
+
+/** May the held-back level-1 reply go out now? The job asks again at send time. */
+export function pendingSendBlockReason(i: PendingSendInput): PendingSendBlockReason | null {
+  if (!i.settings.enabled) return 'module-off';
+  if (!i.settings.channels.whatsapp) return 'channel-off';
+  if (i.settings.autonomy < 1) return 'autonomy-changed';
+  if (!i.dueAt || i.now.getTime() < i.dueAt.getTime()) return 'not-due';
+  if (i.agentState && i.agentState.active === false && i.agentState.stage === 'handoff') return 'handoff-active';
+  if (i.agentState && i.agentState.stage === 'closed') return 'closed';
+  if (i.superseded) return 'superseded';
+  if (i.lastHumanOutboundMs !== null && i.createdAt && i.lastHumanOutboundMs >= i.createdAt.getTime()) return 'human-replied';
+  if (i.optedOut) return 'opted-out';
+  if (i.repliesToday >= i.settings.dailyReplyCap) return 'daily-cap';
+  return null;
 }
 
 // ── Pre-model gate ──────────────────────────────────────────────────────────
@@ -525,6 +605,8 @@ export interface GateInput {
   replyToAutomated: boolean;
   repliesToday: number;
   now: Date;
+  /** `handoffAutoResumeDue()` said yes: the handoff no longer blocks. */
+  handoffResumable?: boolean;
 }
 
 export interface ConversationAgentLike {
@@ -544,13 +626,13 @@ export function agentGateReason(i: GateInput): SalesAgentBlockReason | null {
   if (!i.isPerson) return 'not-a-person';
   if (!i.hasText) return 'no-text';
   if (i.optedOut) return 'opted-out';
-  if (i.agentState && i.agentState.active === false && i.agentState.stage === 'handoff') return 'handoff-active';
+  if (i.agentState && i.agentState.active === false && i.agentState.stage === 'handoff' && !i.handoffResumable) return 'handoff-active';
   if (i.agentState && i.agentState.stage === 'closed') return 'closed';
   if (i.replyToAutomated) return 'reply-to-automated';
   if (!i.hasAiKey) return 'no-ai-key';
   if (i.repliesToday >= i.settings.dailyReplyCap) return 'daily-cap';
-  const last = Math.max(i.agentState?.lastReplyAt?.getTime() ?? 0, i.agentState?.lastDraftAt?.getTime() ?? 0);
-  if (last && i.now.getTime() - last < SALES_AGENT_LIMITS.burstMs) return 'burst';
+  // No "a reply was produced < 60s ago" drop any more: it threw the client's quick
+  // follow-up away for good. Bursts are coalesced by the hook (settle + isSupersededInbound).
   return null;
 }
 

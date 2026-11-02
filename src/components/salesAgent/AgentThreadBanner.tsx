@@ -16,6 +16,13 @@ interface Props {
   conversationId: string | undefined;
 }
 
+/** "10:42" in the viewer's clock, or null for a missing/past-tense value. */
+function dueClock(v: unknown): string | null {
+  const d = v instanceof Date ? v : (v as any)?.toDate?.() instanceof Date ? (v as any).toDate() : null;
+  if (!d || d.getTime() < Date.now()) return null;
+  return d.toLocaleTimeString('sq-AL', { hour: '2-digit', minute: '2-digit' });
+}
+
 export default function AgentThreadBanner({ agent, conversationId }: Props) {
   const { toast } = useToast();
   const settings = useTeamSettingsData();
@@ -39,6 +46,9 @@ export default function AgentThreadBanner({ agent, conversationId }: Props) {
   };
 
   const openMin = isHandoff ? minutesSince(agent.handoffAt) : null;
+  // Level 1 in office hours: say WHEN Ana will answer, so silence is never a mystery.
+  const pendingMin = !isHandoff && agent.pendingSend ? minutesSince(agent.pendingDueAt) : null;
+  const pendingAt = !isHandoff && agent.pendingSend ? dueClock(agent.pendingDueAt) : null;
   return (
     <div className={`mb-2 px-3 py-2 rounded-md border text-[11px] leading-snug flex items-center justify-between gap-2 ${isHandoff ? 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300' : 'bg-sky-500/10 border-sky-500/30 text-sky-800 dark:text-sky-300'}`}>
       <span className="flex items-center gap-1.5 min-w-0">
@@ -46,7 +56,9 @@ export default function AgentThreadBanner({ agent, conversationId }: Props) {
         <span className="truncate">
           {isHandoff
             ? `${persona.name} ia dorëzoi ekipit: ${reasonLabel(agent.handoffReason)}${openMin !== null ? ` · ${durationLabel(openMin)}` : ''}`
-            : `${persona.name} po e mban bisedën · faza: ${STAGE_LABELS[stage] || stage}`}
+            : pendingAt && pendingMin === 0
+              ? `${persona.name} i përgjigjet vetë në ${pendingAt} nëse nuk përgjigjesh ti`
+              : `${persona.name} po e mban bisedën · faza: ${STAGE_LABELS[stage] || stage}`}
         </span>
       </span>
       <button type="button" disabled={busy} onClick={() => { void run(isHandoff ? 'resume' : 'handoff'); }}

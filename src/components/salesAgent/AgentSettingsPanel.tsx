@@ -219,6 +219,7 @@ export default function AgentSettingsPanel({ teamId, settings, canEdit }: Props)
           <div className="space-y-1"><Label className="text-xs">deri</Label><Input type="time" value={draft.officeTo} disabled={ro} onChange={(e) => patch({ officeTo: e.target.value })} /></div>
           <Num label="Pret një person (min, niveli 1)" value={draft.humanSilenceMinutes} min={1} max={240} disabled={ro} onChange={(n) => patch({ humanSilenceMinutes: n })} hint="Brenda orarit, Ana përgjigjet vetëm nëse askush nuk përgjigjet për kaq minuta." />
           <Num label="SLA e dorëzimit (min)" value={draft.handoffSlaMinutes} min={5} max={1440} disabled={ro} onChange={(n) => patch({ handoffSlaMinutes: n })} hint="Një dorëzim që nuk e merr askush brenda kësaj kohe shkon te menaxherët." />
+          <Num label="Ana rifillon pas dorëzimit (orë, 0 = kurrë)" value={draft.handoffAutoResumeHours} min={0} max={72} disabled={ro} onChange={(n) => patch({ handoffAutoResumeHours: n })} hint="Nëse askush nuk i shkruan klientit për kaq orë pas dorëzimit, Ana e merr sërish bisedën kur klienti shkruan përsëri." />
         </div>
       </Card>
 

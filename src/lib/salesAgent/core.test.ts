@@ -14,6 +14,7 @@ import {
   coldWaDailyQuota, coldWaBlockReason, coldWaPauseAfterFailure, nudgeBlockReason, buildNudgeText,
   handoffOverdue, buildSalesDigest, inWindow, localParts, salesAgentRunId, allowedIntentsForAutonomy,
   SALES_AGENT_BLOCK_LABELS, COLD_WA_BLOCK_LABELS, HANDOFF_LABELS,
+  handoffAutoResumeDue, shouldNotifyDraft, isSupersededInbound, pendingSendBlockReason,
   type SalesAgentSettings, type AgentModelOutput, type DeliveryInput, type ColdWaGateInput, type SalesFacts,
 } from './core';
 
@@ -86,12 +87,66 @@ describe('agentGateReason (before any model call)', () => {
     expect(agentGateReason({ ...base, replyToAutomated: true })).toBe('reply-to-automated');
     expect(agentGateReason({ ...base, hasAiKey: false })).toBe('no-ai-key');
     expect(agentGateReason({ ...base, repliesToday: 200 })).toBe('daily-cap');
-    expect(agentGateReason({ ...base, agentState: { active: true, stage: 'qualifying', lastReplyAt: new Date(base.now.getTime() - 10_000), lastDraftAt: null } })).toBe('burst');
+  });
+  it('a quick follow-up right after Ana spoke is NOT dropped any more (old 60s burst gate)', () => {
+    expect(agentGateReason({ ...base, agentState: { active: true, stage: 'qualifying', lastReplyAt: new Date(base.now.getTime() - 10_000), lastDraftAt: new Date(base.now.getTime() - 5_000) } })).toBeNull();
+  });
+  it('an auto-resumable handoff no longer blocks', () => {
+    const handedOff = { active: false, stage: 'handoff' as const, lastReplyAt: null, lastDraftAt: null };
+    expect(agentGateReason({ ...base, agentState: handedOff, handoffResumable: true })).toBeNull();
+    expect(agentGateReason({ ...base, agentState: handedOff, handoffResumable: false })).toBe('handoff-active');
   });
   it('every block reason has an Albanian label', () => {
     for (const k of Object.keys(SALES_AGENT_BLOCK_LABELS)) expect(SALES_AGENT_BLOCK_LABELS[k as keyof typeof SALES_AGENT_BLOCK_LABELS].length).toBeGreaterThan(5);
     for (const k of Object.keys(COLD_WA_BLOCK_LABELS)) expect(COLD_WA_BLOCK_LABELS[k as keyof typeof COLD_WA_BLOCK_LABELS].length).toBeGreaterThan(5);
     for (const k of Object.keys(HANDOFF_LABELS)) expect(HANDOFF_LABELS[k as keyof typeof HANDOFF_LABELS].length).toBeGreaterThan(5);
+  });
+});
+
+describe('Ana never goes silent without a reason (Nov 2026)', () => {
+  const now = new Date('2026-11-03T10:00:00Z');
+  const h = (n: number) => new Date(now.getTime() - n * 3_600_000);
+  it('handoffAutoResumeDue: opt-in, after the hours, and only if no person wrote since', () => {
+    expect(handoffAutoResumeDue({ autoResumeHours: 0, handoffAt: h(48), lastHumanOutboundMs: null, now })).toBe(false);
+    expect(handoffAutoResumeDue({ autoResumeHours: 4, handoffAt: h(2), lastHumanOutboundMs: null, now })).toBe(false);
+    expect(handoffAutoResumeDue({ autoResumeHours: 4, handoffAt: h(5), lastHumanOutboundMs: null, now })).toBe(true);
+    expect(handoffAutoResumeDue({ autoResumeHours: 4, handoffAt: h(5), lastHumanOutboundMs: h(6).getTime(), now })).toBe(true);
+    expect(handoffAutoResumeDue({ autoResumeHours: 4, handoffAt: h(5), lastHumanOutboundMs: h(1).getTime(), now })).toBe(false);
+    expect(handoffAutoResumeDue({ autoResumeHours: 4, handoffAt: null, lastHumanOutboundMs: null, now })).toBe(false);
+  });
+  it('resolveSalesAgentSettings clamps handoffAutoResumeHours (default off)', () => {
+    expect(resolveSalesAgentSettings({}).handoffAutoResumeHours).toBe(0);
+    expect(resolveSalesAgentSettings({ handoffAutoResumeHours: 500 }).handoffAutoResumeHours).toBe(72);
+    expect(resolveSalesAgentSettings({ handoffAutoResumeHours: 6 }).handoffAutoResumeHours).toBe(6);
+  });
+  it('shouldNotifyDraft throttles to one per window', () => {
+    expect(shouldNotifyDraft(null, now)).toBe(true);
+    expect(shouldNotifyDraft(new Date(now.getTime() - 60_000), now)).toBe(false);
+    expect(shouldNotifyDraft(new Date(now.getTime() - SALES_AGENT_LIMITS.draftNotifyThrottleMs), now)).toBe(true);
+  });
+  it('isSupersededInbound: only a newer TEXT message supersedes', () => {
+    expect(isSupersededInbound({ waMessageId: 'a', lastInboundMessageId: 'a', lastInboundKind: 'text' })).toBe(false);
+    expect(isSupersededInbound({ waMessageId: 'a', lastInboundMessageId: 'b', lastInboundKind: 'text' })).toBe(true);
+    expect(isSupersededInbound({ waMessageId: 'a', lastInboundMessageId: 'b', lastInboundKind: 'media' })).toBe(false);
+    expect(isSupersededInbound({ waMessageId: 'a', lastInboundMessageId: 'b', lastInboundKind: null })).toBe(true);
+    expect(isSupersededInbound({ waMessageId: 'a', lastInboundMessageId: null, lastInboundKind: null })).toBe(false);
+  });
+  it('pendingSendBlockReason: sends when due and nobody answered; names every cancel', () => {
+    const base = {
+      settings: settings({ autonomy: 1 }), dueAt: new Date(now.getTime() - 1_000), createdAt: new Date(now.getTime() - 600_000), now,
+      agentState: { active: true, stage: 'qualifying' as const }, superseded: false, lastHumanOutboundMs: null, optedOut: false, repliesToday: 0,
+    };
+    expect(pendingSendBlockReason(base)).toBeNull();
+    expect(pendingSendBlockReason({ ...base, settings: settings({ autonomy: 2 }) })).toBeNull();
+    expect(pendingSendBlockReason({ ...base, settings: settings({ autonomy: 0 }) })).toBe('autonomy-changed');
+    expect(pendingSendBlockReason({ ...base, settings: settings({ autonomy: 1, enabled: false }) })).toBe('module-off');
+    expect(pendingSendBlockReason({ ...base, dueAt: new Date(now.getTime() + 60_000) })).toBe('not-due');
+    expect(pendingSendBlockReason({ ...base, agentState: { active: false, stage: 'handoff' } })).toBe('handoff-active');
+    expect(pendingSendBlockReason({ ...base, superseded: true })).toBe('superseded');
+    expect(pendingSendBlockReason({ ...base, lastHumanOutboundMs: now.getTime() - 60_000 })).toBe('human-replied');
+    expect(pendingSendBlockReason({ ...base, lastHumanOutboundMs: now.getTime() - 3_600_000 })).toBeNull();
+    expect(pendingSendBlockReason({ ...base, optedOut: true })).toBe('opted-out');
+    expect(pendingSendBlockReason({ ...base, repliesToday: 999 })).toBe('daily-cap');
   });
 });
 
@@ -138,7 +193,7 @@ describe('decideDelivery', () => {
   });
   const input = (over: Partial<DeliveryInput> = {}): DeliveryInput => ({
     settings: settings({ autonomy: 2 }), output: out(), trigger: null, clientText: 'A bëni SEO?', insideOfficeHours: false,
-    minutesSinceHumanReply: null, minutesSinceInbound: 0, turnsWithoutProgress: 0, progressed: true, ...over,
+    minutesSinceHumanReply: null, turnsWithoutProgress: 0, progressed: true, ...over,
   });
   it('level 2 sends a confident FAQ answer', () => {
     expect(decideDelivery(input())).toEqual({ mode: 'send', blockReason: null, handoffReason: null });
@@ -157,12 +212,21 @@ describe('decideDelivery', () => {
     expect(decideDelivery(input({ output: out({ intent: 'price', priceFromFacts: false }) })).handoffReason).toBe('custom-price');
     expect(decideDelivery(input({ clientText: 'A bëni ndonjë zbritje?' })).handoffReason).toBe('custom-price');
   });
-  it('level 1 inside office hours waits for a human; outside it answers', () => {
-    const s = settings({ autonomy: 1 });
-    expect(decideDelivery(input({ settings: s, insideOfficeHours: true, minutesSinceInbound: 2 })).blockReason).toBe('inside-hours-human');
-    expect(decideDelivery(input({ settings: s, insideOfficeHours: true, minutesSinceInbound: 15, minutesSinceHumanReply: 5 })).blockReason).toBe('inside-hours-human');
-    expect(decideDelivery(input({ settings: s, insideOfficeHours: true, minutesSinceInbound: 15, minutesSinceHumanReply: 600 })).mode).toBe('send');
+  it('level 1 inside office hours holds the reply for humanSilenceMinutes, then sends; outside it answers', () => {
+    const s = settings({ autonomy: 1, humanSilenceMinutes: 10 });
+    expect(decideDelivery(input({ settings: s, insideOfficeHours: true }))).toEqual({ mode: 'draft', blockReason: 'awaiting-human', handoffReason: null, deferMinutes: 10 });
+    expect(decideDelivery(input({ settings: s, insideOfficeHours: true, minutesSinceHumanReply: 600 })).deferMinutes).toBe(10);
     expect(decideDelivery(input({ settings: s, insideOfficeHours: false })).mode).toBe('send');
+  });
+  it('level 1: a person active in the thread keeps it (plain draft, nothing held for sending)', () => {
+    const d = decideDelivery(input({ settings: settings({ autonomy: 1 }), insideOfficeHours: true, minutesSinceHumanReply: 5 }));
+    expect(d.blockReason).toBe('inside-hours-human');
+    expect(d.deferMinutes).toBeUndefined();
+  });
+  it('level 1 never holds something it would not send (intent / confidence come first)', () => {
+    const s = settings({ autonomy: 1 });
+    expect(decideDelivery(input({ settings: s, insideOfficeHours: true, output: out({ intent: 'answer' }) })).blockReason).toBe('intent-not-allowed');
+    expect(decideDelivery(input({ settings: s, insideOfficeHours: true, output: out({ confidence: 0.6 }) })).blockReason).toBe('low-confidence');
   });
   it('level 1 never sends a qualification answer or a booking', () => {
     const s = settings({ autonomy: 1 });
