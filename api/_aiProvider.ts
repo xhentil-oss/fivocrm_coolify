@@ -8,10 +8,12 @@
  * Anthropic (Claude) joined as the third provider in Oct 2026.
  *
  * Resolution (same as before, now in one place):
- *   tenant `aiProvider` + `aiApiKey` (+ optional `aiModel`) from
- *   `getTeamConfig(teamId)` — the key lives in teamSecrets, never on the client —
- *   then the platform env keys (`GEMINI_API_KEY`, `OPENAI_API_KEY`,
- *   `ANTHROPIC_API_KEY`) as fallback. The tenant's explicit provider goes first;
+ *   tenant `aiApiKey` from `getTeamConfig(teamId)` — the key lives in the
+ *   BUSINESS vault (`businessSecrets/{bid}`, set by the platform super-admin;
+ *   legacy `teamSecrets` as fallback), provider/model from `businesses.aiPolicy`
+ *   — then the platform env keys (`GEMINI_API_KEY`, `OPENAI_API_KEY`,
+ *   `ANTHROPIC_API_KEY`) as fallback, unless the policy forbids it
+ *   (`allowPlatformFallback: false`) or switches AI off (`disabled`). The tenant's explicit provider goes first;
  *   if it throws, every other provider with a key is tried once, in order.
  *
  * Gemini and OpenAI are called with `fetch`; Anthropic through the official
@@ -119,6 +121,14 @@ export async function resolveAiConfig(teamId: string | null | undefined): Promis
         return {};
       })
     : {};
+  // The platform's AI policy for this tenant (businesses/{bid}.aiPolicy, merged by
+  // getTeamConfig): a kill switch, and whether OUR env keys may serve a tenant that
+  // has no key of its own. Both are super-admin decisions.
+  if (cfg.aiDisabled === true) {
+    return { preferred: null, geminiKey: '', openaiKey: '', anthropicKey: '', model: '', hasKey: false, providerMismatch: null };
+  }
+  const platformAllowed = cfg.aiAllowPlatformFallback !== false;
+  const env = (name: string) => (platformAllowed ? process.env[name] || '' : '');
   const teamKey = typeof cfg.aiApiKey === 'string' ? cfg.aiApiKey.trim() : '';
   // The key's shape wins over the stored `aiProvider`: a key sent to the wrong
   // provider is just "invalid" there, and the UI then showed an opaque 500.
@@ -128,9 +138,9 @@ export async function resolveAiConfig(teamId: string | null | undefined): Promis
   if (providerMismatch) {
     console.warn(`[aiProvider] team ${teamId}: aiProvider=${providerMismatch} but the key looks like a ${preferred} key — using ${preferred}`);
   }
-  const geminiKey = preferred === 'gemini' ? teamKey : (process.env.GEMINI_API_KEY || '');
-  const openaiKey = preferred === 'openai' ? teamKey : (process.env.OPENAI_API_KEY || '');
-  const anthropicKey = preferred === 'anthropic' ? teamKey : (process.env.ANTHROPIC_API_KEY || '');
+  const geminiKey = preferred === 'gemini' ? teamKey : env('GEMINI_API_KEY');
+  const openaiKey = preferred === 'openai' ? teamKey : env('OPENAI_API_KEY');
+  const anthropicKey = preferred === 'anthropic' ? teamKey : env('ANTHROPIC_API_KEY');
   // A model typed for the OTHER provider would only 404 here.
   const model = !providerMismatch && typeof cfg.aiModel === 'string' ? cfg.aiModel.trim() : '';
   return {

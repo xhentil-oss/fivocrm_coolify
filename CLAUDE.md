@@ -126,6 +126,34 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   `scripts/firestore-rules.test.mjs` (35 tests; run them in the emulator before any
   `firebase deploy --only firestore:rules`).
 
+### Tenant credentials are PLATFORM-managed, one vault per TENANT (Nov 2026)
+
+- **A credential belongs to the business, never to a team.** Values live in
+  `businessSecrets/{businessId}` (`read, write: if false`, test 86a);
+  `getTeamConfig(teamId)` merges business vault > legacy `teamSecrets/{teamId}` >
+  `teamSettings`, so every server consumer is unchanged. Per-team keys were why an AI
+  key "disappeared" when the active team switched.
+- **Only the platform super-admin sets, rotates or clears them**: `POST
+  /api/tenant-secrets` refuses everyone else (`code: 'platform-managed'`) and goes
+  through `writeBusinessSecrets()`, which records the STATUS on
+  `businesses.credentials.<field>` (configured, last4, fingerprint, who/when), mirrors
+  `has*` onto every team's `teamSettings`, strips the field from every team vault,
+  audits `platform.secrets_update` and notifies the owner
+  (`tenant_credentials_changed`). The tenant sees `ManagedCredentialNotice` (status +
+  "Kërko ndryshim" → `action: 'request-change'` → `credentials_change_requested` to
+  the super-admins, 10-min cooldown). Console: `TenantCredentialsPanel` on
+  `/superadmin/tenants/:id`.
+- **The AI policy is the platform's too**: `businesses.aiPolicy` (`provider`, `model`,
+  `allowPlatformFallback` default true, `disabled` kill switch) via `/api/platform-admin`
+  `set-ai-policy`; `resolveAiConfig` honours it. Rules: the owner cannot write
+  `aiPolicy` / `credentials*` (86c), a tenant admin cannot write the `has*` flags or
+  `aiProvider/aiModel` on `teamSettings` (86b).
+- Migration: job `consolidate-business-secrets` (platform-only, dry-run first) moves a
+  field to the business when the teams agree on ONE value; different values are
+  reported as conflicts (fingerprints only) for the super-admin to resolve.
+  Adding a credential? → `SECRET_FIELDS` + `SECRET_FLAGS` + `teamSettingsSecretKeys()` +
+  `teamSettingsPlatformKeys()` + `CREDENTIAL_LABELS` + `TenantCredentialField`.
+
 ### Security laws (audit Sep 2026 — `workspace/SECURITY_AUDIT_2026_09.md`)
 
 - **An email is an identity only when Firebase says it is verified.** Server

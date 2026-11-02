@@ -14,7 +14,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import admin, { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 import { writeAudit } from './_audit.js';
-import { writeTeamSecrets } from './_tenantConfig.js';
+import { writeBusinessSecrets } from './_tenantConfig.js';
 import { encryptSecret } from './_secretCrypto.js';
 import { normalizeHostname } from './_hostingProviders.js';
 import {
@@ -256,13 +256,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json(await testServer(serverId, c.uid));
       }
       case 'registrar.saveKey': {
-        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden('Vetëm Admin/Manager mund të ruajë çelësin e Dynadot.');
+        // Tenant credentials are platform-managed (Nov 2026): only the super-admin
+        // sets them, and for the whole BUSINESS — see api/_tenant-secrets.ts.
+        if (!c.superAdmin) throw forbidden('Çelësi i Dynadot menaxhohet nga FivoCRM. Kontaktoni administratorin e platformës.');
         const teamId = String(body.teamId || c.tid || '');
         if (!teamId) throw bad('Mungon teamId');
         const team = await db.collection('teams').doc(teamId).get();
-        if (!team.exists || !sameTenant(c, (team.data() as any).businessId || teamId)) throw forbidden();
-        await writeTeamSecrets(teamId, { dynadotApiKey: String(body.apiKey || '').trim() });
-        await audit('registrar.key', `team:${teamId}`, { set: !!String(body.apiKey || '').trim() });
+        if (!team.exists) throw notFound('Ekipi nuk u gjet');
+        const bid = (team.data() as any).businessId || teamId;
+        await writeBusinessSecrets(bid, { dynadotApiKey: String(body.apiKey || '').trim() }, { uid: c.uid, email: c.email || null });
+        await audit('registrar.key', `business:${bid}`, { set: !!String(body.apiKey || '').trim(), viaTeam: teamId });
         const test = String(body.apiKey || '').trim() ? await testRegistrar(teamId, c.uid) : null;
         return res.status(200).json({ ok: true, test });
       }

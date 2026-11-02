@@ -11,7 +11,10 @@ import { sendReportsForPeriod } from '../_socialEmail.js';
 import { syncAllGmbAccounts } from '../_gmb.js';
 // Credentials live in `teamSecrets` (client-unreadable), NOT in `teamSettings`.
 // Always resolve tenant config through getTeamConfig so secrets are merged in.
-import { getTeamConfig, SECRET_FIELDS, writeTeamSecrets } from '../_tenantConfig.js';
+import {
+  getTeamConfig, SECRET_FIELDS, writeTeamSecrets,
+  getTeamSecrets, getBusinessSecrets, writeBusinessSecrets, secretFingerprint,
+} from '../_tenantConfig.js';
 // Follow-up thresholds (SLA hours, stale days, cadence) — byte-identical mirror
 // of src/lib/crm/followUpConfig.ts; the UI resolves the same settings the same way.
 import { resolveFollowUpConfig } from '../_followUpConfig.js';
@@ -6736,6 +6739,73 @@ async function runMigrateTeamSecrets(opts?: { dryRun?: boolean }) {
   return { teams: snap.size, teamsTouched, tokensMoved, moved, errors, dryRun: !!opts?.dryRun };
 }
 
+// ── JOB: consolidate-business-secrets (one vault per TENANT, Nov 2026) ───────
+// Credentials used to live per TEAM (`teamSecrets/{teamId}`), so a tenant with
+// several departments had several AI keys — or "lost" its key when the active team
+// changed. This moves every field to `businessSecrets/{bid}` when the tenant's
+// teams agree on ONE value (writeBusinessSecrets then strips the team copies).
+// Two teams with DIFFERENT values is a conflict the job never resolves on its own:
+// it is reported (team ids + fingerprints, never values) and the super-admin picks
+// the key in the console. A field the business vault already holds is left alone.
+// Meta channel tokens are a map: the per-team maps are unioned.
+async function runConsolidateBusinessSecrets(opts?: { dryRun?: boolean }) {
+  const teamsSnap = await db.collection('teams').get();
+  const byBusiness = new Map<string, string[]>();
+  for (const d of teamsSnap.docs) {
+    const bid = (d.data() as any)?.businessId || d.id;
+    byBusiness.set(bid, [...(byBusiness.get(bid) || []), d.id]);
+  }
+
+  const moved: Record<string, string[]> = {};
+  const conflicts: Array<{ businessId: string; field: string; teams: Array<{ teamId: string; fingerprint: string }> }> = [];
+  const errors: string[] = [];
+
+  for (const [bid, teamIds] of byBusiness) {
+    try {
+      const existing = await getBusinessSecrets(bid);
+      const perTeam = await Promise.all(teamIds.map(async (tid) => ({ tid, s: await getTeamSecrets(tid) })));
+      const toWrite: Record<string, any> = {};
+
+      for (const field of SECRET_FIELDS) {
+        if (field === 'metaChannelTokens') {
+          const union: Record<string, string> = {};
+          for (const { s } of perTeam) Object.assign(union, s.metaChannelTokens || {});
+          const missing = Object.keys(union).filter((k) => !(existing.metaChannelTokens || {})[k]);
+          if (missing.length) toWrite.metaChannelTokens = union;
+          continue;
+        }
+        if (typeof existing[field] === 'string' && existing[field]) continue;
+        const values = perTeam
+          .filter(({ s }) => typeof s[field] === 'string' && s[field].trim())
+          .map(({ tid, s }) => ({ tid, v: String(s[field]).trim() }));
+        const distinct = new Set(values.map((x) => x.v));
+        if (distinct.size === 1) toWrite[field] = values[0].v;
+        else if (distinct.size > 1) {
+          conflicts.push({
+            businessId: bid,
+            field,
+            teams: values.map(({ tid, v }) => ({ teamId: tid, fingerprint: secretFingerprint(v) })),
+          });
+        }
+      }
+
+      if (Object.keys(toWrite).length === 0) continue;
+      moved[bid] = Object.keys(toWrite);
+      if (opts?.dryRun) continue;
+      await writeBusinessSecrets(bid, toWrite, { uid: null, email: 'job:consolidate-business-secrets' });
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      console.error(`[consolidate-business-secrets] ${bid} failed:`, msg);
+      errors.push(`${bid}: ${msg.slice(0, 200)}`);
+    }
+  }
+  return {
+    businesses: byBusiness.size,
+    businessesTouched: Object.keys(moved).length,
+    moved, conflicts, errors, dryRun: !!opts?.dryRun,
+  };
+}
+
 // ── JOB: tenant-hierarchy (a team must live INSIDE a business) ───────────────
 // Enforces the two-level model on existing data:
 //   1. every `teams` doc gets a `businessId` pointing at a REAL `businesses` doc
@@ -8087,7 +8157,7 @@ const PLATFORM_ONLY_JOBS = new Set<string>([
   'tenant-export', 'tenant-delete',
   'backfill-businessid', 'backfill-portal-customerid', 'backfill-customerid',
   'backfill-member-keys', 'clear-legacy-member-pay', 'backfill-member-compensation',
-  'migrate-team-secrets', 'tenant-hierarchy', 'backfill-tenant-keys', 'sync-tenant-claims',
+  'migrate-team-secrets', 'consolidate-business-secrets', 'tenant-hierarchy', 'backfill-tenant-keys', 'sync-tenant-claims',
   // ONE WHMCS integration for the platform (env-configured, `integrations/whmcs`):
   // a tenant Admin running it acts on every mirrored record, not on their own.
   'whmcs-sync', 'whmcs-clients',
@@ -8346,6 +8416,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
         }
         result = await runMigrateTeamSecrets({ dryRun: req.query.dryRun === '1' });
+        break;
+      }
+      case 'consolidate-business-secrets': {
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runConsolidateBusinessSecrets({ dryRun: req.query.dryRun === '1' });
         break;
       }
       case 'tenant-hierarchy': {

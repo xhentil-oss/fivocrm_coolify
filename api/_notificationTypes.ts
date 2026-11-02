@@ -109,6 +109,8 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   content_reported: 'system',
   platform_tenant_signup: 'system',
   modules_configured: 'system',
+  tenant_credentials_changed: 'system',
+  credentials_change_requested: 'system',
   // virtual sales agent
   sales_agent_handoff: 'messages',
   sales_agent_qualified: 'messages',

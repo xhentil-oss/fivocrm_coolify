@@ -2608,7 +2608,9 @@ service cloud.firestore {
         && !request.resource.data.keys().hasAny([
              'seats', 'limits', 'stripeCustomerId', 'stripeSubscriptionId',
              'currentPeriodEnd', 'cancelAtPeriodEnd', 'portalSubdomain',
-             'moduleSetupNotifiedAt', 'moduleSetupDoneAt'])
+             'moduleSetupNotifiedAt', 'moduleSetupDoneAt',
+             'aiPolicy', 'credentials', 'credentialsUpdatedAt',
+             'credentialsChangeRequestedAt', 'credentialsChangeRequest'])
         && (!('trialEndsAt' in request.resource.data)
             || (request.resource.data.trialEndsAt is timestamp
                 && request.resource.data.trialEndsAt <= request.time + duration.value(15, 'd')));
@@ -2624,7 +2626,13 @@ service cloud.firestore {
             && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
                  'status', 'plan', 'lockedModules', 'seats', 'limits', 'trialEndsAt', 'ownerId',
                  'stripeCustomerId', 'stripeSubscriptionId', 'currentPeriodEnd', 'cancelAtPeriodEnd',
-                 'moduleSetup', 'moduleSetupRequestedAt', 'moduleSetupNotifiedAt', 'moduleSetupDoneAt']));
+                 'moduleSetup', 'moduleSetupRequestedAt', 'moduleSetupNotifiedAt', 'moduleSetupDoneAt',
+                 // Credentials are PLATFORM-managed (Nov 2026): the AI policy and the
+                 // credential status are written only by /api/platform-admin and
+                 // /api/tenant-secrets (Admin SDK). An owner who could edit them would
+                 // fake "configured" or switch the platform's AI fallback on.
+                 'aiPolicy', 'credentials', 'credentialsUpdatedAt',
+                 'credentialsChangeRequestedAt', 'credentialsChangeRequest']));
       allow delete: if isSuperAdmin();
     }
 
@@ -2683,6 +2691,14 @@ service cloud.firestore {
     // onto teamSettings. Previously these lived on `teamSettings`, which was
     // `read: if isAuth()` — every tenant's credentials were readable by any user.
     match /teamSecrets/{teamId} {
+      allow read, write: if false;
+    }
+
+    // ── businessSecrets: the TENANT credential vault (Nov 2026) ─────────────────
+    // One vault per business — a credential belongs to the tenant, never to one of
+    // its teams. Written only by /api/tenant-secrets for a platform super-admin
+    // (Admin SDK); no client, the super-admin included, ever reads a value back.
+    match /businessSecrets/{businessId} {
       allow read, write: if false;
     }
 
@@ -3574,6 +3590,13 @@ service cloud.firestore {
             ? !request.resource.data.keys().hasAny(teamSettingsSecretKeys())
             : !request.resource.data.diff(resource.data).affectedKeys().hasAny(teamSettingsSecretKeys())
         )
+        // The `has*` credential markers and the AI provider/model are the PLATFORM's
+        // (mirrored by /api/tenant-secrets, chosen in the console): a tenant admin
+        // flipping `hasAiApiKey` would make the app claim a key that does not exist.
+        && (isSuperAdmin()
+            || (resource == null
+                ? !request.resource.data.keys().hasAny(teamSettingsPlatformKeys())
+                : !request.resource.data.diff(resource.data).affectedKeys().hasAny(teamSettingsPlatformKeys())))
         // The company's MONEY configuration — the bank accounts printed on every
         // invoice (and emailed to clients), the employer-cost / capacity settings
         // and the rate card behind every cost/hour — is owner/Admin only. A
@@ -3588,6 +3611,11 @@ service cloud.firestore {
     // quota, persona) is in the same tier as the money settings: raising the
     // autonomy or switching cold outreach on is a company-level decision, not a
     // department's. Everything else in teamSettings stays Admin/Manager.
+    function teamSettingsPlatformKeys() {
+      return ['hasAiApiKey', 'hasEmailApiKey', 'hasEmailSmtpPass', 'hasWhatsappVpsSecret',
+              'hasMetaWebhookVerifyToken', 'hasMetaChannelTokens', 'hasGmbClientSecret',
+              'hasDynadotApiKey', 'hasGooglePlacesApiKey', 'aiProvider', 'aiModel'];
+    }
     function teamSettingsFinanceKeys() {
       return ['bankAccounts', 'financeSettings', 'rateCard', 'salesAgent'];
     }

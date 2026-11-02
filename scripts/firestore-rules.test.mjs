@@ -2704,7 +2704,9 @@ test('66b. every SECRET_FIELDS key of api/_tenantConfig.ts is refused on teamSet
   for (const field of secretFields) {
     await assertFails(setDoc(doc(admin, 'teamSettings', MY_TEAM), { [field]: 'leak-me' }, { merge: true }));
   }
-  await assertSucceeds(setDoc(doc(admin, 'teamSettings', MY_TEAM), { hasDynadotApiKey: true, companyName: 'Mine Ltd' }, { merge: true }));
+  await assertSucceeds(setDoc(doc(admin, 'teamSettings', MY_TEAM), { companyName: 'Mine Ltd' }, { merge: true }));
+  // The has* markers are the platform's since Nov 2026 (see 86b).
+  await assertFails(setDoc(doc(admin, 'teamSettings', MY_TEAM), { hasDynadotApiKey: true }, { merge: true }));
 });
 
 // ── M3. expenses: the approving department is a department OF the business ─────
@@ -4484,4 +4486,44 @@ test('85h. userProfiles: the sales agent\'s bot profile (salesagent_<bid>, userI
   // Staff still read her name for the chat directory / badges.
   await assertSucceeds(getDoc(doc(alice, 'userProfiles', `salesagent_${MY_BIZ}`)));
   await assertFails(getDoc(doc(outsider(), 'userProfiles', `salesagent_${MY_BIZ}`)));
+});
+
+// ── Platform-managed tenant credentials (Nov 2026) ────────────────────────────
+// Credentials belong to the TENANT (businessSecrets/{bid}) and only the platform
+// super-admin sets them, through /api/tenant-secrets (Admin SDK). The tenant sees
+// their status (businesses.credentials, teamSettings has* flags) and nothing else.
+test('86a. businessSecrets: nobody reads or writes the tenant vault from a browser, super-admin included', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'businessSecrets', MY_BIZ), { businessId: MY_BIZ, aiApiKey: 'sk-ant-secret' });
+  });
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  const owner = testEnv.authenticatedContext('aliceOwner', { email: 'alice@mine.com', bid: MY_BIZ, tid: MY_TEAM, roles: ['owner', 'admin'] }).firestore();
+  for (const db of [sa, owner, outsider()]) {
+    await assertFails(getDoc(doc(db, 'businessSecrets', MY_BIZ)));
+    await assertFails(setDoc(doc(db, 'businessSecrets', MY_BIZ), { aiApiKey: 'sk-ant-mine' }, { merge: true }));
+  }
+});
+
+test('86b. teamSettings: a tenant admin cannot flip the has* markers or pick the AI provider/model; the platform can', async () => {
+  const admin = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  for (const field of ['hasAiApiKey', 'hasEmailApiKey', 'hasWhatsappVpsSecret', 'hasMetaChannelTokens', 'hasGooglePlacesApiKey']) {
+    await assertFails(setDoc(doc(admin, 'teamSettings', MY_TEAM), { [field]: true }, { merge: true }));
+  }
+  await assertFails(setDoc(doc(admin, 'teamSettings', MY_TEAM), { aiProvider: 'openai' }, { merge: true }));
+  await assertFails(setDoc(doc(admin, 'teamSettings', MY_TEAM), { aiModel: 'gpt-5' }, { merge: true }));
+  // Everything else stays the tenant's.
+  await assertSucceeds(setDoc(doc(admin, 'teamSettings', MY_TEAM), { companyPhone: '+355 69 000 0000' }, { merge: true }));
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  await assertSucceeds(setDoc(doc(sa, 'teamSettings', MY_TEAM), { aiProvider: 'anthropic' }, { merge: true }));
+});
+
+test('86c. businesses: the owner cannot write aiPolicy / credentials status / the change request stamp', async () => {
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  await assertSucceeds(setDoc(doc(sa, 'businesses', MY_BIZ), { aiPolicy: { allowPlatformFallback: false } }, { merge: true }));
+  const owner = testEnv.authenticatedContext('aliceOwner', { email: 'alice@mine.com', bid: MY_BIZ, tid: MY_TEAM, roles: ['owner', 'admin'] }).firestore();
+  await assertFails(setDoc(doc(owner, 'businesses', MY_BIZ), { aiPolicy: { allowPlatformFallback: true } }, { merge: true }));
+  await assertFails(setDoc(doc(owner, 'businesses', MY_BIZ), { credentials: { aiApiKey: { configured: true, last4: '1234' } } }, { merge: true }));
+  await assertFails(setDoc(doc(owner, 'businesses', MY_BIZ), { credentialsChangeRequestedAt: new Date(0) }, { merge: true }));
+  // …while their own fields still save.
+  await assertSucceeds(setDoc(doc(owner, 'businesses', MY_BIZ), { disabledModules: [] }, { merge: true }));
 });

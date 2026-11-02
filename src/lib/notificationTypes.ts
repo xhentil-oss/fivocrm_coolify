@@ -176,6 +176,11 @@ export const NOTIFICATION_TYPES = {
   platform_tenant_signup:               { category: 'system', priority: 'warning',  groupLabel: 'tenantë të rinj' },
   // …and the answer, to the owner: the platform configured the modules (set-modules).
   modules_configured:                   { category: 'system', priority: 'success' },
+  // Tenant credentials (AI key, SMTP, WhatsApp, Meta, …) are platform-managed: the
+  // owner is told whenever FivoCRM sets/rotates/clears one (api/_tenant-secrets.ts)…
+  tenant_credentials_changed:           { category: 'system', priority: 'warning' },
+  // …and a tenant Owner/Admin asks the super-admins for a change ("Kërko ndryshim").
+  credentials_change_requested:         { category: 'system', priority: 'warning',  groupLabel: 'kërkesa për kredenciale' },
   // ── Virtual sales agent ("Ana", api/_salesAgent.ts + api/_salesAgentJobs.ts) ──
   // The agent handed a conversation to a person (asked for a human, complaint,
   // custom price, …) — to the thread owner, else the managers; escalated once more

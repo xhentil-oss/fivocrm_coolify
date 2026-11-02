@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { safeSenderAddress, safeSenderName } from './_emailIdentity.js';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
 import { encryptSecretFields, decryptSecretFields } from './_secretCrypto.js';
@@ -72,14 +73,29 @@ export async function getTeamSecrets(teamId: string): Promise<Record<string, any
  */
 export async function getTeamConfig(teamId: string): Promise<TeamConfig> {
   if (!teamId) return {};
-  const [settingsSnap, secrets] = await Promise.all([
+  const [settingsSnap, secrets, biz] = await Promise.all([
     db.collection('teamSettings').doc(teamId).get(),
     getTeamSecrets(teamId),
+    getBusinessLayerForTeam(teamId),
   ]);
   const settings: Record<string, any> = settingsSnap.exists ? ((settingsSnap.data() as any) || {}) : {};
-  const merged: Record<string, any> = { ...settings, ...stripUndefined(secrets) };
+  // Precedence: business vault (set by the platform) > legacy team vault > settings.
+  const { metaChannelTokens: bizTokens, ...bizSecrets } = biz.secrets;
+  const merged: Record<string, any> = { ...settings, ...stripUndefined(secrets), ...stripUndefined(bizSecrets) };
 
-  const tokens = (secrets.metaChannelTokens || {}) as Record<string, string>;
+  // AI policy is the platform's (businesses/{bid}.aiPolicy): it overrides the
+  // legacy per-team provider/model the tenant used to choose itself.
+  const policy = biz.aiPolicy;
+  if (policy.provider) merged.aiProvider = policy.provider;
+  if (typeof policy.model === 'string' && policy.model.trim()) merged.aiModel = policy.model.trim();
+  merged.aiAllowPlatformFallback = policy.allowPlatformFallback !== false;
+  merged.aiDisabled = policy.disabled === true;
+
+  const tokens = {
+    ...((secrets.metaChannelTokens || {}) as Record<string, string>),
+    ...((bizTokens || {}) as Record<string, string>),
+  };
+  if (Object.keys(tokens).length) merged.metaChannelTokens = tokens;
   if (Array.isArray(settings.metaChannels)) {
     merged.metaChannels = settings.metaChannels.map((ch: any) => {
       const token = tokens[ch?.phoneNumberId] || ch?.accessToken || '';
@@ -132,6 +148,183 @@ export async function tenantEmailIdentity(
 
 function stripUndefined(obj: Record<string, any>): Record<string, any> {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
+}
+
+// ── Business-level vault (the platform owns tenant credentials) ──────────────
+//
+// A credential belongs to the TENANT (business), never to one of its teams: with
+// one vault per team, switching the active team "lost" the AI key (it lived on the
+// other department) and two departments could run on two different keys. Since
+// Nov 2026 the vault is `businessSecrets/{businessId}` and ONLY a platform
+// super-admin writes it (POST /api/tenant-secrets checks the `superAdmin` claim).
+// The tenant sees status only: `businesses/{bid}.credentials.<field>` (configured,
+// last4, fingerprint, who/when) and the legacy `has*` flags on every team's
+// teamSettings, which the existing UI keeps reading. `teamSecrets/{teamId}` is
+// still READ as a fallback for teams that were never consolidated.
+
+/** AI policy decided by the platform for one tenant (`businesses/{bid}.aiPolicy`). */
+export interface AiPolicy {
+  provider?: 'gemini' | 'openai' | 'anthropic' | null;
+  model?: string | null;
+  /** May the platform's own env key serve this tenant when it has none? Default true. */
+  allowPlatformFallback?: boolean;
+  /** Kill switch: no AI at all for this tenant. */
+  disabled?: boolean;
+}
+
+/** teams/{teamId}.businessId, falling back to the legacy `businessId == teamId`. */
+export async function businessIdOfTeamId(teamId: string): Promise<string> {
+  try {
+    const t = await db.collection('teams').doc(teamId).get();
+    const bid = t.exists ? (t.data() as any)?.businessId : null;
+    return typeof bid === 'string' && bid ? bid : teamId;
+  } catch {
+    return teamId;
+  }
+}
+
+/** Read `businessSecrets/{bid}` (Admin SDK only). Decrypt failures drop the field and log. */
+export async function getBusinessSecrets(businessId: string): Promise<Record<string, any>> {
+  if (!businessId) return {};
+  try {
+    const snap = await db.collection('businessSecrets').doc(businessId).get();
+    return snap.exists ? decryptSecretFields(((snap.data() as any) || {})) : {};
+  } catch {
+    return {};
+  }
+}
+
+async function getBusinessLayerForTeam(teamId: string): Promise<{
+  businessId: string; secrets: Record<string, any>; aiPolicy: AiPolicy;
+}> {
+  const businessId = await businessIdOfTeamId(teamId);
+  const [secrets, bizSnap] = await Promise.all([
+    getBusinessSecrets(businessId),
+    db.collection('businesses').doc(businessId).get().catch(() => null),
+  ]);
+  const raw = bizSnap && bizSnap.exists ? ((bizSnap.data() as any)?.aiPolicy || {}) : {};
+  // Only the vault's credential fields — never its bookkeeping (businessId, updatedAt).
+  const onlySecrets = Object.fromEntries(
+    Object.entries(secrets).filter(([k]) => (SECRET_FIELDS as readonly string[]).includes(k)),
+  );
+  return { businessId, secrets: onlySecrets, aiPolicy: raw as AiPolicy };
+}
+
+/** Non-reversible identifier of a secret value, safe to show and to audit. */
+export function secretFingerprint(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 12);
+}
+
+/** What the tenant may see about a credential — never the value. */
+export function secretStatusOf(field: string, value: unknown): Record<string, any> {
+  if (field === 'metaChannelTokens' && value && typeof value === 'object') {
+    const n = Object.keys(value as object).length;
+    return { configured: n > 0, count: n };
+  }
+  const s = typeof value === 'string' ? value : '';
+  return {
+    configured: !!s,
+    last4: s.length >= 8 ? s.slice(-4) : null,
+    fingerprint: s ? secretFingerprint(s) : null,
+  };
+}
+
+/**
+ * Persist credentials for a whole tenant (super-admin path). Writes
+ * `businessSecrets/{bid}`, records the status on `businesses/{bid}.credentials`,
+ * mirrors the `has*` flags onto EVERY team of the business and removes the field
+ * from every legacy `teamSecrets` doc — after this, the business vault is the one
+ * answer for that field, so a cleared key cannot resurface from an old team copy.
+ *
+ * `metaChannelTokens` is a map keyed by phoneNumberId: the new entries are MERGED
+ * into what the business (and its teams) already hold, so saving one department's
+ * channel never drops another's.
+ */
+export async function writeBusinessSecrets(
+  businessId: string,
+  secrets: Record<string, any>,
+  actor: { uid: string | null; email?: string | null },
+): Promise<{ written: string[]; cleared: string[]; teams: number }> {
+  const now = admin.firestore.Timestamp.now();
+  const written: string[] = [];
+  const cleared: string[] = [];
+
+  const teamsSnap = await db.collection('teams').where('businessId', '==', businessId).get();
+  const teamIds = new Set(teamsSnap.docs.map((d) => d.id));
+  // Legacy tenants: businessId == teamId and the team doc may not carry the field.
+  if ((await db.collection('teams').doc(businessId).get()).exists) teamIds.add(businessId);
+
+  const payload: Record<string, any> = { businessId, updatedAt: now, updatedBy: actor.uid || null };
+  const statusPatch: Record<string, any> = {};
+
+  for (const field of SECRET_FIELDS) {
+    if (!(field in secrets)) continue;
+    let value = secrets[field];
+    const isEmpty = value === '' || value === null || value === undefined
+      || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
+
+    if (isEmpty) {
+      payload[field] = admin.firestore.FieldValue.delete();
+      cleared.push(field);
+      statusPatch[`credentials.${field}`] = { configured: false, updatedAt: now, updatedBy: actor.email || actor.uid || null };
+      continue;
+    }
+
+    if (field === 'metaChannelTokens') {
+      // Fold the legacy per-team maps and the current business map in first.
+      const existing = (await getBusinessSecrets(businessId)).metaChannelTokens || {};
+      const fromTeams: Record<string, string> = {};
+      for (const tid of teamIds) Object.assign(fromTeams, (await getTeamSecrets(tid)).metaChannelTokens || {});
+      value = { ...fromTeams, ...existing, ...(value as Record<string, string>) };
+    }
+
+    payload[field] = typeof value === 'string' ? encryptSecretFields({ v: value }).v : encryptSecretFields(value);
+    written.push(field);
+    statusPatch[`credentials.${field}`] = {
+      ...secretStatusOf(field, value),
+      updatedAt: now,
+      updatedBy: actor.email || actor.uid || null,
+    };
+  }
+  if (written.length === 0 && cleared.length === 0) return { written, cleared, teams: 0 };
+
+  await db.collection('businessSecrets').doc(businessId).set(payload, { merge: true });
+  await db.collection('businesses').doc(businessId).set(
+    { ...unflattenTopLevel(statusPatch), credentialsUpdatedAt: now },
+    { merge: true },
+  );
+
+  // Consolidate: flags on every team, no field left behind in a team vault or in
+  // a plaintext teamSettings copy.
+  const touched = [...written, ...cleared];
+  const batch = db.batch();
+  for (const tid of teamIds) {
+    const flags: Record<string, any> = { updatedAt: now };
+    const strip: Record<string, any> = { updatedAt: now };
+    for (const field of touched) {
+      const flag = SECRET_FLAGS[field];
+      if (flag) flags[flag] = written.includes(field);
+      flags[field] = admin.firestore.FieldValue.delete();
+      strip[field] = admin.firestore.FieldValue.delete();
+    }
+    batch.set(db.collection('teamSettings').doc(tid), flags, { merge: true });
+    batch.set(db.collection('teamSecrets').doc(tid), strip, { merge: true });
+  }
+  await batch.commit();
+
+  return { written, cleared, teams: teamIds.size };
+}
+
+/** `{ 'credentials.aiApiKey': x }` → `{ credentials: { aiApiKey: x } }` for set({merge}). */
+function unflattenTopLevel(patch: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    const [head, ...rest] = k.split('.');
+    if (!rest.length) { out[head] = v; continue; }
+    out[head] = out[head] || {};
+    out[head][rest.join('.')] = v;
+  }
+  return out;
 }
 
 /**

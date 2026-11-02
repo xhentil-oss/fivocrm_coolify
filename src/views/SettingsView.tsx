@@ -60,6 +60,8 @@ import {
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '../components/ui/alert-dialog';
 import { saveTenantSecrets } from '../lib/tenantSecrets';
+import { setTenantAiPolicy } from '../lib/platformAdmin';
+import ManagedCredentialNotice, { useTenantBusiness } from '../components/settings/ManagedCredentialNotice';
 import { isBreakReminderEnabled, setBreakReminderEnabled } from '../hooks/useBreakReminder';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -166,6 +168,9 @@ const SettingsView: React.FC = () => {
   // `teamId` above, which can differ (permissions team vs active team) and used to
   // write team B's form into team A.
   const { settings: firestoreSettings, teamId: settingsTeamId } = useTeamSettingsDoc();
+  // Credentials + AI policy are PLATFORM-managed and per TENANT (Nov 2026): only a
+  // super-admin edits them here; everyone else sees ManagedCredentialNotice.
+  const tenantBiz = useTenantBusiness();
   const waTeamId = settingsTeamId || teamId;
   // `?tab=` deep link (e.g. the WhatsApp inbox's "Automatizime" button →
   // /app/settings?tab=automation). Admin-only tabs fall back to the profile.
@@ -639,21 +644,27 @@ const SettingsView: React.FC = () => {
     setTimeout(() => setStripeSaved(false), 3000);
   };
 
+  // The platform's AI policy wins over the legacy per-team provider/model.
+  useEffect(() => {
+    const p = tenantBiz?.aiPolicy;
+    if (p?.provider) setAiProvider(p.provider);
+    if (p?.model) setAiModel(p.model);
+  }, [tenantBiz?.aiPolicy?.provider, tenantBiz?.aiPolicy?.model]);
+
   const handleSaveAiSettings = async () => {
-    if (!teamId) return;
-    saveTeamSettings(teamId, {
-      aiProvider,
-      aiModel: aiModel.trim(),
-    });
-    // The API key goes to the server-only vault (never stored in teamSettings).
-    if (aiApiKey.trim()) {
-      try {
+    if (!teamId || !isSuperAdmin) return;
+    // Provider/model are the tenant's AI POLICY (businesses.aiPolicy, platform-owned);
+    // the key goes to the tenant vault (businessSecrets) — both for the whole business.
+    try {
+      const bid = getGlobalBusinessId();
+      if (bid) await setTenantAiPolicy(bid, { provider: aiProvider, model: aiModel.trim() || null });
+      if (aiApiKey.trim()) {
         await saveTenantSecrets(teamId, { aiApiKey: aiApiKey.trim() });
         setAiApiKey('');
-      } catch (e) {
-        toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' });
-        return;
       }
+    } catch (e) {
+      toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' });
+      return;
     }
     setAiSaved(true);
     setAiTest(null);
@@ -1259,6 +1270,8 @@ const SettingsView: React.FC = () => {
 
             <Separator />
 
+            {isSuperAdmin ? (
+            <>
             {/* Provider selection */}
             <div className="space-y-3">
               <label className="text-body-sm text-foreground font-medium">Ofruesi</label>
@@ -1344,6 +1357,19 @@ const SettingsView: React.FC = () => {
               </div>
             </div>
 
+            </>
+            ) : (
+              <div className="space-y-3">
+                <ManagedCredentialNotice field="aiApiKey" legacyConfigured={!!firestoreSettings?.hasAiApiKey} />
+                <p className="text-xs text-muted-foreground">
+                  {tenantBiz?.aiPolicy?.disabled
+                    ? 'Asistenti AI është i çaktivizuar për këtë biznes.'
+                    : <>Ofruesi: <strong>{tenantBiz?.aiPolicy?.provider ? AI_PROVIDER_META[tenantBiz.aiPolicy.provider].label : 'sipas çelësit'}</strong>
+                      {' · '}Modeli: <span className="font-mono">{tenantBiz?.aiPolicy?.model || 'parazgjedhja'}</span></>}
+                </p>
+              </div>
+            )}
+
             {aiTest && (
               <div
                 className={`rounded-lg border p-3 text-sm space-y-1 ${aiTest.ok ? 'border-success/40 bg-success/5' : 'border-destructive/40 bg-destructive/5'}`}
@@ -1385,9 +1411,11 @@ const SettingsView: React.FC = () => {
                 {aiTesting ? <><RefreshCw className="w-4 h-4 animate-spin" /> Duke testuar…</> : <><Zap className="w-4 h-4" /> Testo lidhjen</>}
               </Button>
               {/* With a key already in the vault, the provider/model can be corrected without re-pasting it. */}
-              <Button onClick={handleSaveAiSettings} disabled={!aiApiKey.trim() && !firestoreSettings?.hasAiApiKey} className="gap-2">
-                {aiSaved ? <><Check className="w-4 h-4" /> Ruajtur</> : 'Ruaj Konfigurimin'}
-              </Button>
+              {isSuperAdmin && (
+                <Button onClick={handleSaveAiSettings} disabled={!aiApiKey.trim() && !firestoreSettings?.hasAiApiKey && !tenantBiz?.credentials?.aiApiKey?.configured} className="gap-2">
+                  {aiSaved ? <><Check className="w-4 h-4" /> Ruajtur</> : 'Ruaj Konfigurimin'}
+                </Button>
+              )}
             </div>
           </Card>
 
@@ -1452,6 +1480,7 @@ const SettingsView: React.FC = () => {
                   <label className="text-body-sm text-foreground font-medium flex items-center gap-2">
                     <Key className="w-4 h-4" /> Çelësi API
                   </label>
+                  {isSuperAdmin ? (<>
                   <input type="password" value={emailApiKey} onChange={(e) => setEmailApiKey(e.target.value)}
                     placeholder={emailProvider === 'resend' ? 're_...' : emailProvider === 'sendgrid' ? 'SG....' : emailProvider === 'brevo' ? 'xkeysib-...' : 'key-...'}
                     autoComplete="off"
@@ -1459,6 +1488,9 @@ const SettingsView: React.FC = () => {
                   <p className="text-xs text-muted-foreground">Ruhet i sigurt dhe përdoret vetëm nga serveri gjatë dërgimit.</p>
                   {firestoreSettings?.hasEmailApiKey && (
                     <p className="text-xs text-success flex items-center gap-1"><Shield className="w-3 h-3" /> Kredencial i ruajtur në kasafortën e serverit — lëri bosh për të mos e ndryshuar.</p>
+                  )}
+                  </>) : (
+                    <ManagedCredentialNotice field="emailApiKey" legacyConfigured={!!firestoreSettings?.hasEmailApiKey} compact />
                   )}
                 </div>
               ) : (
@@ -1480,9 +1512,13 @@ const SettingsView: React.FC = () => {
                   </div>
                   <div className="space-y-2">
                     <label className="text-body-sm text-foreground font-medium">Fjalëkalimi</label>
+                    {isSuperAdmin ? (
                     <input type="password" value={emailSmtpPass} onChange={(e) => setEmailSmtpPass(e.target.value)} autoComplete="off"
                       className="w-full h-11 px-4 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
-                    {firestoreSettings?.hasEmailSmtpPass && (
+                    ) : (
+                      <ManagedCredentialNotice field="emailSmtpPass" legacyConfigured={!!firestoreSettings?.hasEmailSmtpPass} compact />
+                    )}
+                    {isSuperAdmin && firestoreSettings?.hasEmailSmtpPass && (
                       <p className="text-xs text-success flex items-center gap-1"><Shield className="w-3 h-3" /> Kredencial i ruajtur në kasafortën e serverit — lëri bosh për të mos e ndryshuar.</p>
                     )}
                   </div>
@@ -1534,7 +1570,9 @@ const SettingsView: React.FC = () => {
             <div className="flex justify-end">
               <Button
                 onClick={handleSaveEmailSettings}
-                disabled={emailProvider !== 'smtp' ? !emailApiKey.trim() : !(emailSmtpHost.trim() && emailSmtpUser.trim() && emailSmtpPass.trim())}
+                disabled={!isSuperAdmin
+                  ? (emailProvider === 'smtp' && !(emailSmtpHost.trim() && emailSmtpUser.trim()))
+                  : emailProvider !== 'smtp' ? !emailApiKey.trim() : !(emailSmtpHost.trim() && emailSmtpUser.trim() && emailSmtpPass.trim())}
                 className="gap-2"
               >
                 {emailSaved ? <><Check className="w-4 h-4" /> Ruajtur</> : 'Ruaj Konfigurimin'}
@@ -2012,6 +2050,7 @@ const SettingsView: React.FC = () => {
                       <Key className="w-4 h-4" />
                       API Secret Key
                     </label>
+                    {isSuperAdmin ? (
                     <input
                       type="password"
                       value={whatsappVpsSecret}
@@ -2019,6 +2058,9 @@ const SettingsView: React.FC = () => {
                       placeholder="Çelësi sekret i serverit tuaj"
                       className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono text-sm"
                     />
+                    ) : (
+                      <ManagedCredentialNotice field="whatsappVpsSecret" legacyConfigured={!!firestoreSettings?.hasWhatsappVpsSecret} compact />
+                    )}
                     <p className="text-xs text-muted-foreground">
                       I njëjtë me <code className="bg-muted px-1 rounded text-xs">WHATSAPP_VPS_SECRET</code> në env variables të serverit VPS
                     </p>
@@ -2048,7 +2090,7 @@ const SettingsView: React.FC = () => {
                     <Button
                       className="bg-[#25D366] text-white hover:bg-[#1da851]"
                       onClick={handleSaveWhatsappSettings}
-                      disabled={!whatsappVpsUrl || (!whatsappVpsSecret.trim() && !firestoreSettings?.hasWhatsappVpsSecret)}
+                      disabled={!whatsappVpsUrl || (isSuperAdmin && !whatsappVpsSecret.trim() && !firestoreSettings?.hasWhatsappVpsSecret)}
                       title={!whatsappVpsSecret.trim() && !firestoreSettings?.hasWhatsappVpsSecret ? 'Shkruaj çelësin sekret të VPS (ruhet një herë)' : undefined}
                     >
                       Ruaj Cilësimet WhatsApp
@@ -2331,6 +2373,9 @@ const SettingsView: React.FC = () => {
                     <Key className="w-4 h-4" />
                     Webhook Verify Token
                   </label>
+                  {!isSuperAdmin ? (
+                    <ManagedCredentialNotice field="metaWebhookVerifyToken" legacyConfigured={!!firestoreSettings?.hasMetaWebhookVerifyToken} compact />
+                  ) : (
                   <div className="flex gap-2">
                     <input
                       type="text"
@@ -2346,6 +2391,7 @@ const SettingsView: React.FC = () => {
                       <RefreshCw className="w-4 h-4" />
                     </Button>
                   </div>
+                  )}
                   <p className="text-xs text-muted-foreground">
                     Vendos të njëjtin token edhe në <code className="bg-muted px-1 rounded text-xs">META_WEBHOOK_VERIFY_TOKEN</code> tek Vercel env variables
                   </p>
@@ -2423,6 +2469,7 @@ const SettingsView: React.FC = () => {
                         </div>
                         <div className="space-y-1 md:col-span-2">
                           <label className="text-xs text-muted-foreground">Access Token (Permanent)</label>
+                          {isSuperAdmin ? (
                           <input
                             type="password"
                             value={ch.accessToken}
@@ -2430,7 +2477,10 @@ const SettingsView: React.FC = () => {
                             placeholder="EAAxxxxxxx..."
                             className="w-full h-9 px-3 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono"
                           />
-                          {firestoreSettings?.hasMetaChannelTokens && (
+                          ) : (
+                            <ManagedCredentialNotice field="metaChannelTokens" legacyConfigured={!!firestoreSettings?.hasMetaChannelTokens} compact />
+                          )}
+                          {isSuperAdmin && firestoreSettings?.hasMetaChannelTokens && (
                             <p className="text-xs text-success flex items-center gap-1"><Shield className="w-3 h-3" /> Kredencial i ruajtur në kasafortën e serverit — lëri bosh për të mos e ndryshuar.</p>
                           )}
                         </div>

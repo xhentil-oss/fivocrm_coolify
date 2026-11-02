@@ -17,6 +17,7 @@ import { doc, setDoc, updateDoc, deleteDoc, Timestamp } from 'firebase/firestore
 import { db } from '../../lib/firebase';
 import { saveOrShareFile } from '../../lib/native';
 import ModuleAccessEditor from './ModuleAccessEditor';
+import TenantCredentialsPanel from './TenantCredentialsPanel';
 import {
   updateTenantPlan, setTenantModules, tenantMrr, daysUntil, tenantHealth, lastSeenLabel, HEALTH_META,
 } from '../../lib/platformAdmin';
@@ -487,6 +488,13 @@ const TenantDetailView: React.FC = () => {
           onEnableForOwner={enableForOwner}
         />
       </Card>
+
+      {/* Credentials & AI — platform-managed, one vault per tenant. */}
+      <TenantCredentialsPanel
+        businessId={businessId}
+        biz={biz}
+        testTeamId={(biz.defaultTeamId as string | null | undefined) || teams[0]?.id || null}
+      />
 
       {/* Engagement — written by the tenant-usage-rollup cron, so the console never
           has to read the tenant's own data to answer "are they using it?". */}

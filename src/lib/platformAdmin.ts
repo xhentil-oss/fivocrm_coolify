@@ -61,6 +61,18 @@ export function setTenantModules(businessId: string, patch: TenantModulesPatch) 
   return post({ action: 'set-modules', businessId, ...patch });
 }
 
+/** The tenant's AI policy (provider / model / platform fallback / kill switch). */
+export interface TenantAiPolicyPatch {
+  provider?: 'gemini' | 'openai' | 'anthropic' | null;
+  model?: string | null;
+  allowPlatformFallback?: boolean;
+  disabled?: boolean;
+}
+
+export function setTenantAiPolicy(businessId: string, patch: TenantAiPolicyPatch) {
+  return post({ action: 'set-ai-policy', businessId, ...patch });
+}
+
 export interface CreateTenantResult {
   businessId?: string;
   teamId?: string;

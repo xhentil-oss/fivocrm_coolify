@@ -12,6 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { useCollection } from '../../hooks/useFirestore';
 import { saveTeamSettings, type TeamSettings } from '../../hooks/useTeamSettings';
 import { useToast } from '../../hooks/use-toast';
+import { usePermissions } from '../../contexts/PermissionsContext';
+import ManagedCredentialNotice from '../settings/ManagedCredentialNotice';
 import { saveTenantSecrets } from '../../lib/tenantSecrets';
 import { describeSalesAgentError, disableSalesAgent, enableSalesAgent, testSalesAgentSettings, type SettingsTestResult } from '../../lib/salesAgent/api';
 import {
@@ -74,6 +76,7 @@ const Num = ({ label, value, min, max, onChange, disabled, hint }: { label: stri
 
 export default function AgentSettingsPanel({ teamId, settings, canEdit }: Props) {
   const { toast } = useToast();
+  const { isSuperAdmin } = usePermissions();
   const resolved = useMemo(() => resolveSalesAgentSettings(settings?.salesAgent), [settings?.salesAgent]);
   const [draft, setDraft] = useState<Draft>(() => draftFrom(resolved));
   const [dirty, setDirty] = useState(false);
@@ -150,7 +153,7 @@ export default function AgentSettingsPanel({ teamId, settings, canEdit }: Props)
     try {
       await saveTenantSecrets(teamId, { googlePlacesApiKey: placesKey.trim() });
       setPlacesKey('');
-      toast({ title: 'Çelësi u ruajt', description: 'Ruhet në kasafortë (teamSecrets); kufizoje në Google Console vetëm për Places API.' });
+      toast({ title: 'Çelësi u ruajt', description: 'Ruhet në kasafortën e tenant-it; kufizoje në Google Console vetëm për Places API.' });
     } catch (err) {
       toast({ title: 'Nuk u ruajt', description: (err as Error)?.message, variant: 'destructive' });
     } finally {
@@ -277,11 +280,13 @@ export default function AgentSettingsPanel({ teamId, settings, canEdit }: Props)
         <div className="grid sm:grid-cols-[1fr_auto] gap-3 items-end pt-2 border-t">
           <div className="space-y-1">
             <Label className="text-xs flex items-center gap-1"><KeyRound className="w-3.5 h-3.5" />Çelësi Google Places (API New)</Label>
-            <Input type="password" value={placesKey} disabled={ro} placeholder={settings?.hasGooglePlacesApiKey ? '•••••••• (i ruajtur — lëre bosh për të mos e ndryshuar)' : 'AIza…'} onChange={(e) => setPlacesKey(e.target.value)} />
+            {isSuperAdmin
+              ? <Input type="password" value={placesKey} disabled={ro} placeholder={settings?.hasGooglePlacesApiKey ? '•••••••• (i ruajtur — lëre bosh për të mos e ndryshuar)' : 'AIza…'} onChange={(e) => setPlacesKey(e.target.value)} />
+              : <ManagedCredentialNotice field="googlePlacesApiKey" legacyConfigured={!!settings?.hasGooglePlacesApiKey} compact />}
             <p className="text-[11px] text-muted-foreground">Pa çelës të tenant-it përdoret çelësi i platformës me kuotë më të vogël. Çdo kërkim = deri në 3 kërkesa (20 biznese secila); 1 000 kërkesa/muaj janë falas te Google.</p>
           </div>
           <div className="flex gap-2">
-            <Button size="sm" variant="outline" disabled={ro || savingKey || !placesKey.trim()} onClick={handleSaveKey}>{savingKey ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : null}Ruaj çelësin</Button>
+            {isSuperAdmin && <Button size="sm" variant="outline" disabled={ro || savingKey || !placesKey.trim()} onClick={handleSaveKey}>{savingKey ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : null}Ruaj çelësin</Button>}
             <Num label="Buxheti mujor (kërkesa)" value={draft.placesMonthlyBudget} min={0} max={SALES_AGENT_LIMITS.placesBudgetMax} disabled={ro} onChange={(n) => patch({ placesMonthlyBudget: n })} />
           </div>
         </div>

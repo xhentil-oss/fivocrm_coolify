@@ -31,6 +31,7 @@ import { useToast } from '../hooks/use-toast';
 import { formatCurrency, getTimestampMs } from '../lib/utils';
 import { openExternal } from '../lib/native';
 import { saveTeamSettings, useTeamSettingsData } from '../hooks/useTeamSettings';
+import ManagedCredentialNotice from '../components/settings/ManagedCredentialNotice';
 import { hostingApi, checkDomains, type DomainCheckRow } from '../lib/hosting/api';
 import {
   BILLING_CYCLES, CYCLE_LABELS, DEFAULT_LIFECYCLE, DOMAIN_BLOCK_LABELS, SUBSCRIPTION_BLOCK_LABELS, ORDER_ERROR_LABELS,
@@ -890,6 +891,7 @@ const ServersTab: React.FC<{ servers: HostingServer[]; canEdit: boolean; isAdmin
 
 const SettingsTab: React.FC<{ teamId: string | null; settings: ReturnType<typeof useTeamSettingsData>; isAdmin: boolean }> = ({ teamId, settings, isAdmin }) => {
   const { toast } = useToast();
+  const { isSuperAdmin } = usePermissions();
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [lc, setLc] = useState(normalizeLifecycleConfig(settings?.hostingLifecycle));
@@ -905,7 +907,10 @@ const SettingsTab: React.FC<{ teamId: string | null; settings: ReturnType<typeof
       <Card className="p-4 space-y-3">
         <h3 className="font-semibold flex items-center gap-2"><Globe className="w-4 h-4" />Regjistruesi — Dynadot</h3>
         <p className="text-xs text-muted-foreground">Çelësi nga Dynadot → Tools → API. Dynadot lejon vetëm IP-të e whitelist-uara: shto IP-në e VPS-së (relay-i) te "API IP whitelist". {settings?.hasDynadotApiKey && <span className="text-emerald-700"><Shield className="w-3 h-3 inline" /> Çelës i ruajtur në kasafortë — lëre bosh për të mos e ndryshuar.</span>}</p>
-        <Input type="password" placeholder={settings?.hasDynadotApiKey ? '••••••••' : 'Dynadot API key'} value={key} onChange={(e) => setKey(e.target.value)} disabled={!isAdmin} />
+        {/* Credentials are platform-managed (Nov 2026) — only the super-admin types one. */}
+        {isSuperAdmin
+          ? <Input type="password" placeholder={settings?.hasDynadotApiKey ? '••••••••' : 'Dynadot API key'} value={key} onChange={(e) => setKey(e.target.value)} />
+          : <ManagedCredentialNotice field="dynadotApiKey" legacyConfigured={!!settings?.hasDynadotApiKey} compact />}
         <div className="flex items-center gap-2">
           <Label className="text-xs">Monedha e llogarisë Dynadot</Label>
           <Select value={dynCur} onValueChange={setDynCur}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent>{['USD', 'EUR', 'GBP'].map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>

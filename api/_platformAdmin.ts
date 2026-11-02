@@ -77,6 +77,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return await updatePlan(req, res, { ref, before, businessId, body, decoded });
       case 'set-modules':
         return await setModules(res, { ref, before, businessId, body, decoded });
+      case 'set-ai-policy':
+        return await setAiPolicy(res, { ref, before, businessId, body, decoded });
       default:
         return res.status(400).json({ error: `Veprim i panjohur: ${action || '(bosh)'}` });
     }
@@ -92,6 +94,76 @@ interface Ctx {
   businessId: string;
   body: Record<string, any>;
   decoded: admin.auth.DecodedIdToken;
+}
+
+/**
+ * The tenant's AI policy (`businesses/{bid}.aiPolicy`) — platform-owned like the
+ * credentials themselves (the rules deny the owner this field):
+ *   provider / model         — which provider and model the tenant runs on
+ *                              (null = follow the key's shape / provider default);
+ *   allowPlatformFallback    — may OUR env keys serve the tenant when it has none;
+ *   disabled                 — kill switch: no AI for this tenant at all.
+ * Read by getTeamConfig → resolveAiConfig for every AI caller (chat, Ana, Nazmije,
+ * WhatsApp drafts, GMB replies).
+ */
+async function setAiPolicy(res: VercelResponse, ctx: Ctx) {
+  const { ref, before, businessId, body, decoded } = ctx;
+  const prev = (before.aiPolicy || {}) as Record<string, any>;
+  const next: Record<string, any> = { ...prev };
+
+  if (body.provider !== undefined) {
+    if (body.provider !== null && !['gemini', 'openai', 'anthropic'].includes(body.provider)) {
+      return res.status(400).json({ error: `Ofrues i pavlefshëm: ${body.provider}` });
+    }
+    next.provider = body.provider;
+  }
+  if (body.model !== undefined) {
+    if (body.model !== null && (typeof body.model !== 'string' || !/^[A-Za-z0-9._:\-/]{1,100}$/.test(body.model.trim()))) {
+      return res.status(400).json({ error: 'Id e modelit është e pavlefshme.' });
+    }
+    next.model = body.model === null || !body.model.trim() ? null : body.model.trim();
+  }
+  if (body.allowPlatformFallback !== undefined) {
+    if (typeof body.allowPlatformFallback !== 'boolean') return res.status(400).json({ error: 'allowPlatformFallback duhet true/false.' });
+    next.allowPlatformFallback = body.allowPlatformFallback;
+  }
+  if (body.disabled !== undefined) {
+    if (typeof body.disabled !== 'boolean') return res.status(400).json({ error: 'disabled duhet true/false.' });
+    next.disabled = body.disabled;
+  }
+  next.updatedAt = admin.firestore.Timestamp.now();
+  next.updatedBy = decoded.email || decoded.uid;
+
+  await ref.set({ aiPolicy: next }, { merge: true });
+
+  await writeAudit({
+    businessId,
+    actorUid: decoded.uid,
+    actorEmail: decoded.email || null,
+    action: 'platform.ai_policy_change',
+    target: `business:${businessId}`,
+    meta: {
+      before: { provider: prev.provider ?? null, model: prev.model ?? null, allowPlatformFallback: prev.allowPlatformFallback ?? true, disabled: prev.disabled ?? false },
+      after: { provider: next.provider ?? null, model: next.model ?? null, allowPlatformFallback: next.allowPlatformFallback ?? true, disabled: next.disabled ?? false },
+    },
+  });
+
+  if (typeof before.ownerId === 'string' && before.ownerId) {
+    await notifyUser({
+      userId: before.ownerId,
+      actorUserId: decoded.uid,
+      type: 'tenant_credentials_changed',
+      title: next.disabled ? 'Asistenti AI u çaktivizua nga FivoCRM' : 'Konfigurimi i AI-së u përditësua nga FivoCRM',
+      message: next.disabled
+        ? 'FivoCRM çaktivizoi AI-në për workspace-in tuaj. Kontaktoni administratorin e platformës për detaje.'
+        : `Ofruesi: ${next.provider || 'sipas çelësit'} · Modeli: ${next.model || 'parazgjedhja'}.`,
+      actionUrl: '/app/settings?tab=integrations',
+      businessId,
+      teamId: typeof before.defaultTeamId === 'string' ? before.defaultTeamId : null,
+    }).catch((err: any) => console.error('[platform-admin] ai policy notification failed:', err?.message || err));
+  }
+
+  return res.status(200).json({ success: true, aiPolicy: { ...next, updatedAt: undefined } });
 }
 
 /** Plan / status / trial end / seat override — the commercial terms of a tenant. */

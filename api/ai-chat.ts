@@ -92,7 +92,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const wantedTeam = typeof teamId === 'string' && teamId ? teamId : null;
   if (wantedTeam) {
     try {
-      if (!isPortalOnlyToken(c)) {
+      // The platform operator manages every tenant's key and tests it from the
+      // console ("Testo lidhjen" on /superadmin/tenants/:id).
+      if (c.superAdmin) staffOfTeam = true;
+      else if (!isPortalOnlyToken(c)) {
         staffOfTeam = c.tid === wantedTeam && !!c.bid
           ? true
           : !!(await activeMembership(uid, { teamId: wantedTeam }));

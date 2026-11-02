@@ -23,6 +23,7 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { useCollection, getGlobalTeamId, getGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
 import { saveTenantSecrets } from '../lib/tenantSecrets';
+import ManagedCredentialNotice from '../components/settings/ManagedCredentialNotice';
 import { toDate } from '../lib/utils';
 import { openExternal } from '../lib/native';
 import type { GmbReview, GmbPost } from '../types';
@@ -94,6 +95,8 @@ const GmbReviewsView: React.FC = () => {
   const { user } = useAuth();
   const permissions = usePermissions();
   const canManage = permissions.isAdmin || permissions.isManager;
+  // The OAuth client secret is platform-managed (Nov 2026) — only the super-admin sets it.
+  const isSuperAdmin = !!permissions.isSuperAdmin;
   const [tab, setTab] = useState<Tab>('reviews');
   const [params, setParams] = useSearchParams();
   const settings = useTeamSettingsData();
@@ -332,7 +335,7 @@ const GmbReviewsView: React.FC = () => {
     setBusy('save-creds');
     try {
       await saveTeamSettings(teamId, { gmbClientId: clientIdInput.trim() });
-      if (clientSecretInput.trim()) {
+      if (isSuperAdmin && clientSecretInput.trim()) {
         await saveTenantSecrets(teamId, { gmbClientSecret: clientSecretInput.trim() });
         setClientSecretInput('');
       }
@@ -900,6 +903,7 @@ const GmbReviewsView: React.FC = () => {
                 </div>
                 <div>
                   <label className="text-[10.5px] font-extrabold text-foreground/70 block mb-1">OAuth Client Secret</label>
+                  {isSuperAdmin ? (
                   <input
                     type="password"
                     value={clientSecretInput}
@@ -908,7 +912,10 @@ const GmbReviewsView: React.FC = () => {
                     disabled={!canManage}
                     className="w-full text-sm font-mono rounded-lg border border-border bg-background px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-60"
                   />
-                  {settings?.hasGmbClientSecret && (
+                  ) : (
+                    <ManagedCredentialNotice field="gmbClientSecret" legacyConfigured={!!settings?.hasGmbClientSecret} compact />
+                  )}
+                  {isSuperAdmin && settings?.hasGmbClientSecret && (
                     <p className="text-[10.5px] text-emerald-600 flex items-center gap-1 mt-1">
                       <Shield className="w-3 h-3" /> Kredencial i ruajtur në kasafortën e serverit — lëre bosh për të mos e ndryshuar.
                     </p>

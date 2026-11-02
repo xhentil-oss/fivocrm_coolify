@@ -81,6 +81,10 @@ const PlatformJobsView: React.FC = () => {
         r.totalUpdated !== undefined && `${r.totalUpdated} dokumente u stampuan`,
         r.teamsTouched !== undefined && `${r.teamsTouched} ekipe · ${r.tokensMoved || 0} token-e në kasafortë`,
         r.synced !== undefined && `${r.synced}/${r.users} përdorues me claims`,
+        r.businessesTouched !== undefined && `${r.businessesTouched} tenantë me kredencialet në një kasafortë`,
+        Array.isArray(r.conflicts) && r.conflicts.length
+          ? `${r.conflicts.length} konflikte (ekipe me çelësa të ndryshëm) — zgjidhi te faqja e tenant-it: ${r.conflicts.map((c: any) => `${c.businessId}/${c.field}`).join(', ')}`
+          : null,
       ].filter(Boolean).join(' · ');
     });
     setHardeningJob(null);
@@ -429,6 +433,7 @@ const PlatformJobsView: React.FC = () => {
                 ['backfill-tenant-keys', '2. Çelësat'],
                 ['migrate-team-secrets', '3. Kasaforta'],
                 ['sync-tenant-claims', '4. Claims'],
+                ['consolidate-business-secrets', '5. Një kasafortë/tenant'],
               ] as const).map(([job, label]) => (
                 <Button key={job} size="sm" variant="outline" onClick={() => runHardeningJob(job, label)} disabled={!!hardeningJob}>
                   {hardeningJob === job ? <>{spin} …</> : label}
@@ -441,6 +446,7 @@ const PlatformJobsView: React.FC = () => {
           2) <strong>Çelësat</strong>: businessId në channels/userProfiles/portal-access.
           3) <strong>Kasaforta</strong>: kredencialet nga teamSettings → teamSecrets (klienti nuk i lexon më).
           4) <strong>Claims</strong>: bid/tid/roles në token-in e çdo anëtari (pas kësaj: <strong>dil dhe hyr sërish</strong>).
+          5) <strong>Një kasafortë/tenant</strong>: kredencialet e ekipeve → businessSecrets (një çelës për tenant; konfliktet raportohen, nuk zgjidhen vetë).
           Pastaj deploy-o rregullat — hapat në workspace/TENANT_ISOLATION_ENTERPRISE.md.
         </Row>
 

@@ -748,8 +748,51 @@ export interface Business {
   /** Portal subdomain for this tenant: `<portalSubdomain>.fivocrm.com/portal`.
    * Resolves hostname → businessId so this tenant's clients register/scope to it. */
   portalSubdomain?: string;
+  /**
+   * Platform-managed AI policy (`POST /api/platform-admin` `set-ai-policy`; owner
+   * cannot write it — rules). Merged into every AI call by api/_tenantConfig.ts.
+   */
+  aiPolicy?: TenantAiPolicy;
+  /**
+   * STATUS of each tenant credential (never the value), written by
+   * /api/tenant-secrets when the platform super-admin sets/clears one. The values
+   * live in `businessSecrets/{id}` (deny-all).
+   */
+  credentials?: Partial<Record<TenantCredentialField, TenantCredentialStatus>>;
+  credentialsUpdatedAt?: Date;
+  /** Last "Kërko ndryshim" from the tenant (server-stamped, 10-min cooldown). */
+  credentialsChangeRequestedAt?: Date;
+  credentialsChangeRequest?: { field: TenantCredentialField | null; note: string | null; byUid: string; byEmail: string | null };
   createdAt: Date;
   updatedAt: Date;
+}
+
+export type TenantCredentialField =
+  | 'aiApiKey' | 'emailApiKey' | 'emailSmtpPass' | 'whatsappVpsSecret'
+  | 'metaWebhookVerifyToken' | 'metaChannelTokens' | 'gmbClientSecret'
+  | 'dynadotApiKey' | 'googlePlacesApiKey';
+
+export interface TenantCredentialStatus {
+  configured: boolean;
+  /** Last 4 characters (keys of ≥ 8 chars only). */
+  last4?: string | null;
+  /** sha256 prefix — tells two keys apart without revealing either. */
+  fingerprint?: string | null;
+  /** metaChannelTokens: number of channels with a token. */
+  count?: number;
+  updatedAt?: Date;
+  updatedBy?: string | null;
+}
+
+export interface TenantAiPolicy {
+  provider?: 'gemini' | 'openai' | 'anthropic' | null;
+  model?: string | null;
+  /** May the platform's own key serve this tenant when it has none? Default true. */
+  allowPlatformFallback?: boolean;
+  /** Kill switch — no AI for this tenant. */
+  disabled?: boolean;
+  updatedAt?: Date;
+  updatedBy?: string | null;
 }
 
 /**
