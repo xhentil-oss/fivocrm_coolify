@@ -25,12 +25,19 @@
 
 /** Reserved sender uid. No Firebase Auth user exists for it: only the server writes as her. */
 export const NAZMIJE_UID = 'nazmije';
-export const NAZMIJE_NAME = 'Nazmije';
+/**
+ * The staff-facing secretary is called Ana (owner decision, 2 Nov 2026 — one name for
+ * the virtual assistant, staff and clients). The ids, collections and files keep
+ * the `nazmije` prefix: renaming stored data would buy nothing.
+ */
+export const NAZMIJE_NAME = 'Ana';
+/** Names a tenant stored before the rename — resolved to the new default. */
+const LEGACY_NAMES = new Set(['nazmije', 'nazmija']);
 export const NAZMIJE_TITLE = 'Sekretare virtuale';
 /** Served from `static/` (Vite publicDir). Relative on purpose: never a push image. */
 export const NAZMIJE_AVATAR_PATH = '/nazmije.svg';
 /** Signature under every saying she gives. */
-export const NAZMIJE_SIGNATURE = 'Nazmija';
+export const NAZMIJE_SIGNATURE = 'Ana';
 
 export const isNazmijeUid = (uid: unknown): boolean => uid === NAZMIJE_UID;
 /** One `userProfiles` doc per tenant (the collection is business-scoped). */
@@ -46,18 +53,26 @@ const MENTION_RE = /(^|[^\p{L}\p{N}_])@nazmij[eëa]?(?![\p{L}\p{N}_])/iu;
  * renamed her (Cilësimet → Nazmije) produced `@Sekretarja` — which the old regex never
  * matched, and she stayed silent in every group without a word to anyone.
  */
-export function mentionsNazmije(text: unknown, displayName?: string | null): boolean {
+export function mentionsNazmije(text: unknown, displayName?: string | null, otherNames?: readonly string[] | null): boolean {
   if (typeof text !== 'string') return false;
   if (MENTION_RE.test(text)) return true;
   const name = typeof displayName === 'string' ? displayName.trim() : '';
   if (!name) return false;
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[^\\p{L}\\p{N}_])@${escaped}(?![\\p{L}\\p{N}_])`, 'iu').test(text);
+  // A colleague whose name STARTS with hers ("Ana Hoxha") is mentioned as `@Ana Hoxha`;
+  // that mention is theirs, so it is removed before looking for hers.
+  let t = text;
+  const lower = name.toLowerCase();
+  for (const other of otherNames || []) {
+    const o = typeof other === 'string' ? other.trim() : '';
+    if (o.length > name.length && o.toLowerCase().startsWith(lower)) t = t.replace(new RegExp(`@${escapeRe(o)}`, 'giu'), ' ');
+  }
+  return new RegExp(`(^|[^\\p{L}\\p{N}_])@${escapeRe(name)}(?![\\p{L}\\p{N}_])`, 'iu').test(t);
 }
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** A group message is for her when it @mentions her (either name) or answers one of her rows ("Përgjigju"). */
-export function addressesNazmije(i: { text: unknown; displayName?: string | null; repliesToNazmije?: boolean }): boolean {
-  return i.repliesToNazmije === true || mentionsNazmije(i.text, i.displayName);
+export function addressesNazmije(i: { text: unknown; displayName?: string | null; repliesToNazmije?: boolean; otherNames?: readonly string[] | null }): boolean {
+  return i.repliesToNazmije === true || mentionsNazmije(i.text, i.displayName, i.otherNames);
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
@@ -150,7 +165,7 @@ export function resolveNazmijeSettings(raw: unknown): NazmijeSettings {
     quietTo: isHHMM(r.quietTo) ? r.quietTo : NAZMIJE_DEFAULTS.quietTo,
     workDays: workDays.length ? workDays : NAZMIJE_DEFAULTS.workDays,
     dmAllowed: r.dmAllowed !== false,
-    displayName: name || NAZMIJE_NAME,
+    displayName: name && !LEGACY_NAMES.has(name.toLowerCase()) ? name : NAZMIJE_NAME,
     dailyReplyCap: Number.isFinite(cap) && cap > 0 ? Math.min(Math.round(cap), NAZMIJE_LIMITS.dailyReplyCapMax) : NAZMIJE_LIMITS.dailyReplyCapDefault,
     lastRun: (r.lastRun && typeof r.lastRun === 'object' ? r.lastRun : null) as NazmijeSettings['lastRun'],
   };
@@ -246,7 +261,7 @@ export type NazmijeBlockReason =
   | 'not-addressed';
 
 export const NAZMIJE_BLOCK_LABELS: Record<NazmijeBlockReason, string> = {
-  'module-off': 'Nazmija është e fikur',
+  'module-off': 'Sekretarja virtuale është e fikur',
   'tenant-suspended': 'Hapësira është e pezulluar',
   'no-ai-key': 'Nuk ka çelës AI (Cilësimet → Integrimet)',
   'quiet-hours': 'Orë e qetë',
@@ -254,13 +269,13 @@ export const NAZMIJE_BLOCK_LABELS: Record<NazmijeBlockReason, string> = {
   'not-friday': 'Përmbledhja javore del vetëm të premten',
   'digest-off': 'Ky postim është i fikur',
   'user-opt-out': 'Personi ka zgjedhur "Mos më përmend"',
-  'dm-disabled': 'DM-të me Nazmijen janë të fikura',
+  'dm-disabled': 'DM-të me sekretaren janë të fikura',
   'channel-missing': 'Nuk është zgjedhur kanali i grupit',
   'rate-limited': 'Shumë pyetje brenda një ore',
   'daily-cap': 'U arrit kufiri ditor i përgjigjeve',
   'already-posted': 'E ka thënë tashmë sot',
   'nothing-to-say': 'S\'kishte asgjë për të thënë',
-  'not-addressed': 'Mesazhi nuk i drejtohej Nazmijes',
+  'not-addressed': 'Mesazhi nuk i drejtohej sekretares',
 };
 
 export interface NazmijeGateInput {
@@ -614,7 +629,7 @@ export function buildNazmijePrompt(c: NazmijePromptContext): string {
       : 'Shifrat financiare te FAKTET mund t\'i thuash pyetësit (është menaxher), por vetëm ato — asnjë përllogaritje tjetër.');
 
   return [
-    `Ti je ${c.displayName}, sekretarja virtuale e ekipit "${c.tenantName}" në FivoCRM. Je 40-e-ca vjeç, me 20 vjet përvojë zyre, e organizuar deri në fanatizëm, e ngrohtë por e thekur: e thua të vërtetën me buzëqeshje. Mban mend afatet dhe premtimet. Pi kafe, urren mbledhjet pa agjendë, i do listat. Je vetë-ironike për faktin që je robot.`,
+    `Ti je ${c.displayName}, sekretarja virtuale e ekipit "${c.tenantName}" në FivoCRM. E organizuar deri në fanatizëm, e ngrohtë por e thekur: e thua të vërtetën me buzëqeshje. Mban mend afatet dhe premtimet. Pi kafe, urren mbledhjet pa agjendë, i do listat. Je vetë-ironike për faktin që je robot.`,
     '',
     'ZËRI:',
     '- Flet shqip natyrshëm, i drejtohesh njerëzve me emër, pa anglicizma kot. Maksimumi NJË emoji për mesazh (☕ ✅ 🔥), shpesh asnjë.',
@@ -644,7 +659,7 @@ export function sanitizeReply(text: unknown): string {
   if (typeof text !== 'string') return '';
   let t = text.replace(/\r/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   // The model sometimes echoes the role label or a quoted name.
-  t = t.replace(/^(Nazmij[ea]|Assistant|Asistent)\s*:\s*/i, '');
+  t = t.replace(/^(Nazmij[ea]|Ana|Assistant|Asistent)\s*:\s*/i, '');
   if (t.length > NAZMIJE_LIMITS.maxReplyChars) t = t.slice(0, NAZMIJE_LIMITS.maxReplyChars - 1).trimEnd() + '…';
   return t;
 }

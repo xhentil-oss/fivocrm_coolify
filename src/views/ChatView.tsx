@@ -2434,7 +2434,8 @@ const ChatView: React.FC = () => {
         // mention pass above already notified (two rows for one message otherwise).
         const isGroupTarget = (allGroups || []).some(g => g.id === targetChannel && (g as any).isGroup);
         const repliesToNazmije = !!(replyingTo && !fromScheduler && !override?.noReply && replyingTo.senderId === NAZMIJE_UID);
-        if (isGroupTarget && messageId && nazmije.enabled && addressesNazmije({ text: finalText, displayName: nazmije.displayName, repliesToNazmije })) {
+        const otherNames = [...displayNameCache.entries()].filter(([id]) => id !== NAZMIJE_UID).map(([, n]) => n);
+        if (isGroupTarget && messageId && nazmije.enabled && addressesNazmije({ text: finalText, displayName: nazmije.displayName, repliesToNazmije, otherNames })) {
           askNazmije({ teamId: getGlobalTeamId(), messageId }).then(r => {
             if (r.blocked) toast({ title: nazmije.displayName, description: NAZMIJE_BLOCK_LABELS[r.blocked] });
           }).catch(err => {

@@ -237,7 +237,7 @@ const TenantCredentialsPanel: React.FC<Props> = ({ businessId, biz, testTeamId }
         <label className="flex items-center justify-between gap-3 text-sm">
           <span>
             Çaktivizo AI-në për këtë tenant
-            <span className="block text-[11px] text-muted-foreground">FivoAI, Ana, Nazmije, draftet WhatsApp dhe përgjigjet GMB ndalen.</span>
+            <span className="block text-[11px] text-muted-foreground">FivoAI, Ana (shitjet dhe sekretarja), draftet WhatsApp dhe përgjigjet GMB ndalen.</span>
           </span>
           <Switch checked={aiOffVal} onCheckedChange={(v) => setAiOff(!!v)} />
         </label>

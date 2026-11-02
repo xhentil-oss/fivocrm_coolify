@@ -556,11 +556,11 @@ async function handleAsk(req: VercelRequest, res: VercelResponse, c: NonNullable
     const snap = await db.collection('messages').doc(messageId).get();
     if (!snap.exists) return res.status(404).json({ error: 'Mesazhi nuk u gjet' });
     const m = snap.data() as any;
-    if (m.senderId !== uid) return res.status(403).json({ error: 'Vetëm dërguesi i mesazhit mund ta thërrasë Nazmijen' });
+    if (m.senderId !== uid) return res.status(403).json({ error: 'Vetëm dërguesi i mesazhit mund ta thërrasë sekretaren' });
     const channelId = str(m.channelId, 200);
     const receiverId = str(m.receiverId, 128);
-    if (!channelId && receiverId !== NAZMIJE_UID) return res.status(409).json({ error: 'Mesazhi nuk i drejtohej Nazmijes', blocked: 'not-addressed' });
-    if (channelId && channelId.startsWith('client-')) return res.status(409).json({ error: 'Nazmija nuk flet në bisedat me klientët', blocked: 'not-addressed' });
+    if (!channelId && receiverId !== NAZMIJE_UID) return res.status(409).json({ error: 'Mesazhi nuk i drejtohej sekretares', blocked: 'not-addressed' });
+    if (channelId && channelId.startsWith('client-')) return res.status(409).json({ error: 'Sekretarja nuk flet në bisedat me klientët', blocked: 'not-addressed' });
     groupReplyToId = channelId ? str(m.replyToId, 128) : '';
     businessId = str(m.businessId, 128);
     teamId = teamId || str(m.teamId, 128);
@@ -589,15 +589,17 @@ async function handleAsk(req: VercelRequest, res: VercelResponse, c: NonNullable
   const settings = ctx.settings;
   // A group row is for her when it @mentions either of her names or answers one of
   // her rows in THIS channel — checked here because her display name is a setting.
+  let groupPeople: People | null = null;
   if (thread.channelId) {
+    groupPeople = await loadPeople(ctx.businessId);
     let repliesToNazmije = false;
     if (groupReplyToId) {
       const prev = await db.collection('messages').doc(groupReplyToId).get().catch(() => null);
       const p = prev?.exists ? (prev.data() as any) : null;
       repliesToNazmije = !!p && p.senderId === NAZMIJE_UID && p.channelId === thread.channelId;
     }
-    if (!addressesNazmije({ text: thread.message.content, displayName: settings.displayName, repliesToNazmije })) {
-      return res.status(409).json({ error: 'Mesazhi nuk e përmend Nazmijen', blocked: 'not-addressed' });
+    if (!addressesNazmije({ text: thread.message.content, displayName: settings.displayName, repliesToNazmije, otherNames: [...groupPeople.names.values()] })) {
+      return res.status(409).json({ error: 'Mesazhi nuk e përmend sekretaren', blocked: 'not-addressed' });
     }
   }
   const now = new Date();
@@ -642,7 +644,7 @@ async function handleAsk(req: VercelRequest, res: VercelResponse, c: NonNullable
     return res.status(line ? 200 : 409).json({ ok: !!line, blocked, replyId, userMessageId: thread.message.id || null });
   }
 
-  const people = await loadPeople(ctx.businessId);
+  const people = groupPeople ?? await loadPeople(ctx.businessId);
   const askerName = nameOf(people, uid);
   const role: NazmijeRole = nazmijeRoleOf(c.roles, membership?.role);
   const typingKey = thread.channelId || dmTypingKey(uid);
@@ -687,7 +689,7 @@ async function requireTenantAdmin(c: NonNullable<Awaited<ReturnType<typeof authe
   if (!ctx) return { error: 'Ekipi nuk u gjet', status: 404 };
   if (c.bid && c.bid !== ctx.businessId && !c.superAdmin) return { error: 'Jashtë hapësirës suaj', status: 403 };
   const admin_ = c.superAdmin || hasAdminRole(c.roles) || membership?.role === 'Admin' || (await isBusinessOwner(c.uid, ctx.businessId));
-  if (!admin_) return { error: 'Vetëm një Admin ose pronari mund ta aktivizojë Nazmijen', status: 403 };
+  if (!admin_) return { error: 'Vetëm një Admin ose pronari mund ta aktivizojë sekretaren', status: 403 };
   if (!membership && !c.superAdmin) return { error: 'Nuk jeni anëtar i këtij ekipi', status: 403 };
   return { ctx };
 }
@@ -770,7 +772,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const c = await authenticate(req);
   if (!c) return res.status(401).json({ error: 'Missing or invalid token' });
-  if (isPortalOnlyToken(c)) return res.status(403).json({ error: 'Nazmija flet vetëm me stafin' });
+  if (isPortalOnlyToken(c)) return res.status(403).json({ error: 'Sekretarja flet vetëm me stafin' });
   const body = await readJsonBody(req);
   if (!body) return res.status(400).json({ error: 'Invalid JSON' });
   const action = str(body.action, 20);
@@ -783,7 +785,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   } catch (err: any) {
     console.error('[nazmije]', action, 'failed', err);
-    return res.status(500).json({ error: 'Nazmija pati një gabim', detail: err?.message || String(err) });
+    return res.status(500).json({ error: 'Sekretarja pati një gabim', detail: err?.message || String(err) });
   }
 }
 
@@ -798,7 +800,7 @@ async function aiHumorLine(teamId: string, kind: DigestKind, dayIndex: number, w
     const cfg = await resolveAiConfig(teamId);
     if (!cfg.hasKey) return bank;
     const r = await generateChatWith(cfg,
-      'Ti je Nazmija, sekretare zyre shqiptare, e thekur dhe vetë-ironike për faktin që je robot. Shkruaj NJË fjali humori të lehtë (max 120 karaktere) për kafen, të hënën/të premten, robotët ose afatet në përgjithësi. KURRË për një person, pagë, mungesa, shëndet. Pa emoji, pa thonjëza, vetëm fjalia.',
+      'Ti je Ana, sekretarja virtuale e një zyre shqiptare, e thekur dhe vetë-ironike për faktin që je robot. Shkruaj NJË fjali humori të lehtë (max 120 karaktere) për kafen, të hënën/të premten, robotët ose afatet në përgjithësi. KURRË për një person, pagë, mungesa, shëndet. Pa emoji, pa thonjëza, vetëm fjalia.',
       [{ role: 'user', content: kind === 'weekly' ? 'Është e premte pasdite, java mbaroi.' : weekday === 1 ? 'Është e hënë në mëngjes.' : 'Është mëngjes dite pune.' }],
       { maxTokens: 60, temperature: 0.9 });
     const line = sanitizeReply(r.reply).split('\n')[0].trim();
@@ -867,6 +869,9 @@ export async function runNazmijeDigest(kind: DigestKind, opts: { businessId?: st
         throw err;
       }
       await postAsNazmije({ businessId: ctx.businessId, teamId, channelId: s.channelId, content: text, kind, displayName: s.displayName });
+      // Keeps her profile name in step with the setting (the Nazmije → Ana rename reached
+      // tenants through the resolver, not through a migration of this doc).
+      await db.collection('userProfiles').doc(nazmijeProfileDocId(ctx.businessId)).set({ displayName: s.displayName }, { merge: true }).catch(() => {});
       posted++;
       await writeLastRun(teamId, { kind, posted: true, blocked: null, error: null });
     } catch (err: any) {

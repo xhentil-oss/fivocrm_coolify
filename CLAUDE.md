@@ -1079,6 +1079,12 @@ Full runbook: `workspace/CLIENT_PROFITABILITY.md`. Decided 2026-09-21.
 Runbook: `workspace/NAZMIJE.md`. Built 2 Oct 2026 (phases 0–2; the CRM-automation
 action and "actions with confirmation" are open).
 
+- **Shown to staff as "Ana" since 2 Nov 2026** (owner: one assistant name). `NAZMIJE_NAME` /
+  `NAZMIJE_SIGNATURE` = `Ana`; a stored `displayName` of `Nazmije`/`Nazmija` resolves to Ana
+  (no migration). Ids, collections, files and the `nazmije-*` jobs keep their names. In a
+  group she answers `@Nazmije`, `@<displayName>` or a "Përgjigju" on her row
+  (`addressesNazmije`); a colleague mentioned as `@Ana Hoxha` does not wake her (`otherNames`).
+  She is still NOT the sales Ana: different module, settings and audience.
 - **`src/lib/nazmije/core.ts` decides, `api/_nazmije.ts` executes.** The core is
   import-free (persona prompt, 46 work sayings, humour bank, `nazmijeBlockReason`,
   role-filtered facts, deterministic digests) and `api/_nazmijeCore.ts` is a
