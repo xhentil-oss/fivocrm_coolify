@@ -41,8 +41,23 @@ export const nazmijePostDocId = (businessId: string, dateKey: string, kind: Nazm
 
 /** `@Nazmije`, `@Nazmija`, `@nazmije`, `@Nazmij` — the mention the reply path reacts to. */
 const MENTION_RE = /(^|[^\p{L}\p{N}_])@nazmij[eëa]?(?![\p{L}\p{N}_])/iu;
-export function mentionsNazmije(text: unknown): boolean {
-  return typeof text === 'string' && MENTION_RE.test(text);
+/**
+ * Also `@<displayName>`: the mention picker inserts her CURRENT name, so a tenant that
+ * renamed her (Cilësimet → Nazmije) produced `@Sekretarja` — which the old regex never
+ * matched, and she stayed silent in every group without a word to anyone.
+ */
+export function mentionsNazmije(text: unknown, displayName?: string | null): boolean {
+  if (typeof text !== 'string') return false;
+  if (MENTION_RE.test(text)) return true;
+  const name = typeof displayName === 'string' ? displayName.trim() : '';
+  if (!name) return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^\\p{L}\\p{N}_])@${escaped}(?![\\p{L}\\p{N}_])`, 'iu').test(text);
+}
+
+/** A group message is for her when it @mentions her (either name) or answers one of her rows ("Përgjigju"). */
+export function addressesNazmije(i: { text: unknown; displayName?: string | null; repliesToNazmije?: boolean }): boolean {
+  return i.repliesToNazmije === true || mentionsNazmije(i.text, i.displayName);
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────

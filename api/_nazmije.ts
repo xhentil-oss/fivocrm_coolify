@@ -10,7 +10,7 @@ import { notifyUser } from './_push.js';
 import {
   NAZMIJE_AVATAR_PATH, NAZMIJE_LIMITS, NAZMIJE_TITLE, NAZMIJE_UID,
   albanianDateLabel, buildAfternoonDigest, buildMorningDigest, buildNazmijePrompt, buildWeeklyDigest,
-  dayIndexOf, factsForAudience, humorLineForDay, humorModeFor, localParts, mentionsNazmije, mondayOf,
+  dayIndexOf, factsForAudience, humorLineForDay, humorModeFor, localParts, addressesNazmije, mondayOf,
   nazmijeBlockReason, nazmijePostDocId, nazmijeProfileDocId, nazmijeRoleOf, renderFactsForPrompt,
   resolveNazmijeSettings, sanitizeReply,
   type HumorMode, type NazmijeBlockReason, type NazmijeFacts, type NazmijeKind, type NazmijeRole, type NazmijeSettings,
@@ -551,6 +551,7 @@ async function handleAsk(req: VercelRequest, res: VercelResponse, c: NonNullable
   // Resolve the thread she is being spoken to in.
   let thread: Thread;
   let businessId = '';
+  let groupReplyToId = '';
   if (messageId) {
     const snap = await db.collection('messages').doc(messageId).get();
     if (!snap.exists) return res.status(404).json({ error: 'Mesazhi nuk u gjet' });
@@ -560,7 +561,7 @@ async function handleAsk(req: VercelRequest, res: VercelResponse, c: NonNullable
     const receiverId = str(m.receiverId, 128);
     if (!channelId && receiverId !== NAZMIJE_UID) return res.status(409).json({ error: 'Mesazhi nuk i drejtohej Nazmijes', blocked: 'not-addressed' });
     if (channelId && channelId.startsWith('client-')) return res.status(409).json({ error: 'Nazmija nuk flet në bisedat me klientët', blocked: 'not-addressed' });
-    if (channelId && !mentionsNazmije(m.content)) return res.status(409).json({ error: 'Mesazhi nuk e përmend Nazmijen', blocked: 'not-addressed' });
+    groupReplyToId = channelId ? str(m.replyToId, 128) : '';
     businessId = str(m.businessId, 128);
     teamId = teamId || str(m.teamId, 128);
     thread = { audience: channelId ? 'group' : 'dm', channelId: channelId || null, directUserId: channelId ? null : uid, message: { id: snap.id, content: String(m.content || '') } };
@@ -586,6 +587,19 @@ async function handleAsk(req: VercelRequest, res: VercelResponse, c: NonNullable
   }
 
   const settings = ctx.settings;
+  // A group row is for her when it @mentions either of her names or answers one of
+  // her rows in THIS channel — checked here because her display name is a setting.
+  if (thread.channelId) {
+    let repliesToNazmije = false;
+    if (groupReplyToId) {
+      const prev = await db.collection('messages').doc(groupReplyToId).get().catch(() => null);
+      const p = prev?.exists ? (prev.data() as any) : null;
+      repliesToNazmije = !!p && p.senderId === NAZMIJE_UID && p.channelId === thread.channelId;
+    }
+    if (!addressesNazmije({ text: thread.message.content, displayName: settings.displayName, repliesToNazmije })) {
+      return res.status(409).json({ error: 'Mesazhi nuk e përmend Nazmijen', blocked: 'not-addressed' });
+    }
+  }
   const now = new Date();
   const local = localParts(now, TZ);
   const prefs = await db.collection('userPreferences').doc(uid).get().catch(() => null);

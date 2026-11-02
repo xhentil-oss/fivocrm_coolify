@@ -9,7 +9,7 @@ import { resolve } from 'node:path';
 import {
   NAZMIJE_DEFAULTS, NAZMIJE_HUMOR, NAZMIJE_SAYINGS, NAZMIJE_UID, NAZMIJE_BLOCK_LABELS,
   albanianDateLabel, buildAfternoonDigest, buildMorningDigest, buildNazmijePrompt, buildWeeklyDigest,
-  dayIndexOf, factsForAudience, humorLineForDay, humorModeFor, inQuietHours, localParts, mentionsNazmije,
+  dayIndexOf, factsForAudience, humorLineForDay, humorModeFor, inQuietHours, localParts, mentionsNazmije, addressesNazmije,
   mondayOf, nazmijeBlockReason, nazmijeRoleOf, renderFactsForPrompt, resolveNazmijeSettings, sanitizeReply,
   sayingForDay, type NazmijeFacts, type NazmijeBlockReason,
 } from './core';
@@ -53,6 +53,17 @@ describe('identity & mentions', () => {
     expect(mentionsNazmije('email@nazmije.al')).toBe(false);
     expect(mentionsNazmije('Nazmije pa @')).toBe(false);
     expect(mentionsNazmije(null)).toBe(false);
+  });
+
+  it('matches her renamed display name and a reply to her row', () => {
+    expect(mentionsNazmije('@Sekretarja ku jemi?', 'Sekretarja')).toBe(true);
+    expect(mentionsNazmije('hej @sekretarja ana, lista?', 'Sekretarja Ana')).toBe(true);
+    expect(mentionsNazmije('@Sekretarja ku jemi?')).toBe(false);
+    expect(mentionsNazmije('@Sekretarjat', 'Sekretarja')).toBe(false);
+    expect(mentionsNazmije('@A.B (x)', 'A.B (x)')).toBe(true);
+    expect(mentionsNazmije('@Nazmije', 'Sekretarja')).toBe(true);
+    expect(addressesNazmije({ text: 'po pse?', repliesToNazmije: true })).toBe(true);
+    expect(addressesNazmije({ text: 'po pse?', displayName: 'Nazmije' })).toBe(false);
   });
   it('has a reserved uid that is not an auth user', () => {
     expect(NAZMIJE_UID).toBe('nazmije');
