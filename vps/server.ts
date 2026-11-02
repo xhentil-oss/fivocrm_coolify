@@ -2970,6 +2970,8 @@ function startCronSchedulers(): void {
   setInterval(() => { void triggerCronJob('sales-agent-prospecting'); }, 15 * MIN);
   setInterval(() => { void triggerCronJob('sales-agent-cold-wa'); }, 15 * MIN);
   setInterval(() => { void triggerCronJob('sales-agent-nudges'); }, 60 * MIN);
+  // Level 1 in office hours waits humanSilenceMinutes for a person, then Ana answers.
+  setInterval(() => { void triggerCronJob('sales-agent-pending'); }, 5 * MIN);
   scheduleDailyInZone(CRON_LOCAL_TZ, 8, 15, () => { void triggerCronJob('sales-agent-digest'); });
   scheduleDailyInZone(CRON_LOCAL_TZ, 3, 30, () => { void triggerCronJob('sales-agent-prospect-ttl'); });
 

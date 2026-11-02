@@ -1126,6 +1126,18 @@ Nazmije speaks to staff, Ana speaks to clients — they never merge.
   with claims) + `src/lib/salesAgent/api.ts`. Adding a collection? → the usual six
   places (tests 85a–85h are the pattern). Open: `meeting.book`, `quote.draft`, cold
   EMAIL drain, portal/landing channels, level 3.
+- **Ana never goes silent without a trace** (2 Nov 2026 — "she answers once, then
+  nothing"). (1) Level 1 in office hours HOLDS the reply (`deferMinutes`,
+  `agent.pendingSend` + `agent.pendingDueAt`) and `sales-agent-pending` (every 5 min,
+  VPS, NOT in run-all) sends it unless `pendingSendBlockReason()` says a person
+  answered / a newer message came / handoff / opt-out / level lowered; same
+  idempotency key as an immediate send. The old rule compared "minutes since the
+  inbound" (always 0) and so never sent. (2) No 60s `burst` drop: the hook waits
+  `settleMs` and answers only the NEWEST text message (`isSupersededInbound`, needs
+  `conversations.lastInboundKind`), and re-checks before sending. (3) Every draft
+  notifies the thread owner once per 30 min (`notifyDraft`, type
+  `sales_agent_handoff`). (4) `handoffAutoResumeHours` (default 0 = off) lets Ana take
+  a handoff back when no person wrote since it.
 
 ### Daily staff report (mandatory, 16:50)
 

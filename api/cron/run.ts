@@ -55,7 +55,7 @@ import { notifyUser, getUserPrefs, isDndActive, isSilenced, escapeHtml, BASE_URL
 import { runChatScheduled } from '../_chatScheduled.js';
 import { runNazmijeDigest } from '../_nazmije.js';
 import {
-  runSalesAgentColdWa, runSalesAgentDigest, runSalesAgentNudges, runSalesAgentProspectTtl, runSalesAgentProspecting,
+  runSalesAgentColdWa, runSalesAgentDigest, runSalesAgentNudges, runSalesAgentPending, runSalesAgentProspectTtl, runSalesAgentProspecting,
 } from '../_salesAgentJobs.js';
 import { isTypeMutedByPrefs } from '../_notificationTypes.js';
 import { costRateFor, resolveFinanceSettings, budgetAlertsDue, type FinanceSettings } from '../_profitabilityCore.js';
@@ -8116,7 +8116,7 @@ const SCOPED_JOBS = new Set<string>([
   'nazmije-morning', 'nazmije-afternoon', 'nazmije-weekly',
   // Ana, the virtual sales agent: prospecting (spends Places requests), cold WhatsApp
   // and nudges (message real people), the morning digest — each scoped to the caller's tenant.
-  'sales-agent-prospecting', 'sales-agent-cold-wa', 'sales-agent-nudges', 'sales-agent-digest',
+  'sales-agent-prospecting', 'sales-agent-cold-wa', 'sales-agent-nudges', 'sales-agent-digest', 'sales-agent-pending',
 ]);
 const BOOTSTRAP_JOBS = new Set<string>(['set-superadmin-claim']);
 
@@ -8213,6 +8213,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'sales-agent-digest':
         // Ana: "dje në shitje" to the managers, 08:15 local; idempotent per tenant/day.
         result = await runSalesAgentDigest({ businessId: manualScope });
+        break;
+      case 'sales-agent-pending':
+        // Ana level 1: sends a held reply when nobody answered within humanSilenceMinutes.
+        result = await runSalesAgentPending({ businessId: manualScope });
         break;
       case 'sales-agent-prospect-ttl':
         // Platform-only (guard above): Places terms — unregistered prospects live 30 days.

@@ -15,6 +15,10 @@ që EKZISTON, si vihet në punë dhe çfarë mbetet.
 | Gjen prospekte në Google Maps, fit-score, dedupe me CRM, regjistron si lead | `search.create` → `sales-agent-prospecting` (15 min) → `prospect.register` |
 | Mesazh i parë WhatsApp i FTOHTË, i matur (≤10/ditë, ≥1 orë, warm-up, auto-pauzë) | `sales-agent-cold-wa` (15 min), `coldWaBlockReason()` |
 | Digest i mëngjesit për menaxherët | `sales-agent-digest` 08:15 lokale |
+| Niveli 1 brenda orarit: mban përgjigjen `humanSilenceMinutes`, pastaj e dërgon nëse askush nuk u përgjigj | `agent.pendingSend` → `sales-agent-pending` (5 min) |
+| Disa mesazhe radhazi nga klienti → një përgjigje, te i fundit (pritje 4 s, pa "burst" 60 s) | hook-u inbound, `isSupersededInbound` |
+| Çdo draft njofton pronarin e bisedës (një herë në 30 min) | `notifyDraft` |
+| Rifillim automatik pas dorëzimit nëse askush nuk i shkroi klientit (opsional, orë) | `handoffAutoResumeHours` |
 | TTL 30 ditë për prospektet e pa-regjistruara (termat e Google) | `sales-agent-prospect-ttl` 03:30 lokale (platform-only) |
 | Simulator pa dërgim, "Testo lidhjen", baza e njohurive, cilësimet | `/app/sales-agent?tab=settings` |
 
@@ -101,6 +105,8 @@ outreach: { wa, email } }` → `{ created, linked, skipped }` · `prospect.rejec
   `blockReason`/`handoffReason` (etiketa shqip), + `teamSettings.salesAgent.lastRun`.
 - Një mesazh pa përgjigje: gjej `salesAgentRuns/{bid}_reply_{conversationId}_{waMessageId}`
   (ose `…_gate`) — `decision`, `blockReason`, `intent`, `confidence`, `model`.
+- Ana s'u përgjigj në orar (niveli 1): `conversations.agent.pendingSend` / `pendingDueAt`;
+  run doc-u merr `sentAfterWait: true` ose `blockReason` (`human-replied`, `superseded`, …).
 - Cold WA s'dërgon: `salesAgentSenders/{bid}_{agentId}` (pausedUntil, failureAts,
   sentToday) + `prospects.outreachWaReason`.
 - Prospecting: `prospectSearches.status/error`, `salesAgentUsage/{bid}_{YYYY-MM}.placesRequests`.

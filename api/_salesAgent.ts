@@ -15,9 +15,10 @@ import { toWaPhone } from './_waPhone.js';
 import { findCustomerForContact, findLeadForContact } from './_contactIdentity.js';
 import { placesKeyProbe, resolvePlacesKey } from './_placesClient.js';
 import {
-  SALES_AGENT_AVATAR_PATH, SALES_AGENT_LIMITS, SALES_AGENT_TITLE, SALES_AGENT_UID,
+  SALES_AGENT_AVATAR_PATH, SALES_AGENT_BLOCK_LABELS, SALES_AGENT_LIMITS, SALES_AGENT_TITLE, SALES_AGENT_UID,
   agentGateReason, allowedIntentsForAutonomy, buildLeadSummary, buildSalesAgentPromptParts, buildSalesDigest, decideDelivery,
-  detectHandoffTrigger, ensureDisclosure, inWindow, leadAgentScore, localParts, mergeCollected, monthKeyOf, nextStage,
+  detectHandoffTrigger, ensureDisclosure, handoffAutoResumeDue, inWindow, isSupersededInbound, leadAgentScore, localParts, mergeCollected, monthKeyOf, nextStage,
+  shouldNotifyDraft,
   parseAgentOutput, qualificationProgress, resolveSalesAgentSettings, salesAgentProfileDocId, salesAgentRunId,
   type AgentModelOutput, type AgentStage, type ConversationAgentLike, type DeliveryDecision, type DeliveryMode,
   type HandoffReason, type SalesAgentAutonomy, type SalesAgentBlockReason, type SalesAgentSettings, type SalesDigestFacts,
@@ -263,6 +264,29 @@ interface ThreadFacts {
 }
 
 /** One read: the thread's newest rows (oldest→newest for the prompt) + the facts the gate needs. */
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** ms of the newest outbound row a PERSON wrote in this thread (automations excluded). */
+export async function lastHumanOutboundMs(teamId: string, phone: string): Promise<number | null> {
+  return (await loadThreadFacts(teamId, phone, new Date(), '')).lastHumanOutboundMs;
+}
+
+/** STOP/NDALO is stamped on the lead and/or customer (per phone, by the inbound handler). */
+export async function contactOptedOut(leadId: string | null, customerId: string | null): Promise<boolean> {
+  const [l, c] = await Promise.all([
+    leadId ? db.collection('leads').doc(leadId).get().catch(() => null) : Promise.resolve(null),
+    customerId ? db.collection('customers').doc(customerId).get().catch(() => null) : Promise.resolve(null),
+  ]);
+  return (l?.data() as any)?.waOptOut === true || (c?.data() as any)?.waOptOut === true;
+}
+
+/** Did a newer TEXT message from the client land on this conversation after `waMessageId`? */
+async function supersededNow(conversationId: string, waMessageId: string): Promise<boolean> {
+  const snap = await db.collection('conversations').doc(conversationId).get().catch(() => null);
+  const c = (snap?.data() as any) || {};
+  return isSupersededInbound({ waMessageId, lastInboundMessageId: c.lastInboundMessageId ?? null, lastInboundKind: c.lastInboundKind ?? null });
+}
+
 async function loadThreadFacts(teamId: string, phone: string, now: Date, currentText: string): Promise<ThreadFacts> {
   let rows: any[] = [];
   try {
@@ -365,7 +389,7 @@ export async function decideReply(i: DecideInput): Promise<DecideResult> {
     ? { mode: 'draft', blockReason: 'error', handoffReason: null }
     : decideDelivery({
       settings: s, output, trigger: i.trigger, clientText: i.clientText, insideOfficeHours,
-      minutesSinceHumanReply: i.minutesSinceHumanReply, minutesSinceInbound: 0,
+      minutesSinceHumanReply: i.minutesSinceHumanReply,
       turnsWithoutProgress: i.agentState?.turnsWithoutProgress || 0, progressed,
     });
   const progress = qualificationProgress(collected, s.qualificationFields);
@@ -490,6 +514,19 @@ export async function runSalesAgentOnInbound(a: InboundHookArgs): Promise<SalesA
     const s = ctx.settings;
     if (!s.enabled) return { blocked: 'module-off' };
     const convRef = db.collection('conversations').doc(a.conversationId);
+    const recordGate = (reason: SalesAgentBlockReason) =>
+      db.collection('salesAgentRuns').doc(`${runRef.id}_gate`).set({ businessId: a.businessId, teamId: a.teamId, kind: 'reply', entityId: a.conversationId, decision: 'blocked', blockReason: reason, createdAt: Timestamp.now() }, { merge: true }).catch(() => {});
+    // Settle: a client who writes three lines in five seconds gets ONE answer, to the
+    // last line (its history carries the other two). This replaced the old 60s "burst"
+    // gate, which simply threw away any message that came soon after Ana had spoken.
+    if (a.event.kind === 'text') {
+      await sleep(SALES_AGENT_LIMITS.settleMs);
+      if (await supersededNow(a.conversationId, a.event.waMessageId)) {
+        await tally('superseded');
+        await recordGate('superseded');
+        return { blocked: 'superseded' };
+      }
+    }
     const [convSnap, aiCfg, usage, thread] = await Promise.all([
       convRef.get(),
       resolveAiConfig(a.teamId),
@@ -497,18 +534,21 @@ export async function runSalesAgentOnInbound(a: InboundHookArgs): Promise<SalesA
       a.lidOnly ? Promise.resolve<ThreadFacts>({ history: [{ role: 'user', content: a.event.text || '…' }], lastHumanOutboundMs: null, replyToAutomated: false, agentSpokeBefore: false }) : loadThreadFacts(a.teamId, a.event.phone, now, a.event.text),
     ]);
     const conv = (convSnap.data() as any) || {};
-    const agentState = agentStateOf(conv);
+    let agentState = agentStateOf(conv);
+    // A handoff nobody answered for `handoffAutoResumeHours` (opt-in) goes back to Ana.
+    const resumable = !!agentState && agentState.active === false && agentState.stage === 'handoff'
+      && handoffAutoResumeDue({ autoResumeHours: s.handoffAutoResumeHours, handoffAt: agentState.handoffAt, lastHumanOutboundMs: thread.lastHumanOutboundMs, now });
     const gate = agentGateReason({
       settings: s, channel: 'whatsapp', hasAiKey: aiCfg.hasKey, hasText: a.event.kind === 'text' && !!a.event.text.trim(),
       optedOut: a.optedOut, isPerson: !a.lidOnly, agentState, replyToAutomated: thread.replyToAutomated,
-      repliesToday: Number(usage.replies) || 0, now,
+      repliesToday: Number(usage.replies) || 0, now, handoffResumable: resumable,
     });
     if (gate) {
       await tally(gate);
       if (gate === 'daily-cap') await notifyCapOnce(ctx, dateKey, 'replies');
       // A gate block is recorded under its own id: a retry of the same message after a
-      // transient block (burst, daily-cap) must still be able to claim the real run doc.
-      await db.collection('salesAgentRuns').doc(`${runRef.id}_gate`).set({ businessId: a.businessId, teamId: a.teamId, kind: 'reply', entityId: a.conversationId, decision: 'blocked', blockReason: gate, createdAt: Timestamp.now() }, { merge: true }).catch(() => {});
+      // transient block (daily-cap) must still be able to claim the real run doc.
+      await recordGate(gate);
       return { blocked: gate };
     }
     // Claim BEFORE anything else happens (idempotency = the run doc).
@@ -517,6 +557,11 @@ export async function runSalesAgentOnInbound(a: InboundHookArgs): Promise<SalesA
     } catch (err) {
       if (isAlreadyExists(err)) { await tally('duplicate-run'); return { blocked: 'duplicate-run' }; }
       throw err;
+    }
+    if (resumable && agentState) {
+      await convRef.set({ agent: { active: true, stage: 'qualifying', resumedAt: Timestamp.now(), resumedBy: 'auto', handoffReason: null, handoffNotifiedAt: null } }, { merge: true });
+      agentState = { ...agentState, active: true, stage: 'qualifying' };
+      if (a.leadId) await writeLeadActivity(ctx, a.leadId, `${s.persona.name} e mori sërish bisedën`, `Askush nuk u përgjigj për ${s.handoffAutoResumeHours} orë pas dorëzimit.`, { conversationId: a.conversationId, autoResumed: true });
     }
     const facts = await loadSalesFacts(ctx);
     const trigger = detectHandoffTrigger(a.event.text);
@@ -539,6 +584,15 @@ export async function runSalesAgentOnInbound(a: InboundHookArgs): Promise<SalesA
       channel: a.event.channel, agentId: a.event.agentId ?? null, metaPhoneNumberId: a.event.metaPhoneNumberId ?? null,
       phone: a.event.phone, jid: a.event.jid, channelPhone: a.event.channelPhone ?? null,
     };
+    // The client wrote again while the model was thinking: the newer run answers with the
+    // full history, so this reply (or held reply) would be a stale double. A handoff still
+    // goes through: a complaint must not be lost to a later "ok".
+    if (result.decision.mode !== 'handoff' && result.decision.mode !== 'silent' && a.event.kind === 'text'
+      && await supersededNow(a.conversationId, a.event.waMessageId)) {
+      await tally('superseded');
+      await runRef.set({ decision: 'blocked', blockReason: 'superseded', intent: result.output.intent, model: result.model, tokens: result.tokens, updatedAt: Timestamp.now() }, { merge: true }).catch(() => {});
+      return { blocked: 'superseded' };
+    }
     const outcome = await executeDecision({ ctx, result, target, conversationId: a.conversationId, conv, agentState, leadId: a.leadId, lead: a.lead, customerId: a.customerId, contactName: a.contactName, waMessageId: a.event.waMessageId, isFirstAgentMessage, dateKey, now, conversationOwnerId: a.conversationOwnerId ?? conv?.ownerId ?? null });
     await runRef.set({
       decision: outcome.decision, blockReason: outcome.blockReason, handoffReason: result.decision.handoffReason,
@@ -583,6 +637,8 @@ async function executeDecision(e: ExecuteArgs): Promise<{ decision: DeliveryMode
   const baseAgent: Record<string, any> = {
     active: true, stage: result.stage, collected: result.collected, turns: prevTurns + 1,
     turnsWithoutProgress: result.progressed ? 0 : prevTwp + 1, lastIntent: result.output.intent, lastInboundMessageId: e.waMessageId,
+    // A newer decision always replaces a reply that was waiting to be sent.
+    pendingSend: admin.firestore.FieldValue.delete(), pendingDueAt: admin.firestore.FieldValue.delete(),
   };
 
   if (result.decision.mode === 'silent') {
@@ -609,12 +665,32 @@ async function executeDecision(e: ExecuteArgs): Promise<{ decision: DeliveryMode
 
   if (result.decision.mode === 'draft') {
     const text = result.output.reply ? ensureDisclosure(result.output.reply, s.persona, ctx.tenantName, e.isFirstAgentMessage) : '';
+    // Level 1 in office hours: the reply is HELD, and `sales-agent-pending` sends it when
+    // the wait is over unless a person answered first. Everything the send needs later is
+    // stored with it, so the job never has to re-run the model.
+    const deferMin = result.decision.deferMinutes;
+    const pending = deferMin && text ? {
+      text, forMessageId: e.waMessageId, createdAt: now, dueAt: Timestamp.fromMillis(e.now.getTime() + deferMin * 60_000),
+      target: {
+        channel: e.target.channel, agentId: e.target.agentId ?? null, metaPhoneNumberId: e.target.metaPhoneNumberId ?? null,
+        phone: e.target.phone, jid: e.target.jid ?? null, channelPhone: e.target.channelPhone ?? null,
+      },
+      leadId: e.leadId, customerId: e.customerId, contactName: e.contactName, conversationOwnerId: e.conversationOwnerId,
+      collected: result.collected, qualified: result.qualified, intent: result.output.intent, stage: result.stage, model: result.model,
+    } : null;
+    const notify = !!text && shouldNotifyDraft(toDate(e.conv?.agent?.draftNotifiedAt), e.now);
     await convRef.set({
-      agent: { ...baseAgent, lastDraftAt: now },
+      agent: {
+        ...baseAgent, lastDraftAt: now,
+        ...(pending ? { pendingSend: pending, pendingDueAt: pending.dueAt } : {}),
+        ...(notify ? { draftNotifiedAt: now } : {}),
+      },
       ...(text ? { suggestedReply: text, suggestedAt: now, suggestedForMessageId: e.waMessageId, suggestedModel: result.model || 'sales-agent', suggestedBy: AGENT_AUTOMATION_KIND } : {}),
       updatedAt: now,
     }, { merge: true }).catch(() => {});
     await bumpUsage(ctx.businessId, ctx.teamId, e.dateKey, { drafts: 1, ...(result.decision.blockReason ? { [`blocked.${result.decision.blockReason}`]: 1 } : {}) });
+    // A draft nobody knows about is silence: tell the person who owns the thread.
+    if (notify) await notifyDraft(ctx, e.conversationId, e.contactName, e.target.phone, e.conversationOwnerId, e.customerId, pending ? toDate(pending.dueAt) : null, result.decision.blockReason);
     return { decision: 'draft', blockReason: result.decision.blockReason, replyText: text || null, error: null };
   }
 
@@ -627,26 +703,78 @@ async function executeDecision(e: ExecuteArgs): Promise<{ decision: DeliveryMode
     await bumpUsage(ctx.businessId, ctx.teamId, e.dateKey, { 'blocked.send-failed': 1 });
     return { decision: 'draft', blockReason: 'error', replyText: text, error: r.error };
   }
-  const qualifiedBefore = !!toMs(e.lead?.agentQualifiedAt);
-  const qualifiedNow = result.qualified && !qualifiedBefore && !!e.leadId;
+  await stampAgentSend({
+    ctx, conversationId: e.conversationId, conv: e.conv, agentPatch: baseAgent, now, dateKey: e.dateKey, text, sentId: r.id,
+    leadId: e.leadId, lead: e.lead, customerId: e.customerId, contactName: e.contactName, conversationOwnerId: e.conversationOwnerId,
+    collected: result.collected, qualified: result.qualified, intent: result.output.intent, stage: result.stage,
+  });
+  return { decision: 'send', blockReason: null, replyText: text, error: null };
+}
+
+export interface StampSendArgs {
+  ctx: AgentCtx;
+  conversationId: string;
+  conv: any;
+  /** Merged into `conversations.agent` together with `lastReplyAt`. */
+  agentPatch: Record<string, any>;
+  now: admin.firestore.Timestamp;
+  dateKey: string;
+  text: string;
+  sentId: string | null;
+  leadId: string | null;
+  lead: any;
+  customerId: string | null;
+  contactName: string;
+  conversationOwnerId: string | null;
+  collected: Record<string, string>;
+  qualified: boolean;
+  intent: string;
+  stage: string;
+}
+
+/** Everything that follows a SUCCESSFUL send: the inbound hook and `sales-agent-pending` share it. */
+export async function stampAgentSend(a: StampSendArgs): Promise<void> {
+  const { ctx, now } = a;
+  const s = ctx.settings;
+  const convRef = db.collection('conversations').doc(a.conversationId);
+  const qualifiedBefore = !!toMs(a.lead?.agentQualifiedAt);
+  const qualifiedNow = a.qualified && !qualifiedBefore && !!a.leadId;
   await Promise.allSettled([
     convRef.set({
-      agent: { ...baseAgent, lastReplyAt: now },
-      lastOutboundAt: now, awaitingReply: s.autonomy >= 2 ? false : true, ...(conv_firstResponse(e.conv) ? {} : { firstResponseAt: now }),
+      agent: { ...a.agentPatch, lastReplyAt: now },
+      lastOutboundAt: now, awaitingReply: s.autonomy >= 2 ? false : true, ...(conv_firstResponse(a.conv) ? {} : { firstResponseAt: now }),
       suggestedReply: admin.firestore.FieldValue.delete(), suggestedAt: admin.firestore.FieldValue.delete(), suggestedForMessageId: admin.firestore.FieldValue.delete(),
       updatedAt: now,
     }, { merge: true }),
-    bumpUsage(ctx.businessId, ctx.teamId, e.dateKey, { replies: 1, ...(qualifiedNow ? { qualified: 1 } : {}) }, qualifiedNow ? { qualifiedNames: admin.firestore.FieldValue.arrayUnion(`${e.contactName}: ${buildLeadSummary(e.contactName, result.collected).split('\n')[0]}`) } : {}),
-    e.leadId ? db.collection('leads').doc(e.leadId).set({
-      agentCollected: result.collected, agentScore: leadAgentScore(result.collected, s.qualificationFields),
-      agentSummary: buildLeadSummary(e.contactName, result.collected), lastActivityAt: now, lastFollowUpDate: now,
-      ...(e.lead?.status === 'New' ? { status: 'Contacted' } : {}), ...(qualifiedNow ? { agentQualifiedAt: now } : {}), updatedAt: now,
+    bumpUsage(ctx.businessId, ctx.teamId, a.dateKey, { replies: 1, ...(qualifiedNow ? { qualified: 1 } : {}) }, qualifiedNow ? { qualifiedNames: admin.firestore.FieldValue.arrayUnion(`${a.contactName}: ${buildLeadSummary(a.contactName, a.collected).split('\n')[0]}`) } : {}),
+    a.leadId ? db.collection('leads').doc(a.leadId).set({
+      agentCollected: a.collected, agentScore: leadAgentScore(a.collected, s.qualificationFields),
+      agentSummary: buildLeadSummary(a.contactName, a.collected), lastActivityAt: now, lastFollowUpDate: now,
+      ...(a.lead?.status === 'New' ? { status: 'Contacted' } : {}), ...(qualifiedNow ? { agentQualifiedAt: now } : {}), updatedAt: now,
     }, { merge: true }) : Promise.resolve(),
-    e.customerId ? db.collection('customers').doc(e.customerId).set({ lastActivityAt: now, updatedAt: now }, { merge: true }) : Promise.resolve(),
-    e.leadId ? writeLeadActivity(ctx, e.leadId, `${s.persona.name} u përgjigj në WhatsApp`, text.slice(0, 200), { conversationId: e.conversationId, direction: 'outbound', waMessageId: r.id, intent: result.output.intent, stage: result.stage }) : Promise.resolve(),
+    a.customerId ? db.collection('customers').doc(a.customerId).set({ lastActivityAt: now, updatedAt: now }, { merge: true }) : Promise.resolve(),
+    a.leadId ? writeLeadActivity(ctx, a.leadId, `${s.persona.name} u përgjigj në WhatsApp`, a.text.slice(0, 200), { conversationId: a.conversationId, direction: 'outbound', waMessageId: a.sentId, intent: a.intent, stage: a.stage }) : Promise.resolve(),
   ]);
-  if (qualifiedNow && e.leadId) await notifyQualified(ctx, e.leadId, e.contactName, buildLeadSummary(e.contactName, result.collected), e.lead?.assignedToUserId ?? e.conversationOwnerId ?? null);
-  return { decision: 'send', blockReason: null, replyText: text, error: null };
+  if (qualifiedNow && a.leadId) await notifyQualified(ctx, a.leadId, a.contactName, buildLeadSummary(a.contactName, a.collected), a.lead?.assignedToUserId ?? a.conversationOwnerId ?? null);
+}
+
+/**
+ * "Ana has a draft for X" / "Ana answers X at 10:42 unless you do". Reuses the
+ * registered `sales_agent_handoff` type (same audience, same mute switch).
+ */
+async function notifyDraft(ctx: AgentCtx, conversationId: string, contactName: string, phone: string, ownerId: string | null, customerId: string | null, sendsAt: Date | null, reason: SalesAgentBlockReason | null): Promise<void> {
+  const recipients = ownerId ? [ownerId] : await managerIdsForBusiness(ctx.businessId, ctx.teamId);
+  const name = ctx.settings.persona.name;
+  const at = sendsAt ? localParts(sendsAt, TZ).hhmm : null;
+  const title = at ? `⏳ ${name} i përgjigjet ${contactName} në ${at}` : `✍️ ${name} ka një draft për ${contactName}`;
+  const message = at
+    ? 'Nëse do të përgjigjesh vetë, shkruaj para kësaj ore — përgjigjja e saj anulohet.'
+    : `Draft-i pret te biseda në WhatsApp. ${reason ? (SALES_AGENT_BLOCK_LABELS[reason] || '') : ''}`.trim();
+  await Promise.allSettled(recipients.map((uid) => notifyUser({
+    userId: uid, type: 'sales_agent_handoff', title, message,
+    actionUrl: `/app/whatsapp?phone=${encodeURIComponent(phone)}`, actionLabel: at ? 'Përgjigju vetë' : 'Shiko draft-in',
+    businessId: ctx.businessId, teamId: ctx.teamId, customerId, conversationKey: conversationId,
+  })));
 }
 
 const conv_firstResponse = (conv: any): boolean => !!toMs(conv?.firstResponseAt);

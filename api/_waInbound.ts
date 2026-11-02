@@ -1020,6 +1020,8 @@ export async function processWaEvent(rawEvent: WaEvent | Record<string, any>): P
     lastInboundAt: tsStamp,
     lastInboundText: preview(event.text, event.kind),
     lastInboundMessageId: event.waMessageId,
+    // Ana coalesces a burst on the newest TEXT message; a photo must not swallow the question before it.
+    lastInboundKind: event.kind,
     // Never move lastMessageAt backwards (a replayed/late event must not reorder the inbox).
     lastMessageAt: ts.getTime() >= toMs(existing?.lastMessageAt) ? tsStamp : existing?.lastMessageAt,
     updatedAt: now,
