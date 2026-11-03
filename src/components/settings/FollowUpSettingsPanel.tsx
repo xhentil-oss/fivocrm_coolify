@@ -48,7 +48,7 @@ const SECTION_KEYS = {
     'waInvoiceSources', 'waInvoiceChannel', 'waInvoiceAgentId', 'waInvoiceText', 'waInvoicePreDueDays', 'waInvoiceOnDue',
     'waInvoiceRenotifyDays', 'waOverdueMaxSends', 'waInvoiceHourStart', 'waInvoiceHourEnd', 'overdueEmailSkipWhmcs',
     'waWhmcsCadenceEnabled', 'waWhmcsWindowDays', 'waWhmcsEveryDays', 'waWhmcsUrgentDays', 'waWhmcsUrgentEveryDays'],
-  newLead: ['waAutoCreateLead', 'waAutoCreateLeadDailyCap'],
+  newLead: ['waAutoCreateLead', 'waAutoCreateLeadDailyCap', 'waInboundNotify'],
   playbooks: ['followUpPlaybooks'],
 } as const satisfies Record<string, readonly (keyof TeamSettings)[]>;
 type SectionId = keyof typeof SECTION_KEYS;
@@ -127,6 +127,7 @@ function draftFrom(s: TeamSettings | null, inferredInvoiceChannel?: 'meta' | 'ba
     waWhmcsUrgentEveryDays: invoiceWa.whmcsUrgentEveryDays,
     waAutoCreateLead: s?.waAutoCreateLead !== false,
     waAutoCreateLeadDailyCap: s?.waAutoCreateLeadDailyCap ?? 50,
+    waInboundNotify: s?.waInboundNotify ?? 'all',
     followUpPlaybooks: resolvePlaybooks(s),
   };
 }
@@ -638,8 +639,17 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
         <PlaybookEditor value={draft.followUpPlaybooks || []} onChange={(v) => set('followUpPlaybooks', v)} disabled={ro} />
       </SectionCard>
 
-      <SectionCard icon={<UserPlus className="w-5 h-5 text-primary" />} title="Lead i ri nga WhatsApp"
-        description="Një numër i panjohur që na shkruan bëhet automatikisht lead (burimi: whatsapp), i caktuar te agjenti i kanalit." {...sectionProps('newLead')}>
+      <SectionCard icon={<UserPlus className="w-5 h-5 text-primary" />} title="Mesazhet hyrëse WhatsApp"
+        description="Njoftimet për mesazhet që vijnë në WhatsApp, dhe lead-i automatik për numrat e panjohur (burimi: whatsapp), i caktuar te agjenti i kanalit." {...sectionProps('newLead')}>
+        <div className="space-y-1.5">
+          <Label className="text-xs">Njoftimet për mesazhet hyrëse</Label>
+          <NativeSelect value={draft.waInboundNotify || 'all'} onChange={(e) => set('waInboundNotify', e.target.value as 'all' | 'new-leads' | 'off')} disabled={ro}>
+            <option value="all">Për çdo mesazh</option>
+            <option value="new-leads">Vetëm për lead-e të reja</option>
+            <option value="off">Asnjë njoftim</option>
+          </NativeSelect>
+          <p className="text-[11px] text-muted-foreground">Zilja, push-i dhe email-i. Mesazhi ruhet gjithsesi te WhatsApp dhe biseda shënohet pa përgjigje.</p>
+        </div>
         <ToggleRow label="Krijo lead për numra të panjohur" checked={draft.waAutoCreateLead !== false} onChange={(v) => set('waAutoCreateLead', v)} disabled={ro}
           hint="Mesazhi ruhet gjithsesi; vetëm krijimi i lead-it varet nga ky çelës." />
         <NumberField label="Kufi ditor lead-esh të reja" value={draft.waAutoCreateLeadDailyCap} onChange={(v) => set('waAutoCreateLeadDailyCap', v)}

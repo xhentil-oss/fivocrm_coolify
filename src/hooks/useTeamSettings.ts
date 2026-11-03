@@ -92,6 +92,10 @@ export interface TeamSettings {
   waAutoCreateLead?: boolean;
   /** Max auto-created leads per team per day (`waInboundCounters`). Default 50. */
   waAutoCreateLeadDailyCap?: number;
+  /** Bell/push/email for an inbound WhatsApp message (`whatsapp_message`):
+   *  'all' (default) | 'new-leads' (only a number that just became a lead) | 'off'.
+   *  The message is stored and the thread marked unanswered either way. */
+  waInboundNotify?: 'all' | 'new-leads' | 'off';
   // ── Follow-up thresholds (src/lib/crm/followUpConfig.ts validates; defaults there) ──
   /** Unanswered inbound WhatsApp → `conversation_sla` after N minutes (15–1440). Default 120. */
   waResponseSlaMinutes?: number;
