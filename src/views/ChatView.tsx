@@ -44,7 +44,7 @@ import { useUnreadChat } from '../hooks/useUnreadChat';
 import { isDmForMe, isUnreadClientMessage, isUnreadGroupMessageForMe, groupFullyReadAfter, unionById } from '../lib/chat/unread';
 import { useNotificationPrefs, useConversationPresence } from '../hooks/useNotificationPrefs';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
-import { NAZMIJE_BLOCK_LABELS, NAZMIJE_UID, mentionsNazmije, resolveNazmijeSettings } from '../lib/nazmije/core';
+import { NAZMIJE_BLOCK_LABELS, NAZMIJE_UID, addressesNazmije, resolveNazmijeSettings } from '../lib/nazmije/core';
 import { askNazmije, NazmijeApiError } from '../lib/nazmije/client';
 import { channelConversationKey, dmConversationKey } from '../lib/notificationPrefs';
 import { auth, db } from '../lib/firebase';
@@ -2433,7 +2433,9 @@ const ChatView: React.FC = () => {
         // the channel's own `members` array, minus the sender and minus anyone the
         // mention pass above already notified (two rows for one message otherwise).
         const isGroupTarget = (allGroups || []).some(g => g.id === targetChannel && (g as any).isGroup);
-        if (isGroupTarget && messageId && nazmije.enabled && mentionsNazmije(finalText)) {
+        const repliesToNazmije = !!(replyingTo && !fromScheduler && !override?.noReply && replyingTo.senderId === NAZMIJE_UID);
+        const otherNames = [...displayNameCache.entries()].filter(([id]) => id !== NAZMIJE_UID).map(([, n]) => n);
+        if (isGroupTarget && messageId && nazmije.enabled && addressesNazmije({ text: finalText, displayName: nazmije.displayName, repliesToNazmije, otherNames })) {
           askNazmije({ teamId: getGlobalTeamId(), messageId }).then(r => {
             if (r.blocked) toast({ title: nazmije.displayName, description: NAZMIJE_BLOCK_LABELS[r.blocked] });
           }).catch(err => {

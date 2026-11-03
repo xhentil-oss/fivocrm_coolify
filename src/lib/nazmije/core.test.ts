@@ -9,7 +9,7 @@ import { resolve } from 'node:path';
 import {
   NAZMIJE_DEFAULTS, NAZMIJE_HUMOR, NAZMIJE_SAYINGS, NAZMIJE_UID, NAZMIJE_BLOCK_LABELS,
   albanianDateLabel, buildAfternoonDigest, buildMorningDigest, buildNazmijePrompt, buildWeeklyDigest,
-  dayIndexOf, factsForAudience, humorLineForDay, humorModeFor, inQuietHours, localParts, mentionsNazmije,
+  dayIndexOf, factsForAudience, humorLineForDay, humorModeFor, inQuietHours, localParts, mentionsNazmije, addressesNazmije,
   mondayOf, nazmijeBlockReason, nazmijeRoleOf, renderFactsForPrompt, resolveNazmijeSettings, sanitizeReply,
   sayingForDay, type NazmijeFacts, type NazmijeBlockReason,
 } from './core';
@@ -54,6 +54,25 @@ describe('identity & mentions', () => {
     expect(mentionsNazmije('Nazmije pa @')).toBe(false);
     expect(mentionsNazmije(null)).toBe(false);
   });
+
+  it('matches her renamed display name and a reply to her row', () => {
+    expect(mentionsNazmije('@Sekretarja ku jemi?', 'Sekretarja')).toBe(true);
+    expect(mentionsNazmije('hej @sekretarja ana, lista?', 'Sekretarja Ana')).toBe(true);
+    expect(mentionsNazmije('@Sekretarja ku jemi?')).toBe(false);
+    expect(mentionsNazmije('@Sekretarjat', 'Sekretarja')).toBe(false);
+    expect(mentionsNazmije('@A.B (x)', 'A.B (x)')).toBe(true);
+    expect(mentionsNazmije('@Nazmije', 'Sekretarja')).toBe(true);
+    expect(addressesNazmije({ text: 'po pse?', repliesToNazmije: true })).toBe(true);
+    expect(addressesNazmije({ text: 'po pse?', displayName: 'Nazmije' })).toBe(false);
+  });
+
+  it('does not wake on a colleague whose name starts with hers', () => {
+    const others = ['Ana Hoxha', 'Arben Leka'];
+    expect(mentionsNazmije('@Ana Hoxha e ke ti?', 'Ana', others)).toBe(false);
+    expect(mentionsNazmije('@Ana ku jemi? cc @Ana Hoxha', 'Ana', others)).toBe(true);
+    expect(mentionsNazmije('@Ana ku jemi?', 'Ana', others)).toBe(true);
+    expect(mentionsNazmije('@Analiza', 'Ana', others)).toBe(false);
+  });
   it('has a reserved uid that is not an auth user', () => {
     expect(NAZMIJE_UID).toBe('nazmije');
   });
@@ -67,7 +86,12 @@ describe('settings', () => {
     expect(s.workDays).toEqual([1]);
     expect(s.quietFrom).toBe(NAZMIJE_DEFAULTS.quietFrom);
     expect(s.dailyReplyCap).toBe(NAZMIJE_DEFAULTS.dailyReplyCap);
-    expect(s.displayName).toBe('Nazmije');
+    expect(s.displayName).toBe('Ana');
+  });
+  it('maps the pre-rename stored name to Ana, keeps any other custom name', () => {
+    expect(resolveNazmijeSettings({ displayName: 'Nazmije' }).displayName).toBe('Ana');
+    expect(resolveNazmijeSettings({ displayName: ' nazmija ' }).displayName).toBe('Ana');
+    expect(resolveNazmijeSettings({ displayName: 'Drita' }).displayName).toBe('Drita');
   });
   it('keeps a valid custom name and caps the daily reply cap', () => {
     const s = resolveNazmijeSettings({ enabled: true, displayName: '  Drita ', dailyReplyCap: 99999 });
@@ -258,7 +282,7 @@ describe('digests', () => {
     expect(text).toContain('• Të vonuara: 1 — "Oferta Resort" (Ela, 3 ditë)');
     expect(text).toContain('• Projekte me afat këtë javë: Resort Durrës (4 ditë, 4 hapur)');
     expect(text).toContain('• Lead-e: 1 të reja sot · 3 pa hap tjetër');
-    expect(text).toContain(`💬 "${sayingForDay(opts.dayIndex).text}" — Nazmija`);
+    expect(text).toContain(`💬 "${sayingForDay(opts.dayIndex).text}" — Ana`);
     const lines = text.split('\n');
     expect(humorLineForDay('friday', opts.dayIndex)?.text).toBe(lines[lines.length - 1]);
     expect(text).not.toMatch(/FINANCA|fatur/i);
