@@ -1107,11 +1107,15 @@ export async function processWaEvent(rawEvent: WaEvent | Record<string, any>): P
 
   // 6. Notify — owner, else the tenant's managers. Burst debounce: a second
   //    message within 2 min of the last notification on a still-unanswered
-  //    thread rings nobody twice.
+  //    thread rings nobody twice. `waInboundNotify` (Cilësimet → Automatizime)
+  //    can limit it to new leads or switch it off; the thread is still stored.
   let notified = 0;
   const lastNotifiedMs = toMs(existing?.lastNotifiedAt);
   const debounced = wasAwaiting && lastNotifiedMs > 0 && Date.now() - lastNotifiedMs < NOTIFY_DEBOUNCE_MS;
-  if (!debounced) {
+  const notifyMode = ctx.settings.waInboundNotify === 'off' || ctx.settings.waInboundNotify === 'new-leads'
+    ? ctx.settings.waInboundNotify : 'all';
+  const notifyMuted = notifyMode === 'off' || (notifyMode === 'new-leads' && !newLead);
+  if (!debounced && !notifyMuted) {
     const recipients = ownerId ? [ownerId] : await managerIdsForBusiness(ctx.businessId, ctx.teamId);
     const title = newLead ? `Lead i ri nga WhatsApp: ${contactName}` : `💬 ${contactName}`;
     const message = preview(event.text, event.kind) || '[Mesazh]';
