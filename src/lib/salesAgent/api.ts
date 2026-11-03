@@ -93,3 +93,15 @@ export const simulateConversation = (p: { messages: Array<{ role: 'client' | 'ag
 
 export const draftReply = (conversationId: string) => salesAgentApi<{ ok: boolean; blocked?: SalesAgentBlockReason | null; text?: string | null }>('reply.draft', { conversationId });
 export const previewDigest = () => salesAgentApi<{ text: string | null }>('digest.preview');
+
+export interface ColdWaTestResult {
+  ok: boolean;
+  sent: boolean;
+  text: string;
+  sender: { agentId: string; phone: string | null; connected: boolean } | null;
+  coldWaEnabled?: boolean;
+  messageId?: string | null;
+}
+/** The first cold message exactly as the job would send it; `send: true` delivers it to `phone` only. */
+export const testColdWa = (p: { phone?: string; send?: boolean; sampleName?: string; sampleCategory?: string; sampleCity?: string }) =>
+  salesAgentApi<ColdWaTestResult>('coldwa.test', p);

@@ -12,19 +12,20 @@ import { notifyUser } from './_push.js';
 import { managerIdsForBusiness } from './_staffRecipients.js';
 import { sendBaileysText, sendMetaText } from './_waSend.js';
 import { toWaPhone } from './_waPhone.js';
+import { makeWaAgentResolver } from './_waAgent.js';
 import { findCustomerForContact, findLeadForContact } from './_contactIdentity.js';
 import { placesKeyProbe, resolvePlacesKey } from './_placesClient.js';
 import {
   SALES_AGENT_AVATAR_PATH, SALES_AGENT_BLOCK_LABELS, SALES_AGENT_LIMITS, SALES_AGENT_TITLE, SALES_AGENT_UID,
   agentGateReason, allowedIntentsForAutonomy, buildLeadSummary, buildSalesAgentPromptParts, buildSalesDigest, decideDelivery,
   detectHandoffTrigger, ensureDisclosure, handoffAutoResumeDue, inWindow, isSupersededInbound, leadAgentScore, localParts, mergeCollected, monthKeyOf, nextStage,
-  shouldNotifyDraft,
+  ensureColdWaCompliance, renderTemplate, shouldNotifyDraft,
   parseAgentOutput, qualificationProgress, resolveSalesAgentSettings, salesAgentProfileDocId, salesAgentRunId,
   type AgentModelOutput, type AgentStage, type ConversationAgentLike, type DeliveryDecision, type DeliveryMode,
   type HandoffReason, type SalesAgentAutonomy, type SalesAgentBlockReason, type SalesAgentSettings, type SalesDigestFacts,
   type SalesFacts, type KnowledgeFact, type ServiceFact,
 } from './_salesAgentCore.js';
-import { SEARCH_BLOCK_LABELS, buildCallScript, estimateSearchRequests, prospectServiceLine, searchBlockReason, type SalesAgentPersona } from './_salesAgentProspecting.js';
+import { SEARCH_BLOCK_LABELS, buildCallScript, buildColdWaDraft, estimateSearchRequests, prospectServiceLine, searchBlockReason, type SalesAgentPersona } from './_salesAgentProspecting.js';
 
 /**
  * Ana — the virtual sales agent. Server side.
@@ -1104,6 +1105,63 @@ async function handleSimulate(res: VercelResponse, c: Caller, body: Record<strin
   });
 }
 
+// ── Cold WhatsApp test ("Provo mesazhin e parë") ──────────────────────────────
+
+const COLD_TEST_PER_HOUR = 5;
+const COLD_TEST_AUTOMATION_KIND = 'sales-agent-cold-test';
+
+/** Same choice as `serviceLineOf` in the cold-WA job — the preview must equal what goes out. */
+function coldServiceLineOf(facts: SalesFacts): string {
+  const cat = facts.services.find((s) => s.category)?.category;
+  return cat ? cat.toLowerCase() : facts.services[0]?.name?.toLowerCase() || 'marketing dixhital';
+}
+
+/**
+ * Renders the first cold message EXACTLY as `sales-agent-cold-wa` would (saved template,
+ * saved persona, same compliance pass, same sender number) and — only with `send: true`
+ * — sends it to a number the manager types (their own). It never touches a prospect, a
+ * lead, the sender's daily quota or warm-up: the point is to see the message on a phone
+ * before any stranger does.
+ */
+async function handleColdWaTest(res: VercelResponse, c: Caller, body: Record<string, any>) {
+  const gate = await requireStaff(c, str(body.teamId, 128));
+  if (isGateError(gate)) return res.status(gate.status).json({ error: gate.error });
+  if (!gate.isManager) return res.status(403).json({ error: 'Vetëm Admin/Manager' });
+  const { ctx } = gate;
+  const s = ctx.settings;
+  const facts = await loadSalesFacts(ctx);
+  const sample = {
+    name: str(body.sampleName, 80) || 'Biznesi Shembull', category: str(body.sampleCategory, 60) || null, city: str(body.sampleCity, 60) || null,
+    website: null, rating: null, reviewCount: null,
+  };
+  const text = ensureColdWaCompliance(buildColdWaDraft(s.coldWa.template, { prospect: sample, persona: s.persona, serviceLine: coldServiceLineOf(facts) }, renderTemplate), s.persona);
+
+  const resolver = makeWaAgentResolver();
+  let agent = s.coldWa.senderAgentId
+    ? (await resolver.agentsFor(ctx.businessId)).find((a) => a.id === s.coldWa.senderAgentId && a.connected) || null
+    : null;
+  if (!agent) agent = await resolver.resolve(ctx.businessId, ctx.teamId);
+  const acc = agent ? await db.collection('whatsappAccounts').doc(agent.id).get().catch(() => null) : null;
+  const senderPhone = acc?.exists ? String((acc.data() as any)?.connectedPhone || (acc.data() as any)?.phone || '') || null : null;
+  const sender = agent ? { agentId: agent.id, phone: senderPhone, connected: agent.connected } : null;
+
+  if (body.send !== true) return res.status(200).json({ ok: true, sent: false, text, sender, coldWaEnabled: s.coldWa.enabled });
+
+  const phone = toWaPhone(str(body.phone, 40));
+  if (!phone || phone.length < 9) return res.status(400).json({ error: 'Numri i telefonit nuk është i vlefshëm' });
+  if (!agent || !agent.connected) return res.status(409).json({ error: 'Asnjë numër WhatsApp i lidhur për dërgim', code: 'no-sender' });
+  if (!(await checkPersistentRateLimit('sales-agent-coldtest', c.uid, COLD_TEST_PER_HOUR))) return res.status(429).json({ error: `Shumë prova brenda një ore (${COLD_TEST_PER_HOUR})` });
+  // Always send with the AGENT's teamId + relay, like the job.
+  const relay = await resolver.relayFor(ctx.teamId, agent.teamId);
+  const sendCtx: AgentCtx = { ...ctx, teamId: agent.teamId, cfg: { ...ctx.cfg, whatsappVpsUrl: relay.vpsUrl, whatsappVpsSecret: relay.vpsSecret } };
+  const r = await sendAgentWaText({
+    ctx: sendCtx, target: { channel: 'baileys', agentId: agent.id, metaPhoneNumberId: null, phone },
+    text, idempotencyKey: `sa_coldtest_${c.uid}_${Date.now()}`, automationKind: COLD_TEST_AUTOMATION_KIND, leadId: null, customerId: null, contactName: 'Provë',
+  });
+  if (!r.ok) return res.status(502).json({ error: 'WhatsApp nuk e pranoi mesazhin', detail: r.error, code: r.permanent ? 'not-on-whatsapp' : 'send-failed' });
+  return res.status(200).json({ ok: true, sent: true, text, sender, messageId: r.id });
+}
+
 async function handleReplyDraft(res: VercelResponse, c: Caller, body: Record<string, any>) {
   const gate = await requireStaff(c, str(body.teamId, 128));
   if (isGateError(gate)) return res.status(gate.status).json({ error: gate.error });
@@ -1208,7 +1266,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'conversation.simulate': return await handleSimulate(res, c, body);
       case 'reply.draft': return await handleReplyDraft(res, c, body);
       case 'digest.preview': return await handleDigestPreview(res, c, body);
-      default: return res.status(400).json({ error: 'Unknown action', detail: 'enable|disable|settings.test|search.create|search.cancel|prospect.register|prospect.reject|conversation.handoff|conversation.resume|conversation.simulate|reply.draft|digest.preview' });
+      case 'coldwa.test': return await handleColdWaTest(res, c, body);
+      default: return res.status(400).json({ error: 'Unknown action', detail: 'enable|disable|settings.test|search.create|search.cancel|prospect.register|prospect.reject|conversation.handoff|conversation.resume|conversation.simulate|reply.draft|digest.preview|coldwa.test' });
     }
   } catch (err: any) {
     console.error('[salesAgent]', action, 'failed', err);
