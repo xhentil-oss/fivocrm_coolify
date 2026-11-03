@@ -23,6 +23,7 @@ import {
 import type { WhatsAppAccount } from '../../types';
 import KnowledgePanel from './KnowledgePanel';
 import SimulatorPanel from './SimulatorPanel';
+import ColdWaTestBox from './ColdWaTestBox';
 
 /**
  * /app/sales-agent?tab=settings — everything the owner decides about Ana.
@@ -336,6 +337,7 @@ export default function AgentSettingsPanel({ teamId, settings, canEdit }: Props)
           <Textarea rows={3} value={draft.coldWa.template} disabled={ro || !draft.coldWa.enabled} maxLength={600} onChange={(e) => patchCold({ template: e.target.value })} />
           <p className="text-[11px] text-muted-foreground">Tokenë: {'{{name}} {{company}} {{agent}} {{business}} {{service}} {{city}}'}. Prezantimi dhe rreshti "NDALO" shtohen vetë nëse mungojnë.</p>
         </div>
+        <ColdWaTestBox dirty={dirty} disabled={ro} />
       </Card>
 
       {/* ── Actions ── */}
