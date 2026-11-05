@@ -8,5 +8,6 @@
     "esModuleInterop": true,
     "noEmit": true
   },
-  "include": ["api/**/*.ts"]
+  "include": ["api/**/*.ts", "server/**/*.ts"],
+  "exclude": ["server/**/*.test.ts"]
 }

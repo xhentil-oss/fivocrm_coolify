@@ -23,6 +23,7 @@ import {
 } from '../../lib/platformAdmin';
 import { syncTenantClaims } from '../../lib/tenantClaims';
 import { setTenantOverride } from '../../lib/platformContext';
+import { isReservedPortalSubdomain } from '../../hooks/usePortalTenant';
 import { STATUS_META, PLAN_LABEL, PLAN_SEATS, fmtDate, toDateInput } from './tenantMeta';
 import type { Team, TeamMember, Business } from '../../types';
 
@@ -160,6 +161,12 @@ const TenantDetailView: React.FC = () => {
   const saveSubdomain = async (raw: string) => {
     const sub = raw.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
     if (sub === (biz.portalSubdomain || '')) return;
+    if (sub && isReservedPortalSubdomain(sub)) {
+      // An infrastructure host (legacy/staging/vps…) is never read as a tenant, so the
+      // portal under it would never resolve this business.
+      toast({ title: 'Subdomain i rezervuar', description: `${sub}.fivocrm.com përdoret nga platforma. Zgjidh një tjetër.`, variant: 'destructive' });
+      return;
+    }
     try {
       await updateDoc(doc(db, 'businesses', businessId), { portalSubdomain: sub || null, updatedAt: Timestamp.now() });
       const prev = (biz.portalSubdomain || '').trim().toLowerCase();

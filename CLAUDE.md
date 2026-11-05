@@ -238,6 +238,19 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
 - `dialog.tsx` lives at `src/components/ui/dialog/index.tsx` (moved for Linux compatibility).
 - All views are **lazy-loaded** via `lazyRetry()` wrapper for chunk resilience.
 
+### Self-hosting (Coolify / Docker) — same code as Vercel (Nov 2026)
+- `Dockerfile` + `server/index.ts` run the SPA and the `/api` functions UNCHANGED in one
+  Node process; rewrites and security headers are READ from `vercel.json` (one source).
+  `server/vercelShim.ts` is the slice of the Vercel runtime the handlers use — a handler
+  using a new `req`/`res` helper must get it there too. Runbook: `workspace/COOLIFY_DEPLOY.md`.
+- **Adding `api/<name>.ts` (no `_`) → add it to `ROUTES` in `server/index.ts`**
+  (`server/vercelShim.test.ts` fails otherwise). `/healthz` is 503 if any route fails to load.
+- The image sets `VERCEL_ENV=production` — `platformHosts()` and the WhatsApp relay trust
+  localhost without it. WhatsApp + the cron scheduler stay on the VPS (`CRM_BASE_URL`).
+- **Infrastructure subdomains must be in `RESERVED_SUBDOMAINS`**
+  (`src/hooks/usePortalTenant.ts`) BEFORE DNS points at them, or `<x>.fivocrm.com` is read
+  as a tenant portal. `legacy` = old Vercel, `staging` = Coolify test.
+
 ### Modules (activation & SaaS plan gating)
 - **`src/lib/modules.ts` is the single source of truth** for what a module is: id,
   route(s), label, `permissionKey`, `minPlan`, `optional`, `defaultOff`, group.

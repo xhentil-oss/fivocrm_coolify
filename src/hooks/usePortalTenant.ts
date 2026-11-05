@@ -27,8 +27,26 @@ export interface PublicTenant {
 
 // Base host the app is served under. Subdomains of this become tenant slugs.
 const ROOT_DOMAIN = 'fivocrm.com';
-// Subdomains that are NOT tenants (the app itself / infrastructure).
-const RESERVED_SUBDOMAINS = new Set(['www', 'app', 'api', 'fivocrm', 'portal']);
+// Subdomains that are NOT tenants (the app itself / infrastructure). A host listed
+// here is served the agency's own app; one MISSING from it is read as a tenant slug,
+// so `legacy.fivocrm.com` would look up `publicTenants/legacy` and run the portal
+// under a tenant nobody created. Add every infrastructure host BEFORE pointing DNS
+// at it. `saveSubdomain` (superadmin) refuses these as tenant slugs too.
+//   legacy  — the old Vercel deployment, kept for installed mobile apps / rollback
+//   staging — the self-hosted (Coolify) test deployment
+//   vercel/next — reserved so the names cannot be claimed by a tenant
+//   vps/wa  — the WhatsApp VPS (live hosts); mail/webmail/cpanel/whm — hosting
+// Kept deliberately short: reserving a word an EXISTING tenant already uses as its
+// slug would silently switch that tenant's portal off.
+export const RESERVED_SUBDOMAINS: ReadonlySet<string> = new Set([
+  'www', 'app', 'api', 'fivocrm', 'portal',
+  'legacy', 'staging', 'vercel', 'next',
+  'vps', 'wa', 'mail', 'webmail', 'cpanel', 'whm',
+]);
+
+export function isReservedPortalSubdomain(sub: string): boolean {
+  return RESERVED_SUBDOMAINS.has(String(sub || '').trim().toLowerCase());
+}
 
 /** Extract the tenant subdomain from a hostname, or null if there isn't one. */
 export function extractPortalSubdomain(hostname: string): string | null {

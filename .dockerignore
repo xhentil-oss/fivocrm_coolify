@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-server
+android
+ios
+vps
+workspace
+.git
+.github
+.env
+.env.*
+*.log
+build_output.txt
+Përmirësimi i dizajnit të app-it (1)
